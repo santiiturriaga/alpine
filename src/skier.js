@@ -160,7 +160,7 @@ export function createSkier() {
     torso.add(shoulder);
     const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.062, 0.22, 3, 8), mats.jacket);
     upper.position.set(side * 0.03, -0.14, 0.02);
-    upper.rotation.z = side * 0.28;
+    upper.rotation.z = side * 0.2;
     upper.rotation.x = -0.25;
     upper.castShadow = true;
     shoulder.add(upper);
@@ -274,10 +274,10 @@ export function createSkier() {
       const arm = arms[side];
       // pole-plant rhythm: the outside hand swings forward
       const swing = Math.sin(state.phase + (side === 1 ? 0 : Math.PI)) * (0.06 + sf * 0.12);
-      arm.shoulder.rotation.x = -0.28 - c * 0.38 + swing * (side === Math.sign(steer) ? 1.8 : 0.6);
-      arm.shoulder.rotation.z = side * (0.28 + state.air * 0.5) - lean * 0.2;
-      arm.shoulder.rotation.y = side * -0.1;
-      arm.elbow.rotation.x = 0.35 + c * 0.4 + state.air * 0.3;
+      arm.shoulder.rotation.x = -0.34 - c * 0.4 + swing * (side === Math.sign(steer) ? 1.8 : 0.6);
+      arm.shoulder.rotation.z = side * (0.19 + state.air * 0.55) - lean * 0.2;
+      arm.shoulder.rotation.y = side * -0.12;
+      arm.elbow.rotation.x = 0.48 + c * 0.4 + state.air * 0.3;
       arm.pole.rotation.x = 0.12 + Math.sin(state.phase * 0.9 + side) * 0.05 - c * 0.12;
       arm.pole.rotation.z = side * 0.04 + lean * 0.12;
     }

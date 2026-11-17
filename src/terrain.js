@@ -276,7 +276,7 @@ function makeSnowTexture() {
       const i = (y * S + x) * 4;
       const n1 = noise2.fbm(x * 0.035, y * 0.035, 3);
       const n2 = noise2.fbm(x * 0.19, y * 0.19, 2);
-      const v = 250 + n1 * 5 + n2 * 3 + (rand() - 0.5) * 2.2;
+      const v = 244 + n1 * 14 + n2 * 8 + (rand() - 0.5) * 3.4;
       img.data[i] = clamp(v - 2, 0, 255);
       img.data[i + 1] = clamp(v, 0, 255);
       img.data[i + 2] = clamp(v + 2, 0, 255);
@@ -418,8 +418,8 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
       normals[k * 3] = nx;
       normals[k * 3 + 1] = ny;
       normals[k * 3 + 2] = nz;
-      uvs[k * 2] = x / 22.0;
-      uvs[k * 2 + 1] = z / 22.0;
+      uvs[k * 2] = x / 14.0;
+      uvs[k * 2 + 1] = z / 14.0;
 
       const slope = 1 - ny;
       const p = sampleMask(x, z);
@@ -485,7 +485,7 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     vertexColors: true,
     map: snowMap,
     normalMap: snowNormal,
-    normalScale: new THREE.Vector2(0.48, 0.48),
+    normalScale: new THREE.Vector2(0.62, 0.62),
     roughness: 0.92,
     metalness: 0.0,
     envMapIntensity: 0.6,

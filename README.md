@@ -2,11 +2,11 @@
 
 A fan-made, browser-based skiing sandbox on the shoulders of **Whistler & Blackcomb**. Two mountains, 31 named lines, five hidden glades, a Peak 2 Peak gondola, coin trails, kickers, and a full alpine world built from scratch with Three.js.
 
-> **Status:** actively being built. The page deploys automatically to GitHub Pages from `main` once the game entry point is in place.
+> **Status:** live. Every push to `main` deploys straight to GitHub Pages.
 
 ## Play
 
-Open the GitHub Pages build (once published):
+Open the live build:
 
 **https://santiiturriaga.github.io/alpine/**
 
@@ -30,6 +30,7 @@ Then open `http://localhost:8080`.
 | `E` | Ride the Peak 2 Peak |
 | `M` | Trail map |
 | `R` | Reset to Whistler Peak |
+| `C` | Cycle camera |
 | `Esc` | Pause |
 
 ## The mountain

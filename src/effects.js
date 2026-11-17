@@ -12,11 +12,11 @@ export const SUN_DIR = new THREE.Vector3(-0.56, 0.415, 0.715).normalize();
    ═══════════════════════════════════════════════════════════════ */
 
 export function createLighting(scene) {
-  const hemi = new THREE.HemisphereLight(0xb8d9ee, 0x3a4b52, 0.92);
+  const hemi = new THREE.HemisphereLight(0xb8d9ee, 0x3a4b52, 0.8);
   hemi.name = 'hemisphere';
   scene.add(hemi);
 
-  const sun = new THREE.DirectionalLight(0xffd6ac, 3.05);
+  const sun = new THREE.DirectionalLight(0xffd6ac, 2.8);
   sun.name = 'sun';
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
@@ -262,7 +262,7 @@ class ParticlePool {
     geo.setDrawRange(0, count);
 
     this.material = new THREE.ShaderMaterial({
-      transparent: true, depthWrite: false, fog: true,
+      transparent: true, depthWrite: false, fog: false,
       blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
       uniforms: {
         uMap: { value: softTexture },
@@ -279,7 +279,7 @@ class ParticlePool {
           vAlpha = aAlpha;
           vColor = aColor;
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
-          gl_PointSize = aSize * uPixelRatio * (420.0 / max(1.0, -mv.z));
+          gl_PointSize = min(30.0, aSize * uPixelRatio * (160.0 / max(2.0, -mv.z)));
           gl_Position = projectionMatrix * mv;
         }
       `,
@@ -290,7 +290,7 @@ class ParticlePool {
         void main() {
           vec4 tex = texture2D(uMap, gl_PointCoord);
           if (tex.a < 0.015 || vAlpha < 0.004) discard;
-          gl_FragColor = vec4(vColor, tex.a * vAlpha);
+          gl_FragColor = vec4(vColor, tex.a * min(0.32, vAlpha));
         }
       `,
     });
@@ -347,7 +347,7 @@ export class Snowstorm {
   constructor(scene, camera) {
     this.scene = scene;
     this.camera = camera;
-    this.count = 820;
+    this.count = 1400;
     const rand = mulberry32(5511);
     this.rand = rand;
     this.pos = new Float32Array(this.count * 3);
@@ -363,14 +363,14 @@ export class Snowstorm {
       this.vel[i * 3] = -0.4 - rand() * 0.9;
       this.vel[i * 3 + 1] = -0.6 - rand() * 1.2;
       this.vel[i * 3 + 2] = 0.3 + rand() * 0.7;
-      this.size[i] = 0.65 + rand() * 1.3;
+      this.size[i] = 0.3 + rand() * 0.62;
       this.phase[i] = rand() * Math.PI * 2;
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3));
     geo.setAttribute('aSize', new THREE.BufferAttribute(this.size, 1));
     this.material = new THREE.ShaderMaterial({
-      transparent: true, depthWrite: false, blending: THREE.NormalBlending, fog: true,
+      transparent: true, depthWrite: false, blending: THREE.NormalBlending, fog: false,
       uniforms: { uMap: { value: softTexture }, uPixelRatio: { value: Math.min(window.devicePixelRatio, 1.75) } },
       vertexShader: /* glsl */`
         attribute float aSize;
@@ -378,7 +378,7 @@ export class Snowstorm {
         uniform float uPixelRatio;
         void main() {
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
-          gl_PointSize = aSize * uPixelRatio * (330.0 / max(2.0, -mv.z));
+          gl_PointSize = min(8.0, aSize * uPixelRatio * (235.0 / max(2.5, -mv.z)));
           gl_Position = projectionMatrix * mv;
           vA = smoothstep(0.5, 4.0, -mv.z);
         }
@@ -389,7 +389,7 @@ export class Snowstorm {
         void main() {
           vec4 t = texture2D(uMap, gl_PointCoord);
           if (t.a < 0.03) discard;
-          gl_FragColor = vec4(vec3(0.94,0.97,1.0), t.a * vA * 0.48);
+          gl_FragColor = vec4(vec3(0.94,0.97,1.0), t.a * vA * 0.3);
         }
       `,
     });
@@ -427,7 +427,7 @@ export function createGlitter(scene) {
   const size = new Float32Array(count);
   const phase = new Float32Array(count);
   for (let i = 0; i < count; i++) {
-    size[i] = 0.5 + rand() * 1.2;
+    size[i] = 0.3 + rand() * 0.65;
     phase[i] = rand() * Math.PI * 2;
   }
   const geo = new THREE.BufferGeometry();
@@ -447,7 +447,7 @@ export function createGlitter(scene) {
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
         float tw = pow(max(0.0, sin(uTime * (1.3 + aPhase * 0.15) + aPhase * 7.0)), 7.0);
         vTwinkle = tw;
-        gl_PointSize = aSize * uPixelRatio * (tw * 0.9 + 0.25) * (220.0 / max(4.0, -mv.z));
+        gl_PointSize = min(9.0, aSize * uPixelRatio * (tw * 0.9 + 0.25) * (220.0 / max(4.0, -mv.z)));
         gl_Position = projectionMatrix * mv;
       }
     `,
@@ -457,7 +457,7 @@ export function createGlitter(scene) {
       void main() {
         vec4 t = texture2D(uMap, gl_PointCoord);
         if (t.a < 0.05 || vTwinkle < 0.04) discard;
-        gl_FragColor = vec4(vec3(1.0,0.96,0.85), t.a * vTwinkle * 0.85);
+        gl_FragColor = vec4(vec3(1.0,0.96,0.85), t.a * vTwinkle * 0.55);
       }
     `,
   });
@@ -504,7 +504,7 @@ export class ParticleFX {
 
   carve(point, side, speed, powderAmount, dt) {
     const rand = this.rand;
-    const n = Math.round((6 + speed * 0.9) * clamp(dt * 60, 0.2, 2) * (0.7 + powderAmount * 0.7));
+    const n = Math.round((3 + speed * 0.45) * clamp(dt * 60, 0.2, 2) * (0.7 + powderAmount * 0.7));
     const sp = Math.min(speed, 32);
     for (let i = 0; i < n; i++) {
       const spread = 0.3 + rand();

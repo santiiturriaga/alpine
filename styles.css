@@ -161,6 +161,8 @@ svg { display: block; }
 .icon-btn .ico-muted { display: none; }
 .muted .icon-btn .ico-sound { display: none; }
 .muted .icon-btn .ico-muted { display: block; }
+.icon-btn.muted .ico-sound { display: none; }
+.icon-btn.muted .ico-muted { display: block; }
 .text-btn {
   font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase; font-weight: 600;
   padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,.28); transition: border-color .2s, color .2s;
@@ -280,6 +282,7 @@ svg { display: block; }
 .trail-icon .double { position: relative; background: #f2f8fb; transform: rotate(45deg); }
 .trail-icon .double::after { content: ""; position: absolute; inset: 2px; border: 1px solid var(--ink); }
 .trail-icon .hidden { background: var(--gold); border-radius: 50%; box-shadow: 0 0 8px rgba(255,199,91,.6); }
+.trail-icon .stash { background: var(--gold); border-radius: 50%; box-shadow: 0 0 8px rgba(255,199,91,.6); }
 #trail-name { font-size: 11px; font-weight: 500; letter-spacing: .035em; }
 #trail-state { margin-left: auto; font-size: 7.5px; letter-spacing: .16em; color: rgba(202,227,237,.42); }
 .run-stats { display: flex; gap: 0; border-radius: 5px; padding: 10px 4px; }
