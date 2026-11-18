@@ -1,14 +1,16 @@
-<a href="https://santiiturriaga.github.io/alpine/"><img src="docs/opening.gif" width="100%" alt="A flyover of Whistler Blackcomb, with stops at Creekside, a skier’s jump, the PEAK 2 PEAK gondola, and the summit inukshuk"></a>
+<a href="https://santiiturriaga.github.io/alpine/assets/opening.mp4"><img src="docs/opening-poster.jpg" width="100%" alt="Watch the Whistler Blackcomb preview, with footage of Creekside, a skier’s jump, the PEAK 2 PEAK gondola, and the summit inukshuk"></a>
+
+[Download the 24-second 1080p preview](assets/opening.mp4?raw=true)
 
 # Alpine Descent
 
 You start with your skis on, just outside the Whistler Village Gondola at Roundhouse Lodge. Push off toward Ego Bowl, walk over to the Olympic rings, or board the red PEAK 2 PEAK gondola and watch Blackcomb come into view. [Play in your browser](https://santiiturriaga.github.io/alpine/)
 
-There are four resorts to explore. Open **Mountain → Resort** to travel, or start at [Whistler Blackcomb](https://santiiturriaga.github.io/alpine/), [Stevens Pass](https://santiiturriaga.github.io/alpine/?mountain=stevens-pass), [The Summit at Snoqualmie](https://santiiturriaga.github.io/alpine/?mountain=snoqualmie), or [Crystal Mountain](https://santiiturriaga.github.io/alpine/?mountain=crystal-mountain).
+Open **Mountain → Resort** to choose from 13 ski regions and seven summit areas. Ski the measured runs of Les 3 Vallées, Zermatt–Cervinia, Chamonix, Ski Arlberg, Verbier, Tignes–Val d’Isère, Vail, Jackson Hole, and Niseko. The summit areas start on foot and include viewpoints on Rainier, Mont Blanc, the Matterhorn, Eiger, Denali, Everest, and K2.
 
 ## Your first run
 
-Press **W** to push off, **A** and **D** to carve, and **S** to brake. Hold **W** at speed to tuck. Press **Space** to jump or slow to a stop and press **B** to walk. **C** changes your view. Click the snow to look around with the mouse.
+Press **W** to push off, **A** and **D** to carve, and **S** to brake. At speed, **S** starts a parallel hockey stop. Hold **A** or **D** to choose the side. Hold **W** at speed to tuck, press **Space** to jump, or stop and press **B** to walk. **C** changes your view. Click the slope to swing a pole at low speed and look around with the mouse.
 
 Press **M** to open the trail map. Pick a run, lift, or landmark and choose **Set destination**. Amber arrows on the snow guide you there. At a lift, **E** boards or skips the ride. Inside a gondola you can walk to the window and look down at the valley.
 
@@ -16,8 +18,9 @@ For company, have a friend open the same resort and drop in. You’ll join the s
 
 ## Around the mountain
 
-- Talk to Morgan at Roundhouse to start the Patrol Airlift. Follow the crew down to the helipad, then use the compass to reach both pickups. Slow to a hover and press **E** to lower the rope. The Patrol Shell doubles landing trick points while equipped.
-- The mountain runs on a 20-minute day. Crowds peak around midday and thin after dark. Under **G → Conditions**, choose fixed lighting or **Peak crowds** to see how skier traffic packs the snow.
+- Talk to Morgan at Roundhouse to start Patrol Airlift. Follow the crew to the helipad, use the compass to find each pickup, and press **E** inside the gold hover zone. Use **Copy winch seat invite** in the Mountain menu to bring a second skier. The operator can hold **W** to lower, press **E** beside the patient, and hold **S** to reel them in. The Patrol Shell doubles landing trick points while equipped.
+- The mountain runs on a 20-minute day. Under **G → Conditions**, choose **Golden Hour**, **Extreme Whiteout**, or **Peak crowds**. Mapped night-skiing zones light up after dark.
+- Open **G → Sled Run** to race White Fir Chute. Steer around the trees and rolling snowballs, then time your jumps off the ramps to cross the gaps.
 - Open **G** for the Blackcomb Glacier cave, Springboard race, Whiskey Jack slalom, or summer biking. **L** opens the outfitter. Your gear, coins, field photos, and profile save in your browser.
 - Press **Esc** for graphics quality, the separate **Realism** lighting toggle, and the Field Guide.
 
@@ -29,6 +32,6 @@ From the repository directory, start a static server and open [localhost:8080](h
 python -m http.server 8080 --bind 127.0.0.1
 ```
 
-The game runs in a WebGL browser with a bundled copy of Three.js. Multiplayer uses a public WebSocket broker to exchange temporary player IDs, display names, positions, and session scores. [Multiplayer service](https://www.emqx.com/en/mqtt/public-mqtt5-broker)
+The game runs in a WebGL browser with a bundled copy of Three.js. Multiplayer uses a public MQTT broker over WebSockets. The browsers exchange temporary IDs, names, motion, and scores in resort-specific rooms. Each browser interpolates remote skiers locally. The game disconnects an idle session after five minutes. [Multiplayer service](https://www.emqx.com/en/mqtt/public-mqtt5-broker)
 
 The trail map and the terrain you ski share the same elevation data and mapped routes. Trees, buildings, and lift machinery are modeled in code. Building interiors, trail widths, and some lift dimensions are estimates. [Geography and credits](data/README.md) · [Add a resort](data/mountains/README.md)

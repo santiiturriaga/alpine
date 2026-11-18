@@ -1,0 +1,90 @@
+{
+  "id": "mont-blanc",
+  "name": "Mont Blanc",
+  "terrainOnly": true,
+  "origin": [
+    6.8651706,
+    45.8327056
+  ],
+  "crs": "EPSG:2154",
+  "bounds": {
+    "minX": -8500,
+    "maxX": 8500,
+    "minZ": -9000,
+    "maxZ": 7000
+  },
+  "terrainStep": 20,
+  "backdropBounds": {
+    "minX": -35000,
+    "maxX": 35000,
+    "minZ": -35000,
+    "maxZ": 35000
+  },
+  "backdropStep": 100,
+  "terrainQuantization": 0.1,
+  "backdropQuantization": 0.125,
+  "coverSources": [
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N45E006_Map.tif"
+  ],
+  "elevationSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E006_00_DEM/Copernicus_DSM_COG_10_N45_00_E006_00_DEM.tif"
+  ],
+  "startLonLat": [
+    6.8870107,
+    45.8694728
+  ],
+  "landmarks": [
+    {
+      "id": "mont-blanc",
+      "name": "Mont Blanc / Monte Bianco",
+      "lonLat": [
+        6.8651706,
+        45.8327056
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "col-du-midi",
+      "name": "Col du Midi",
+      "lonLat": [
+        6.8870107,
+        45.8694728
+      ],
+      "kind": "viewpoint"
+    },
+    {
+      "id": "pointe-lachenal",
+      "name": "Pointe Lachenal",
+      "lonLat": [
+        6.8958205,
+        45.8646998
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "mont-blanc-courmayeur",
+      "name": "Mont Blanc de Courmayeur",
+      "lonLat": [
+        6.8696737,
+        45.8283806
+      ],
+      "kind": "peak"
+    }
+  ],
+  "viewDistance": 33300,
+  "references": [
+    "https://www.chamoniarde.com/en/your-activities/mont-blanc",
+    "https://www.openstreetmap.org/node/281399025",
+    "https://www.openstreetmap.org/node/13013781120"
+  ],
+  "elevationWms": {
+    "url": "https://data.geopf.fr/wms-r/wms",
+    "layer": "RGEALTI-MNT_PYR-ZIP_FXX_LAMB93_WMS"
+  },
+  "backdropSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E006_00_DEM/Copernicus_DSM_COG_10_N45_00_E006_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E007_00_DEM/Copernicus_DSM_COG_10_N45_00_E007_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E006_00_DEM/Copernicus_DSM_COG_10_N46_00_E006_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E007_00_DEM/Copernicus_DSM_COG_10_N46_00_E007_00_DEM.tif"
+  ]
+}

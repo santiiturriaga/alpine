@@ -1,0 +1,129 @@
+{
+  "id": "chamonix-mont-blanc",
+  "name": "Chamonix–Mont-Blanc",
+  "sourceAreas": [
+    "Brévent/Flégère (Chamonix)",
+    "Les Houches - Saint-Gervais",
+    "Les Grands Montets",
+    "Balme - Vallorcine",
+    "Aiguille du Midi (Chamonix)",
+    "Vormaine",
+    "Les Planards (Chamonix)",
+    "Les Chosalets (Chamonix)",
+    "Le Tourchet (Chamonix)"
+  ],
+  "origin": [
+    6.869,
+    45.91
+  ],
+  "crs": "EPSG:2154",
+  "bounds": {
+    "minX": -13200,
+    "maxX": 8400,
+    "minZ": -16200,
+    "maxZ": 10800
+  },
+  "terrainStep": 20,
+  "backdropBounds": {
+    "minX": -36000,
+    "maxX": 36000,
+    "minZ": -36000,
+    "maxZ": 36000
+  },
+  "backdropStep": 100,
+  "backdropQuantization": 0.1,
+  "terrainQuantization": 0.075,
+  "coverSources": [
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N45E006_Map.tif"
+  ],
+  "viewDistance": 34000,
+  "startLift": "planpraz",
+  "startRun": "sources",
+  "beginnerLift": "savoy",
+  "beginnerRun": "savoy",
+  "references": [
+    "https://www.montblancnaturalresort.com/en/brochures"
+  ],
+  "elevationWms": {
+    "url": "https://data.geopf.fr/wms-r/wms",
+    "layer": "RGEALTI-MNT_PYR-ZIP_FXX_LAMB93_WMS"
+  },
+  "backdropSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E006_00_DEM/Copernicus_DSM_COG_10_N45_00_E006_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E007_00_DEM/Copernicus_DSM_COG_10_N45_00_E007_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E006_00_DEM/Copernicus_DSM_COG_10_N46_00_E006_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E007_00_DEM/Copernicus_DSM_COG_10_N46_00_E007_00_DEM.tif"
+  ],
+  "elevationSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E006_00_DEM/Copernicus_DSM_COG_10_N45_00_E006_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E006_00_DEM/Copernicus_DSM_COG_10_N46_00_E006_00_DEM.tif"
+  ],
+  "sourceRegion": "FR-74",
+  "difficultyColors": {
+    "easy": "blue",
+    "intermediate": "red"
+  },
+  "sourceSections": {
+    "Brévent/Flégère (Chamonix)": "Brévent–Flégère",
+    "Les Houches - Saint-Gervais": "Les Houches",
+    "Les Grands Montets": "Grands Montets",
+    "Balme - Vallorcine": "Balme–Vallorcine",
+    "Aiguille du Midi (Chamonix)": "Aiguille du Midi",
+    "Vormaine": "Balme–Vallorcine",
+    "Les Planards (Chamonix)": "Les Planards",
+    "Les Chosalets (Chamonix)": "Grands Montets",
+    "Le Tourchet (Chamonix)": "Les Houches"
+  },
+  "osmBounds": [
+    [
+      6.85,
+      45.916,
+      6.868,
+      45.928
+    ],
+    [
+      6.876,
+      45.934,
+      6.894,
+      45.946
+    ],
+    [
+      6.915,
+      45.973,
+      6.933,
+      45.985
+    ],
+    [
+      6.931,
+      45.998,
+      6.949,
+      46.01
+    ],
+    [
+      6.776,
+      45.882,
+      6.794,
+      45.894
+    ]
+  ],
+  "landmarks": [
+    {
+      "id": "mont-blanc",
+      "name": "Mont Blanc",
+      "lonLat": [
+        6.8646,
+        45.8326
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "aiguille-du-midi",
+      "name": "Aiguille du Midi",
+      "lonLat": [
+        6.8875,
+        45.8786
+      ],
+      "kind": "peak"
+    }
+  ]
+}

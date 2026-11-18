@@ -42,10 +42,22 @@ snow.onBeforeCompile = shader => {
     roughnessFactor=mix(.89,.36,glint*resolved);`);
 };
 const ice = new THREE.MeshStandardMaterial({
-  color:0xffffff, vertexColors:true, roughness:.17, metalness:.09, transparent:true,
-  opacity:.80, depthWrite:false, envMapIntensity:1.65, side:THREE.FrontSide,
+  color:0xffffff, vertexColors:true, roughness:.19, metalness:.07, transparent:true,
+  opacity:.83, depthWrite:false, envMapIntensity:1.85, side:THREE.FrontSide,
 });
-ice.onBeforeCompile = winterShader;
+ice.onBeforeCompile = shader => {
+  winterShader(shader);
+  shader.uniforms.iceNight = climateUniforms.night;
+  shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float iceNight;')
+    .replace('#include <opaque_fragment>', /* glsl */ `
+    float rim = pow(1.0-max(0.0,dot(normal,normalize(vViewPosition))),2.4);
+    float striation = .5+.5*sin(winterPoint.y*243.0 + .9*sin(winterPoint.x*139.0+winterPoint.z*81.0));
+    float band = striation*(1.0-smoothstep(.15,.75,fwidth(winterPoint.y)*243.0));
+    outgoingLight += (vec3(.063,.15,.22)*rim + vec3(.031,.06,.08)*band) * mix(1.0,.30,iceNight);
+    diffuseColor.a *= mix(.76,1.13,rim) + band*.07;
+    #include <opaque_fragment>
+  `);
+};
 const depthMaterial = new THREE.MeshDepthMaterial({ depthPacking:THREE.RGBADepthPacking, side:THREE.DoubleSide });
 depthMaterial.onBeforeCompile = winterShader;
 
@@ -123,26 +135,29 @@ export function createRoofSnow(corners, { seed=185, depth=.26, overhang=.10, spa
 export function createIcicles(a,b,{seed=821,spacing=.52,length=.34}={}) {
   const start=new THREE.Vector3(...a),end=new THREE.Vector3(...b),span=start.distanceTo(end);
   const rand=mulberry32(seed),pos=[],colors=[],anchors=[],idx=[];
-  const origin=new THREE.Vector3(),hue=new THREE.Color(),sides=7;
+  const origin=new THREE.Vector3(),hue=new THREE.Color(),sides=8;
   // Meltwater gathers in channels. A long, banded spike usually has a few
   // smaller neighbours, with dry stretches between channels.
   function spike(t,h) {
     origin.lerpVectors(start,end,t);
-    const r=h*(.068+rand()*.058),twist=rand()*6.28,kx=(rand()-.5)*r*.42,kz=(rand()-.5)*r*.42;
+    const r=h*(.075+rand()*.057),twist=rand()*6.28,kx=(rand()-.5)*r*.72,kz=(rand()-.5)*r*.72;
     const offset=pos.length/3;
     const rings=[[0,1.13],[.038,.85],[.14,.74],[.22,.79],[.48,.55],[.54,.57],[.83,.25],[1,.016]];
     for(const [j,[v,radius]] of rings.entries())for(let i=0;i<sides;i++){
-      const ang=twist+Math.PI*2*i/sides,dx=Math.cos(ang)*r*radius,dz=Math.sin(ang)*r*radius;
-      pos.push(origin.x+dx+kx*v,origin.y-h*v,origin.z+dz+kz*v);
+      const ang=twist+Math.PI*2*i/sides;
+      const flutes=1+.10*Math.sin(ang*3.+twist)+.05*Math.sin(ang*5.+v*2.7);
+      const dx=Math.cos(ang)*r*radius*flutes,dz=Math.sin(ang)*r*radius*flutes;
+      pos.push(origin.x+dx+kx*v*v,origin.y-h*v,origin.z+dz+kz*v*v);
       anchors.push(origin.x,origin.y,origin.z);
-      const s=.73+.25*(.5+.5*Math.sin(ang+twist))+.014*(j%2);
-      hue.setRGB(s*.76,s*.91,s*.99);colors.push(hue.r,hue.g,hue.b);
+      const s=.72+.24*(.5+.5*Math.sin(ang+twist))+.036*(j%2);
+      const frost = (1-v)*(1-v)*.17;
+      hue.setRGB(s*.79+frost,s*.92+frost,s*.99+frost);colors.push(hue.r,hue.g,hue.b);
       const k=offset+j*sides+i,next=offset+j*sides+(i+1)%sides;
       if(j+1<rings.length)idx.push(k,next,k+sides,next,next+sides,k+sides);
     }
   }
   for(let s=spacing*rand();s<span;s+=(1.4+rand()*3.5)*spacing){
-    const primary=length*(.58+rand()*.74);
+    const primary=length*(.65+rand()**1.5*1.07);
     spike(s/span,primary);
     const count=1+Math.floor(rand()*5);
     for(let i=0;i<count;i++){

@@ -2,12 +2,13 @@
 // the same currency. Purchases and the resulting equipped pair save together.
 const key='alpine.outfitter.v1';
 export const SKIS={
-  'all-mountain':{name:'All-mountain',price:0,description:'Balanced edges and a forgiving flex.',grip:1,drag:1,speed:1,pop:1,color:'#b75c42'},
-  carver:{name:'Slalom carver',price:18,description:'Quicker edge engagement on hard snow.',grip:1.24,drag:1.02,speed:.98,pop:.98,color:'#236894'},
-  powder:{name:'Powder 112',price:24,description:'Wide shovels and less drag through soft snow.',grip:.90,drag:.83,speed:1.03,pop:1.04,color:'#7e995a'},
-  park:{name:'Twin-tip park',price:21,description:'More pop and a shorter, softer sidecut.',grip:.96,drag:1.07,speed:.96,pop:1.24,color:'#d59a43'},
+  'all-mountain':{name:'Salomon · All-mountain',price:0,description:'Balanced edges and a forgiving flex.',grip:1,drag:1,speed:1,pop:1,color:'#b75c42'},
+  carver:{name:'Rossignol · Slalom carver',price:18,description:'Quicker edge engagement on hard snow.',grip:1.24,drag:1.02,speed:.98,pop:.98,color:'#236894'},
+  powder:{name:'Atomic · Powder 112',price:24,description:'Wide shovels and less drag through soft snow.',grip:.90,drag:.83,speed:1.03,pop:1.04,color:'#7e995a'},
+  park:{name:'LINE · Twin-tip park',price:21,description:'More pop and a shorter, softer sidecut.',grip:.96,drag:1.07,speed:.96,pop:1.24,color:'#d59a43'},
 };
-const colors={jacket:[['Clay','#ad4939'],['Alpine blue','#3b7190'],['Spruce','#3d6e54'],['Ochre','#ce933e'],['Graphite','#404348']],
+const colors={jacket:[['Clay','#ad4939'],['Alpine blue','#3b7190'],['Spruce','#3d6e54'],['Ochre','#ce933e'],['Graphite','#404348'],
+    ['The North Face · Summit shell','summit-shell']],
   pants:[['Slate','#323e48'],['Sand','#a89a81'],['Navy','#24364a']],helmet:[['Chalk','#d6d6d1'],['Charcoal','#333a40'],['Copper','#9a6852']],
   backpack:[['Charcoal','#363d40'],['Cedar','#694e42'],['Ochre','#bc8340']]};
 const questJackets = {
@@ -15,9 +16,10 @@ const questJackets = {
   'quest.wildlife':['Fireweed','#965387'],
   'quest.delivery':['Lichen','#9ba65e'],
   'quest.rescue':['Alpine crimson','#b92c40'],
-  'quest.patrol-shell':['Alpine Patrol Shell · 2× landing tricks','patrol-shell'],
+  'quest.patrol-shell':['Arc’teryx · Alpine Patrol Shell · 2× tricks','patrol-shell'],
 };
 const patrolShell = questJackets['quest.patrol-shell'][1];
+const jacketFinishes = { [patrolShell]: '#323538', 'summit-shell': '#4a676c' };
 function jacketPalette(finds) {
   return [...colors.jacket,...Object.entries(questJackets).filter(([key])=>finds.includes(key)).map(([,value])=>value)];
 }
@@ -49,11 +51,11 @@ export class Outfitter {
     this.player.tuning=SKIS[s.skis];
     const patrol=s.outfit.jacket===patrolShell;
     this.player.landingTrickMultiplier=patrol?2:1;
-    this.player.rig.setAppearance?.({...this.broadcastOutfit,apparel:patrol?patrolShell:undefined,skis:s.skis,sticker:s.sticker});
+    this.player.rig.setAppearance?.({...this.broadcastOutfit,apparel:s.outfit.jacket,skis:s.skis,sticker:s.sticker});
   }
   get broadcastOutfit() {
     const {outfit}=this.state;
-    return outfit.jacket===patrolShell ? {...outfit,jacket:'#323538'} : outfit;
+    return Object.hasOwn(jacketFinishes,outfit.jacket) ? {...outfit,jacket:jacketFinishes[outfit.jacket]} : outfit;
   }
   equipPatrolShell() {
     if(!this.state.finds.includes('quest.patrol-shell'))return false;

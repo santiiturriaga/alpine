@@ -3,7 +3,7 @@ import { heightAt } from './terrain.js';
 import { clamp } from './util.js';
 
 const CELL = 14;
-const GRADES = { green: 0, blue: 1, unrated: 0, black: 2, double: 3 };
+const GRADES = { green: 0, blue: 1, red: 2, unrated: 0, black: 2, double: 3 };
 const distance = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 const key = (x, z) => x * 32768 + z;
 

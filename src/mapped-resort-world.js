@@ -117,7 +117,7 @@ function signGraphics(run) {
   ctx.strokeStyle = '#d1ded5';
   ctx.lineWidth = 3;
   ctx.strokeRect(5, 5, 502, 106);
-  ctx.fillStyle = style.easy ? '#4ba65e' : style.expert ? '#eff1e8' : '#4679bf';
+  ctx.fillStyle = run.difficulty === 'red' ? '#cf3e4b' : style.easy ? '#4ba65e' : style.expert ? '#eff1e8' : '#4679bf';
   if (style.easy) {
     ctx.beginPath();
     ctx.arc(61, 58, 24, 0, Math.PI * 2);
@@ -191,7 +191,13 @@ export async function buildMappedResortWorld(scene, config, baseURL) {
   const lodges = buildMappedLodges(root, config, ground, env);
   if (config.id === 'stevens-pass') buildStevensPassDetails(root, config, ground, env, pointInPolygon);
   const forest = await buildMappedForest(root, ground, config, env);
-  const start = chooseStart(config, ground, env);
+  const start = config.terrainOnly && config.startPoint
+    ? (() => {
+      const [x,z] = config.startPoint;
+      const [tx,tz] = config.landmarks?.find(spot => spot.kind === 'peak')?.point ?? [x,z+1];
+      return { x, z, heading: Math.atan2(tx-x,tz-z), footMode: true };
+    })()
+    : chooseStart(config, ground, env);
   const beginner = config.beginnerRun ? chooseStart(config, ground, env, config.beginnerRun, config.beginnerLift) : start;
   ground.startPose = () => ({ ...start });
   ground.beginnerPose = () => ({ ...beginner });

@@ -1,0 +1,91 @@
+{
+  "id": "mount-rainier",
+  "name": "Mount Rainier",
+  "terrainOnly": true,
+  "origin": [
+    -121.7604091,
+    46.8528725
+  ],
+  "crs": "EPSG:32610",
+  "bounds": {
+    "minX": -8100,
+    "maxX": 8100,
+    "minZ": -6850,
+    "maxZ": 11000
+  },
+  "terrainStep": 25,
+  "backdropBounds": {
+    "minX": -36000,
+    "maxX": 36000,
+    "minZ": -36000,
+    "maxZ": 36000
+  },
+  "backdropStep": 100,
+  "terrainQuantization": 0.1,
+  "backdropQuantization": 0.125,
+  "coverSources": [
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N45W123_Map.tif"
+  ],
+  "elevationSources": [
+    "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/current/n47w123/USGS_13_n47w123.tif",
+    "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/current/n47w122/USGS_13_n47w122.tif",
+    "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/current/n48w123/USGS_13_n48w123.tif",
+    "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/current/n48w122/USGS_13_n48w122.tif"
+  ],
+  "startLonLat": [
+    -121.7360372,
+    46.7863468
+  ],
+  "landmarks": [
+    {
+      "id": "columbia-crest",
+      "name": "Columbia Crest",
+      "lonLat": [
+        -121.7604091,
+        46.8528725
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "paradise",
+      "name": "Paradise",
+      "lonLat": [
+        -121.7360372,
+        46.7863468
+      ],
+      "kind": "viewpoint"
+    },
+    {
+      "id": "alta-vista",
+      "name": "Alta Vista",
+      "lonLat": [
+        -121.7365488,
+        46.7923675
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "myrtle-falls-viewpoint",
+      "name": "Myrtle Falls Viewpoint",
+      "lonLat": [
+        -121.7322981,
+        46.7911009
+      ],
+      "kind": "viewpoint"
+    }
+  ],
+  "viewDistance": 34300,
+  "references": [
+    "https://www.nps.gov/mora/planyourvisit/maps.htm",
+    "https://www.openstreetmap.org/node/7677147230",
+    "https://www.openstreetmap.org/node/150961550"
+  ],
+  "osmBounds": [
+    [
+      -121.744,
+      46.782,
+      -121.726,
+      46.794
+    ]
+  ]
+}

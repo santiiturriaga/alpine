@@ -98,6 +98,7 @@
 .trail-key i, #map-feature-badge { display: inline-block; min-width: 9px; width: 9px; height: 9px; flex: none; }
 .trail-key i[data-symbol="circle"], #map-feature-badge[data-symbol="circle"] { border-radius: 50%; background: #76d896; }
 .trail-key i[data-symbol="square"], #map-feature-badge[data-symbol="square"] { background: #78c1ff; }
+.trail-key i[data-symbol="red"], #map-feature-badge[data-symbol="red"] { background: #ff777c; }
 .trail-key i[data-symbol="diamond"], #map-feature-badge[data-symbol="diamond"] {
   position: relative;
   background: #0d1b23;
@@ -127,6 +128,7 @@
 .trail-key .trail-key-hike, .trail-key .trail-key-bike { display: none; }
 .trail-key.summer-hike .trail-key-hike, .trail-key.summer-bike .trail-key-bike { display: flex; }
 .trail-key.summer-hike:not(.summer-bike) .trail-key-grade { display: none; }
+.trail-key.terrain-map .trail-key-grade, .trail-key.terrain-map li:has(i[data-symbol="lift"]) { display: none; }
 #map-feature-badge[data-symbol="landmark"] { border-radius: 50%; border: 2px solid #ecf5f7; }
 #map-feature-badge[data-symbol="peak"] {
   background: #ecf5f7;

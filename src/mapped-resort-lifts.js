@@ -37,7 +37,7 @@ function clockCurve(lift) {
   };
 }
 
-function mappedExit(lift, config, ground, colliders) {
+function mappedExit(lift, config, ground, colliders, env) {
   const { profile, def, surface, gauge } = lift;
   const { top } = profile;
   if (def.unload) return { ...liftPoint(def.unload), heading:def.unload.heading ?? top.heading+Math.PI, holdAtUnload:true };
@@ -52,15 +52,18 @@ function mappedExit(lift, config, ground, colliders) {
     if(gap>75 || gap<2.25 || (ground.bounds && (x<ground.bounds.minX || x>ground.bounds.maxX ||
       z<ground.bounds.minZ || z>ground.bounds.maxZ))) return;
     const dx=Math.sin(heading),dz=Math.cos(heading);
-    for(const offset of [0,1.6,3.2,5]) for(const c of nearby) {
+    for(const offset of [0,1.6,3.2,5]) {
       const xx=x+dx*offset,zz=z+dz*offset,yy=ground.heightAt(xx,zz)+.18;
-      if(yy>(c.maxY??Infinity)||yy<(c.minY??-Infinity))continue;
-      const a=xx-c.x,b=zz-c.z;
-      if(c.r) {
-        if(Math.hypot(a,b)<c.r+.60)return;
-      } else {
-        const cos=Math.cos(c.rot),sin=Math.sin(c.rot);
-        if(Math.abs(a*cos+b*sin)<c.hw+.44&&Math.abs(b*cos-a*sin)<c.hd+.44)return;
+      if(env?.isOpen(xx,yy,zz,.55)===false || env?.roofHeightNear?.(xx,zz,.55)>yy)return;
+      for(const c of nearby) {
+        if(yy>(c.maxY??Infinity)||yy<(c.minY??-Infinity))continue;
+        const a=xx-c.x,b=zz-c.z;
+        if(c.r) {
+          if(Math.hypot(a,b)<c.r+.60)return;
+        } else {
+          const cos=Math.cos(c.rot),sin=Math.sin(c.rot);
+          if(Math.abs(a*cos+b*sin)<c.hw+.44&&Math.abs(b*cos-a*sin)<c.hd+.44)return;
+        }
       }
     }
     const y=ground.heightAt(x,z), nearY=ground.heightAt(x+dx*2.7,z+dz*2.7);
@@ -93,7 +96,7 @@ function mappedExit(lift, config, ground, colliders) {
   return best.pose ?? { ...top.world(gauge+3.2,-5), heading:top.heading+Math.PI, holdAtUnload:true };
 }
 
-function planLift(source, ground, index, resortId) {
+function planLift(source, ground, index, resortId, env) {
   const def={ ...source, type:source.kind, seats:source.capacity, rideable:source.rideable!==false };
   const surface=def.kind==='surface';
   const carpet=surface&&/carpet/i.test(def.liftType??def.surfaceType??def.name);
@@ -105,7 +108,7 @@ function planLift(source, ground, index, resortId) {
   const speed=Number.isFinite(def.speed)&&def.speed>0?def.speed:carpet?.70:surface?2.18:detachable?4.92:vintage?2.26:2.36;
   const stationStyle = resortId === 'stevens-pass' && ['tye-mill', 'rope-tow', 'hogsback-express'].includes(def.id) ? def.id : null;
   const paint=stationStyle === 'tye-mill' ? '#252c2d' : def.color??(/skytrac/i.test(def.manufacturer)?'#617765':chairShades[index%chairShades.length]);
-  const profile=buildLiftProfile(def,ground,gauge,surface?0:gondola?1.11:seats*.26+.11,surface,carpet);
+  const profile=buildLiftProfile(def,ground,gauge,surface?0:gondola?1.11:seats*.26+.11,surface,carpet,env?.roofHeightNear);
   const p=new THREE.Vector3(),tangent=new THREE.Vector3();
   let sideDifference=0;
   for(const t of [.27,.49,.71]) {
@@ -119,7 +122,18 @@ function planLift(source, ground, index, resortId) {
   lift.timing=clockCurve(lift);
   lift.duration=lift.timing.duration;
   const startOffset = stationStyle === 'rope-tow' ? -5.9 : surface ? -1.8 : -4.3;
-  const boarding=def.board ?? profile.bottom.world(surface?0:gauge, startOffset);
+  let boarding=def.board ?? profile.bottom.world(gauge,startOffset);
+  if(!def.board && env) {
+    const open = ({ x,z }) => {
+      const y=ground.heightAt(x,z)+.18;
+      return env.isOpen(x,y,z,.55) && !(env.roofHeightNear?.(x,z,.55)>y);
+    };
+    if(!open(boarding)) {
+      const choices=[profile.bottom.world(gauge,startOffset-3),profile.bottom.world(gauge,startOffset-5),
+        profile.bottom.world(gauge+1.7,startOffset),profile.bottom.world(gauge+3.2,startOffset)];
+      boarding=choices.find(open) ?? boarding;
+    }
+  }
   lift.boardPose={...liftPoint(boarding),heading:boarding.heading??profile.bottom.heading};
   return lift;
 }
@@ -198,13 +212,24 @@ function turnClass(lift, distance) {
  * accepts a lift/id for direct resort starts. update()/exit() return a completed
  * ride once, after placing the player on its downhill exit and clearing active.
  */
-export function buildMappedResortLifts(scene, config, ground) {
+export async function buildMappedResortLifts(scene, config, ground, env) {
   const group=new THREE.Group();group.name=`${config.name??'Mapped resort'} · Lift operations`;scene.add(group);
   const colliders=[], fleets=[], byId=new Map();
-  const lifts=(config.lifts??[]).filter(def=>def.points?.length>1 && def.points.some(point=>{
+  const definitions=(config.lifts??[]).filter(def=>def.points?.length>1 && def.points.some(point=>{
     const a=liftPoint(point),b=liftPoint(def.points[0]);
     return Math.hypot(a.x-b.x,a.z-b.z)>.015;
-  })).map((def,i)=>planLift(def,ground,i,config.id));
+  }));
+  let deadline=definitions.length>30 ? performance.now()+40 : Infinity;
+  async function yieldAfterBatch() {
+    if(performance.now()<deadline)return;
+    await new Promise(resolve=>setTimeout(resolve,0));
+    deadline=performance.now()+40;
+  }
+  const lifts=[];
+  for(const def of definitions) {
+    lifts.push(planLift(def,ground,lifts.length,config.id,env));
+    await yieldAfterBatch();
+  }
   const guestGeometry=palettes.map(seatedRiderGeometry);
   const mounted=createLiftInstances(group,guestGeometry[0],1,'Player · seated lift rider');
   const mountedPosition=new THREE.Vector3(), mountedTangent=new THREE.Vector3();
@@ -222,6 +247,7 @@ export function buildMappedResortLifts(scene, config, ground) {
   }
   const paired=new Set();
   for(const lift of lifts) {
+    await yieldAfterBatch();
     if(lift.surface) {
       buildSurfaceLine(lift.group,lift,ground,colliders);
       continue;
@@ -240,7 +266,10 @@ export function buildMappedResortLifts(scene, config, ground) {
     if(other)paired.add(other);
     fleets.push(makeFleet(group,lift,other,connector,guestGeometry));
   }
-  for(const lift of lifts)lift.exitPose=mappedExit(lift,config,ground,colliders);
+  for(const lift of lifts) {
+    lift.exitPose=mappedExit(lift,config,ground,colliders,env);
+    await yieldAfterBatch();
+  }
 
   function nearby(position) {
     return lifts.filter(lift=>lift.def.rideable).map(lift=>{

@@ -1,0 +1,126 @@
+{
+  "id": "zermatt-cervinia",
+  "name": "Zermatt–Cervinia",
+  "sourceAreas": [
+    "Zermatt - Breuil-Cervinia, Breuil-Cervinia Ski Paradise",
+    "Valtournenche"
+  ],
+  "origin": [
+    7.733,
+    45.964
+  ],
+  "crs": "EPSG:32632",
+  "bounds": {
+    "minX": -9600,
+    "maxX": 7200,
+    "minZ": -9000,
+    "maxZ": 9800
+  },
+  "terrainStep": 20,
+  "backdropBounds": {
+    "minX": -34000,
+    "maxX": 34000,
+    "minZ": -34000,
+    "maxZ": 34000
+  },
+  "backdropStep": 100,
+  "backdropQuantization": 0.1,
+  "terrainQuantization": 0.075,
+  "coverSources": [
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N45E006_Map.tif"
+  ],
+  "viewDistance": 32000,
+  "startLift": "matterhorn-express-1",
+  "startRun": "matterhorn",
+  "beginnerLift": "riffelberg-express",
+  "beginnerRun": "gornergrat",
+  "references": [
+    "https://www.matterhornparadise.ch/en/experience/skiing/piste-map",
+    "https://www.swisstopo.admin.ch/en/height-model-swissalti3d"
+  ],
+  "elevationSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E007_00_DEM/Copernicus_DSM_COG_10_N45_00_E007_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E008_00_DEM/Copernicus_DSM_COG_10_N45_00_E008_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E007_00_DEM/Copernicus_DSM_COG_10_N46_00_E007_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E008_00_DEM/Copernicus_DSM_COG_10_N46_00_E008_00_DEM.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2615-1090/swissalti3d_2024_2615-1090_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2615-1091/swissalti3d_2024_2615-1091_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2615-1092/swissalti3d_2024_2615-1092_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2616-1090/swissalti3d_2024_2616-1090_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2616-1091/swissalti3d_2024_2616-1091_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2616-1092/swissalti3d_2024_2616-1092_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2617-1090/swissalti3d_2024_2617-1090_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2617-1091/swissalti3d_2024_2617-1091_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2617-1092/swissalti3d_2024_2617-1092_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2618-1090/swissalti3d_2024_2618-1090_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2618-1091/swissalti3d_2024_2618-1091_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2618-1092/swissalti3d_2024_2618-1092_2_2056_5728.tif"
+  ],
+  "difficultyColors": {
+    "easy": "blue",
+    "intermediate": "red"
+  },
+  "sourceSections": {
+    "Valtournenche": "Valtournenche"
+  },
+  "sectionAnchors": {
+    "Breuil-Cervinia": [
+      7.65,
+      45.927
+    ],
+    "Zermatt · Matterhorn": [
+      7.713,
+      45.999
+    ],
+    "Zermatt · Gornergrat": [
+      7.8,
+      45.989
+    ]
+  },
+  "osmBounds": [
+    [
+      7.738,
+      46.01,
+      7.756,
+      46.022
+    ],
+    [
+      7.725,
+      46.0,
+      7.743,
+      46.012
+    ],
+    [
+      7.624,
+      45.929,
+      7.642,
+      45.941
+    ],
+    [
+      7.621,
+      45.877,
+      7.639,
+      45.889
+    ]
+  ],
+  "mountainStats": {
+    "pisteKm": 360
+  },
+  "landmarks": [
+    {
+      "id": "matterhorn",
+      "name": "Matterhorn",
+      "lonLat": [
+        7.6586,
+        45.9763
+      ],
+      "kind": "peak"
+    }
+  ],
+  "backdropSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E007_00_DEM/Copernicus_DSM_COG_10_N45_00_E007_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E008_00_DEM/Copernicus_DSM_COG_10_N45_00_E008_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E007_00_DEM/Copernicus_DSM_COG_10_N46_00_E007_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E008_00_DEM/Copernicus_DSM_COG_10_N46_00_E008_00_DEM.tif"
+  ]
+}

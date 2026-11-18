@@ -1,0 +1,110 @@
+{
+  "id": "matterhorn",
+  "name": "Matterhorn",
+  "terrainOnly": true,
+  "origin": [
+    7.6586024,
+    45.9764263
+  ],
+  "crs": "EPSG:32632",
+  "bounds": {
+    "minX": -8010,
+    "maxX": 10005,
+    "minZ": -7500,
+    "maxZ": 7500
+  },
+  "terrainStep": 15,
+  "backdropBounds": {
+    "minX": -34000,
+    "maxX": 34000,
+    "minZ": -34000,
+    "maxZ": 34000
+  },
+  "backdropStep": 100,
+  "terrainQuantization": 0.1,
+  "backdropQuantization": 0.125,
+  "coverSources": [
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N45E006_Map.tif"
+  ],
+  "elevationSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E007_00_DEM/Copernicus_DSM_COG_10_N45_00_E007_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E008_00_DEM/Copernicus_DSM_COG_10_N45_00_E008_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E007_00_DEM/Copernicus_DSM_COG_10_N46_00_E007_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E008_00_DEM/Copernicus_DSM_COG_10_N46_00_E008_00_DEM.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2615-1090/swissalti3d_2024_2615-1090_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2615-1091/swissalti3d_2024_2615-1091_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2615-1092/swissalti3d_2024_2615-1092_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2616-1090/swissalti3d_2024_2616-1090_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2616-1091/swissalti3d_2024_2616-1091_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2616-1092/swissalti3d_2024_2616-1092_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2617-1090/swissalti3d_2024_2617-1090_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2617-1091/swissalti3d_2024_2617-1091_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2617-1092/swissalti3d_2024_2617-1092_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2618-1090/swissalti3d_2024_2618-1090_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2618-1091/swissalti3d_2024_2618-1091_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2024_2618-1092/swissalti3d_2024_2618-1092_2_2056_5728.tif"
+  ],
+  "startLonLat": [
+    7.708971,
+    45.9919057
+  ],
+  "landmarks": [
+    {
+      "id": "matterhorn",
+      "name": "Matterhorn",
+      "lonLat": [
+        7.6586024,
+        45.9764263
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "schwarzsee",
+      "name": "Schwarzsee",
+      "lonLat": [
+        7.708971,
+        45.9919057
+      ],
+      "kind": "viewpoint"
+    },
+    {
+      "id": "pic-tyndall",
+      "name": "Pic Tyndall",
+      "lonLat": [
+        7.653724,
+        45.974293
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "zmuttzahne",
+      "name": "Zmuttzähne",
+      "lonLat": [
+        7.6538747,
+        45.9804941
+      ],
+      "kind": "peak"
+    }
+  ],
+  "viewDistance": 32300,
+  "references": [
+    "https://www.sac-cas.ch/en/huts-and-tours/sac-route-portal/matterhorn-1138/",
+    "https://www.openstreetmap.org/node/26863664",
+    "https://www.openstreetmap.org/node/13929162486",
+    "https://www.swisstopo.admin.ch/en/height-model-swissalti3d"
+  ],
+  "osmBounds": [
+    [
+      7.7,
+      45.986,
+      7.718,
+      45.998
+    ]
+  ],
+  "backdropSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E007_00_DEM/Copernicus_DSM_COG_10_N45_00_E007_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E008_00_DEM/Copernicus_DSM_COG_10_N45_00_E008_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E007_00_DEM/Copernicus_DSM_COG_10_N46_00_E007_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E008_00_DEM/Copernicus_DSM_COG_10_N46_00_E008_00_DEM.tif"
+  ]
+}

@@ -10,10 +10,10 @@ export const skiProfile = [
 export const baseThickness = .013;
 
 const styles = {
-  'all-mountain': { length: 1, width: 1, rocker: 1, tip: '#517b84', base: '#253b40', ink: '#adcbca', seed: 1841 },
-  carver: { length: .99, width: .93, rocker: .78, tip: '#ab532f', base: '#44342d', ink: '#efc5a5', seed: 248 },
-  powder: { length: 1.055, width: 1.24, rocker: 1.46, tip: '#527692', base: '#2f4159', ink: '#c9dced', seed: 425 },
-  park: { length: .94, width: 1.035, rocker: .98, tip: '#729271', base: '#33483c', ink: '#e1ce8e', seed: 789 },
+  'all-mountain': { brand:'SALOMON', length: 1, width: 1, rocker: 1, tip: '#517b84', base: '#253b40', ink: '#adcbca', seed: 1841 },
+  carver: { brand:'ROSSIGNOL', length: .99, width: .93, rocker: .78, tip: '#ab532f', base: '#44342d', ink: '#efc5a5', seed: 248 },
+  powder: { brand:'ATOMIC', length: 1.055, width: 1.24, rocker: 1.46, tip: '#527692', base: '#2f4159', ink: '#c9dced', seed: 425 },
+  park: { brand:'LINE', length: .94, width: 1.035, rocker: .98, tip: '#729271', base: '#33483c', ink: '#e1ce8e', seed: 789 },
 };
 const decks = new Map();
 let baseMaterial;
@@ -36,7 +36,7 @@ function scratches(ctx, random, count, width, length, maxAlpha) {
   }
 }
 
-function skiTop({ tip, base, ink, seed }) {
+function skiTop({ tip, base, ink, seed, brand }) {
   const width = 128, length = 1024;
   const { canvas, ctx } = makeCanvas(width, length);
   const rough = makeCanvas(width, length);
@@ -74,6 +74,13 @@ function skiTop({ tip, base, ink, seed }) {
   ctx.lineTo(109, 132);
   ctx.stroke();
   for (let i = 0; i < 3; i++) ctx.fillRect(25, 188 + i * 12, 23 - i * 6, 3);
+  ctx.save();
+  ctx.translate(79, 256);
+  ctx.rotate(Math.PI / 2);
+  ctx.fillStyle = ink;
+  ctx.font = '700 38px Barlow Condensed, Arial';
+  ctx.fillText(brand, 0, 0, 223);
+  ctx.restore();
   scratches(ctx, rand, 300, width, length, .17);
   for (let i = 0; i < 95; i++) {
     const x = rand() < .5 ? rand() * 5 : width - rand() * 5;

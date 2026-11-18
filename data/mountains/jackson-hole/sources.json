@@ -1,0 +1,67 @@
+{
+  "id": "jackson-hole",
+  "name": "Jackson Hole Mountain Resort",
+  "sourceAreas": [
+    "Jackson Hole Mountain Resort"
+  ],
+  "origin": [
+    -110.852,
+    43.59
+  ],
+  "crs": "EPSG:32612",
+  "bounds": {
+    "minX": -2100,
+    "maxX": 2880,
+    "minZ": -2856,
+    "maxZ": 1752
+  },
+  "terrainStep": 12,
+  "backdropBounds": {
+    "minX": -30000,
+    "maxX": 30000,
+    "minZ": -30000,
+    "maxZ": 30000
+  },
+  "backdropStep": 100,
+  "backdropQuantization": 0.1,
+  "terrainQuantization": 0.075,
+  "coverSources": [
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N42W111_Map.tif"
+  ],
+  "viewDistance": 28000,
+  "startLift": "aerial-tram",
+  "startRun": "rendezvous-bowl",
+  "beginnerLift": "teewinot-high-speed-quad",
+  "beginnerRun": "lower-teewinot",
+  "references": [
+    "https://www.jacksonhole.com/maps",
+    "https://www.usgs.gov/3d-elevation-program/about-3dep-products-services"
+  ],
+  "elevationSources": [
+    "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/current/n44w112/USGS_13_n44w112.tif",
+    "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/current/n44w111/USGS_13_n44w111.tif"
+  ],
+  "sourceRegion": "US-WY",
+  "osmBounds": [
+    [
+      -110.837,
+      43.581,
+      -110.819,
+      43.593
+    ]
+  ],
+  "mountainStats": {
+    "skiableAcres": 2500
+  },
+  "runSupplements": [
+    "882553696"
+  ],
+  "runOverrides": {
+    "882553696": {
+      "difficulty": "double"
+    }
+  },
+  "osmWays": [
+    "882553696"
+  ]
+}

@@ -11,10 +11,10 @@ import {
 import { heightAt, normalAt, slopeAt, pisteAt, landCoverAt, treeAnchorHeightAt } from './terrain.js';
 import { createFlag } from './effects.js';
 import { surfaceMaterial } from './materials.js';
-import { coniferGeometry, coniferMaterial } from './conifers.js';
+import { coniferDepthMaterial, coniferGeometry, coniferMaterial } from './conifers.js';
 import { climateUniforms } from './climate-state.js';
 import { buildNeedleShoots } from './needle-shoots.js';
-import { ForestCell, forestQuality, makeForestCrowns } from './forest-lod.js';
+import { ForestCell, forestDetailTiers, forestQuality, makeForestCrowns } from './forest-lod.js';
 import { part, box, beam, cacheStaticTransforms, mergeParts, mergedMesh } from './scenery.js';
 import { buildResortPeople } from './resort-people.js';
 import { buildRoundhouseArrival } from './roundhouse.js';
@@ -200,23 +200,12 @@ function buildForest(scene, grid, rand) {
   let count = 0;
   const species = ['fir', 'spruce', 'hemlock'];
   const variants = [...species, ...species];
-  const needleMaterial = coniferMaterial(0, 'mapped');
+  const needleMaterial = coniferMaterial(-1, 'mapped');
   const geometry = (kind, index, level) => coniferGeometry(kind, level, Math.floor(index / species.length));
   const distantTemplates = variants.map((kind, i) => geometry(kind, i, -1));
   const silhouetteTemplate = geometry('hemlock',2,-2);
   const silhouetteMaterial = coniferMaterial(-2, 'mapped');
-  const shadowMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
-  shadowMaterial.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
-      float innerCrown = step(.970,uv.x)*(1.0-step(.988,uv.x));
-      vec3 base = (modelMatrix * instanceMatrix * vec4(0.,0.,0.,1.)).xyz;
-      float windPhase = base.x*.037 + base.z*.021;
-      transformed.xz *= 1.0 + innerCrown*.14*sin(position.y*26.0+windPhase);
-      float crownDistance = length(vec3(cameraPosition.xz-base.xz,
-        max(0.0,max(base.y-cameraPosition.y,cameraPosition.y-base.y-length(instanceMatrix[1].xyz)))));
-      transformed.xz *= mix(1.0,.70+.30*smoothstep(95.0,220.0,crownDistance),innerCrown);`);
-  };
-  shadowMaterial.customProgramCacheKey = () => 'whistler-conifer-depth';
+  const shadowMaterial = coniferDepthMaterial();
   const setTree = (mesh, index, tree) => {
     dummy.position.set(tree.x, tree.y - 0.1, tree.z);
     dummy.scale.set(tree.apex * tree.stretch, tree.apex, tree.apex * tree.stretch);
@@ -364,7 +353,6 @@ function buildForest(scene, grid, rand) {
       mesh.count = 0;
       mesh.boundingSphere = new THREE.Sphere();
       mesh.userData.trees = [];
-      mesh.castShadow = level === -.5;
       group.add(mesh);
       return mesh;
     });
@@ -393,7 +381,9 @@ function buildForest(scene, grid, rand) {
     const moved = scale !== detailScale || lastEye.distanceToSquared(eye) >= 25;
     if (!moved && lastFacing.angleTo(camera.quaternion) < .065 &&
         Math.abs(lastFov-camera.fov) < 2 && Math.abs(lastAspect-camera.aspect) < .04) return;
-    const baseDistance = 250*scale+7, midDistance = 112*scale+7, closeDistance = 47*scale+7;
+    const baseDistance = forestDetailTiers[-.5][1]*scale+7;
+    const midDistance = forestDetailTiers[1][1]*scale+7;
+    const closeDistance = forestDetailTiers[2][1]*scale+7;
     if (moved) {
       detailScale = scale;
       lastEye.copy(eye);
@@ -2188,7 +2178,7 @@ function buildFlags(scene) {
 
 const cameraObstacles = new Set([
   'lodge', 'station', 'building-wall', 'lift-tower', 'furniture', 'landmark',
-  'plaza-building-wall', 'plaza-railing', 'plaza-planter', 'plaza-canopy', 'tree', 'fallen log', 'ice-wall',
+  'plaza-building-wall', 'plaza-railing', 'plaza-planter', 'plaza-canopy', 'tree', 'fallen log', 'ice-wall', 'patrol-pad',
 ]);
 
 export async function buildEnvironment(scene, { onProgress = () => {} } = {}) {

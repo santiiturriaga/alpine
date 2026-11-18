@@ -1,0 +1,121 @@
+{
+  "id": "verbier-4-vallees",
+  "name": "Verbier / 4 Vallées",
+  "sourceAreas": [
+    "4 Vallées – Verbier/La Tzoumaz/Nendaz/Veysonnaz/Thyon"
+  ],
+  "origin": [
+    7.305,
+    46.107
+  ],
+  "crs": "EPSG:32632",
+  "bounds": {
+    "minX": -10400,
+    "maxX": 7800,
+    "minZ": -10600,
+    "maxZ": 7800
+  },
+  "terrainStep": 20,
+  "backdropBounds": {
+    "minX": -33000,
+    "maxX": 33000,
+    "minZ": -33000,
+    "maxZ": 33000
+  },
+  "backdropStep": 100,
+  "backdropQuantization": 0.1,
+  "terrainQuantization": 0.075,
+  "coverSources": [
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N45E006_Map.tif"
+  ],
+  "viewDistance": 31000,
+  "startLift": "medran-2",
+  "startRun": "la-chaux",
+  "beginnerLift": "moulins",
+  "beginnerRun": "planards-carrefour",
+  "references": [
+    "https://verbier4vallees.ch/en/useful-information/interactive-map"
+  ],
+  "elevationSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E006_00_DEM/Copernicus_DSM_COG_10_N45_00_E006_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E007_00_DEM/Copernicus_DSM_COG_10_N45_00_E007_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E006_00_DEM/Copernicus_DSM_COG_10_N46_00_E006_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E007_00_DEM/Copernicus_DSM_COG_10_N46_00_E007_00_DEM.tif"
+  ],
+  "sourceRegion": "CH-VS",
+  "difficultyColors": {
+    "easy": "blue",
+    "intermediate": "red"
+  },
+  "sectionAnchors": {
+    "Verbier": [
+      7.249,
+      46.098
+    ],
+    "La Tzoumaz": [
+      7.234,
+      46.137
+    ],
+    "Bruson": [
+      7.207,
+      46.035
+    ],
+    "Nendaz": [
+      7.284,
+      46.176
+    ],
+    "Siviez": [
+      7.32,
+      46.111
+    ],
+    "Veysonnaz": [
+      7.357,
+      46.182
+    ],
+    "Thyon": [
+      7.38,
+      46.157
+    ]
+  },
+  "osmBounds": [
+    [
+      7.223,
+      46.09,
+      7.241,
+      46.102
+    ],
+    [
+      7.207,
+      46.075,
+      7.225,
+      46.087
+    ],
+    [
+      7.283,
+      46.172,
+      7.301,
+      46.184
+    ],
+    [
+      7.309,
+      46.116,
+      7.327,
+      46.128
+    ],
+    [
+      7.332,
+      46.188,
+      7.35,
+      46.2
+    ],
+    [
+      7.224,
+      46.138,
+      7.242,
+      46.15
+    ]
+  ],
+  "mountainStats": {
+    "pisteKm": 410
+  }
+}

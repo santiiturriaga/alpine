@@ -53,29 +53,37 @@ export const REPLACED_STATION_BUILDING_IDS = new Set([
 
 export function makePeak2PeakBadge(width = 8, height = 1.55) {
   const { canvas, ctx } = makeCanvas(1536, 320);
-  // The installed sign is a narrow pointed badge: red PEAK, black 2 PEAK,
-  // a white keyline and an aluminium outer edge, with slanted condensed type.
-  const shape = (inset) => {
-    ctx.beginPath(); ctx.moveTo(8 + inset, 160);
-    ctx.lineTo(99 + inset * .55, 21 + inset); ctx.lineTo(1437 - inset * .55, 21 + inset);
-    ctx.lineTo(1528 - inset, 160); ctx.lineTo(1437 - inset * .55, 299 - inset);
-    ctx.lineTo(99 + inset * .55, 299 - inset); ctx.closePath();
-  };
-  ctx.fillStyle = '#b8c4c9'; shape(0); ctx.fill();
-  ctx.fillStyle = '#eff0ec'; shape(7); ctx.fill();
-  shape(17); ctx.save(); ctx.clip();
-  ctx.fillStyle = '#aa1631'; ctx.fillRect(0, 0, 720, 320);
-  ctx.fillStyle = '#121b22'; ctx.fillRect(720, 0, 820, 320);
+  const outline = new Path2D();
+  outline.moveTo(15, 160);
+  outline.lineTo(131, 34);
+  outline.lineTo(1405, 34);
+  outline.lineTo(1521, 160);
+  outline.lineTo(1405, 286);
+  outline.lineTo(131, 286);
+  outline.closePath();
+  ctx.save();
+  ctx.clip(outline);
+  ctx.fillStyle = '#1d232d'; ctx.fillRect(0, 0, 1536, 320);
+  // The red field cuts diagonally behind the numeral on the installed sign.
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(900, 0);
+  ctx.lineTo(701, 320);
+  ctx.lineTo(0, 320);
+  ctx.fillStyle = '#a72a30'; ctx.fill();
   ctx.restore();
-  ctx.fillStyle = '#f5f5ee'; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
-  ctx.font = 'italic 900 214px "Barlow Condensed", "Arial Narrow", Arial';
-  ctx.fillText('PEAK', 404, 170, 557);
-  ctx.fillText('2', 793, 170, 145);
-  ctx.fillText('PEAK', 1140, 170, 505);
+  ctx.strokeStyle = '#f1f4f2'; ctx.lineWidth = 12; ctx.lineJoin = 'round'; ctx.stroke(outline);
+  const text = 'PEAK 2 PEAK';
+  ctx.fillStyle = '#f1f4f2';
+  ctx.textAlign = 'center';
+  ctx.font = '900 153px "Arial Black", Arial, sans-serif';
+  ctx.translate(768, 214);
+  ctx.transform(1194 / ctx.measureText(text).width, 0, -.08, 1, 0, 0);
+  ctx.fillText(text, 0, 0);
   const result = new THREE.Mesh(new THREE.PlaneGeometry(width, height), new THREE.MeshStandardMaterial({
     map: canvasTexture(canvas), transparent: true, alphaTest: .35, roughness: .52,
   }));
-  result.name = 'PEAK 2 PEAK · pointed red and black station badge';
+  result.name = 'PEAK 2 PEAK · station badge';
   return result;
 }
 

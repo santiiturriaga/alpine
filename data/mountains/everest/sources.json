@@ -1,0 +1,124 @@
+{
+  "id": "everest",
+  "name": "Mount Everest",
+  "terrainOnly": true,
+  "origin": [
+    86.92521,
+    27.9880614
+  ],
+  "crs": "EPSG:32645",
+  "bounds": {
+    "minX": -16020,
+    "maxX": 14010,
+    "minZ": -14010,
+    "maxZ": 13020
+  },
+  "terrainStep": 30,
+  "backdropBounds": {
+    "minX": -40000,
+    "maxX": 40000,
+    "minZ": -40000,
+    "maxZ": 40000
+  },
+  "backdropStep": 100,
+  "terrainQuantization": 0.1,
+  "backdropQuantization": 0.125,
+  "coverSources": [
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N27E084_Map.tif",
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N27E087_Map.tif"
+  ],
+  "elevationSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N27_00_E086_00_DEM/Copernicus_DSM_COG_10_N27_00_E086_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N27_00_E087_00_DEM/Copernicus_DSM_COG_10_N27_00_E087_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N28_00_E086_00_DEM/Copernicus_DSM_COG_10_N28_00_E086_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N28_00_E087_00_DEM/Copernicus_DSM_COG_10_N28_00_E087_00_DEM.tif"
+  ],
+  "startLonLat": [
+    86.8487946,
+    27.9996646
+  ],
+  "landmarks": [
+    {
+      "id": "everest",
+      "name": "Mount Everest",
+      "lonLat": [
+        86.92521,
+        27.9880614
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "everest-base-camp",
+      "name": "Everest Base Camp",
+      "lonLat": [
+        86.8487946,
+        27.9996646
+      ],
+      "kind": "viewpoint"
+    },
+    {
+      "id": "south-summit",
+      "name": "Everest South Summit",
+      "lonLat": [
+        86.9253991,
+        27.9849823
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "lhakpa-la",
+      "name": "Lhakpa La",
+      "lonLat": [
+        86.9638908,
+        28.0419301
+      ],
+      "kind": "viewpoint"
+    },
+    {
+      "id": "kala-patthar",
+      "name": "Kala Patthar",
+      "lonLat": [
+        86.8284407,
+        27.9958
+      ],
+      "kind": "viewpoint"
+    },
+    {
+      "id": "nuptse",
+      "name": "Nuptse",
+      "lonLat": [
+        86.886963,
+        27.9673711
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "lhotse",
+      "name": "Lhotse",
+      "lonLat": [
+        86.9325045,
+        27.9619855
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "pumori",
+      "name": "Pumori",
+      "lonLat": [
+        86.8273505,
+        28.0158523
+      ],
+      "kind": "peak"
+    }
+  ],
+  "viewDistance": 38300,
+  "references": [
+    "https://ntb.gov.np/everest-base-camp",
+    "https://www.openstreetmap.org/node/164979149",
+    "https://www.openstreetmap.org/node/5225912921",
+    "https://www.openstreetmap.org/node/564117511",
+    "https://www.openstreetmap.org/node/3696097628",
+    "https://www.openstreetmap.org/node/335376854",
+    "https://www.openstreetmap.org/node/2677892533"
+  ]
+}

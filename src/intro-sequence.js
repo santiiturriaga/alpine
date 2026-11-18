@@ -11,13 +11,14 @@ const itinerary=[
   {view:VALLEY_VIEW,seconds:5.5,truck:135,push:210,light:'day'},
   {view:CREEKSIDE_SLOPE_VIEW,seconds:4.5,truck:2.1,push:3.1,light:'day'},
   {view:DUSTYS_VIEW,seconds:4.5,truck:1.4,push:1.2,light:'day'},
-  {action:true,seconds:4.4,light:'alpenglow'},
+  {action:true,seconds:4.4,light:'golden-hour'},
   {lift:PEAK_TO_PEAK,seconds:4.3,light:'day'},
   {view:INUKSHUK_VIEW,seconds:4.5,truck:.56,push:.55,light:'day'},
   {view:FAIRMONT_VIEW,seconds:5,truck:3.1,push:3,light:'blue-hour'},
-  {view:century,seconds:5,truck:116,push:194,light:'day'},
+  {view:century,seconds:5,truck:116,push:194,light:'golden-hour'},
 ];
-export const INTRO_SECONDS=itinerary.reduce((sum,s)=>sum+s.seconds,0);
+export const INTRO_SHOT_SECONDS=itinerary.map(({seconds})=>seconds);
+export const INTRO_SECONDS=INTRO_SHOT_SECONDS.reduce((sum,seconds)=>sum+seconds,0);
 const forward=new THREE.Vector3(),right=new THREE.Vector3(),up=new THREE.Vector3(0,1,0),focus=new THREE.Vector3();
 export function introShot(camera,seconds,riders,lifts,dt,anchor) {
   let t=((seconds%INTRO_SECONDS)+INTRO_SECONDS)%INTRO_SECONDS;

@@ -198,14 +198,17 @@ export class AudioEngine {
     this.rustle.gain.gain.setTargetAtTime((enclosed ? .004 : .049 * trees * gust) * (paused ? .27 : 1), t, .62);
 
     const vehicle = state.vehicle;
+    const stop = clamp(state.stop ?? 0, 0, 1);
     const hissTarget = vehicle === 'bike' && active ? .009 + s * .034
-      : !active || riding || hiking || vehicle ? 0.004 : grounded ? s * (.057 + (surface === 'ice' ? .049 : 0)) : 0.02;
+      : !active || riding || hiking || vehicle ? .004 : grounded ? s * (.040 + (surface === 'ice' ? .049 : 0)) : .013;
     this.hiss.gain.gain.setTargetAtTime(hissTarget, t, 0.12);
     this.hiss.filter.frequency.setTargetAtTime(1040 + s*1420 + (surface === 'ice' ? 1100 : -400*powder), t, 0.2);
 
-    const carveTarget = (!active || riding || hiking || vehicle || !grounded) ? 0 : (s * s * 0.085 + powder * s * 0.04);
+    const pulses = .83 + .17 * Math.sin(t * (8 + speed*.73)) * Math.sin(t * 6.2 + .82);
+    const carveTarget = !active || riding || hiking || vehicle || !grounded ? 0 :
+      pulses * (s * s * .066 + powder * s * .026 + stop * Math.min(speed / 9, 1) * .073);
     this.carve.gain.gain.setTargetAtTime(carveTarget, t, 0.08);
-    this.carve.filter.frequency.setTargetAtTime(2100 + s * 1300, t, 0.16);
+    this.carve.filter.frequency.setTargetAtTime(1490 + s * 1380 + stop * 720 - powder * 380, t, .16);
 
     const onIce = active && grounded && !riding && !hiking && !vehicle && surface === 'ice' && speed > 2.6;
     const edge = Math.abs(state.steer ?? 0);
@@ -229,9 +232,11 @@ export class AudioEngine {
     const footfall = Math.floor(stridePhase / Math.PI);
     if (active && !riding && !vehicle && grounded && stride > .35 && footfall !== this.lastFootfall) {
       const floor = hiking && (surface === 'ground' || enclosed);
-      if (hiking) this.noiseHit({ dur: .062, freq: floor ? 194 : 324, gain: floor ? .055 : .035, q: .8 });
-      this.noiseHit({ dur: hiking ? .12 : .16, freq: floor ? 1080 : surface === 'ice' ? 1760 : 770,
-        gain: hiking ? .034 : .023, q: .8, when: hiking ? .012 : 0 });
+      const variation = .87 + .25 * Math.random();
+      if (hiking) this.noiseHit({ dur: .062, freq: (floor ? 194 : 324)*variation, gain: floor ? .048 : .037, q: .8 });
+      this.noiseHit({ dur: hiking ? .13 : .155, freq: (floor ? 950 : surface === 'ice' ? 1760 : 1280 - powder*510)*variation,
+        gain: hiking ? .041 : .023, q: .94, when: hiking ? .012 : 0, slide: floor ? 430 : 520 });
+      if (!floor && hiking) this.noiseHit({ dur:.064, freq: 2760*variation, slide:1380, when:.034, gain:.013, q:1.34 });
     }
     this.lastFootfall = footfall;
     if (active && !enclosed && altitude < 1900 && trees > .4 && s < .35 && t >= this.nextBird) {
@@ -308,6 +313,11 @@ export class AudioEngine {
 
   launch() {
     this.noiseHit({ dur: 0.32, freq: 500, slide: 1800, q: 1.1, gain: 0.05 });
+  }
+
+  poleTap(tree) {
+    this.noiseHit({ dur: .08, freq: tree ? 690 : 1980, slide: tree ? 300 : 910, q: 1.35, gain: .047 });
+    this.tone(tree ? 150 : 560, { dur: .08, slide: tree ? 103 : 305, gain: .016, attack: .001 });
   }
 
   land(impact = 5, points = 0) {

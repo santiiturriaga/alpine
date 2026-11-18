@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { checkSkierName, onProfileChange, skierName, skiUnits } from './skier-profile.js';
 import { createSkier } from './skier.js';
+import { readWinchPacket } from './patrol-winch-link.js';
 
 // A shared WSS broker works from a static Pages origin. Rooms outlive the
 // first skier. Only transient game poses and session scores leave the client.
@@ -19,6 +20,10 @@ const movingInterval = 135;
 const playbackDelay = 270;
 const predictionLimit = 92;
 const historyLimit = 12;
+const idleTimeout = 5 * 60 * 1000;
+const peerPacketLimit = 26;
+const newPeersPerSecond = 18;
+const roomPacketLimit = 620;
 const nameRefreshInterval = 3800;
 const labelHeight = 56;
 const lerp = THREE.MathUtils.lerp;
@@ -119,14 +124,18 @@ export function createMultiplayer(scene, resort, getPlayer) {
   const channel = 'alpine-descent/santiiturriaga/v1/' + (location.hostname.endsWith('github.io') ? 'live' : 'preview') + '/' + resort;
   const topic = channel + '/' + id;
   const radioPrefix=channel+'/patrol/';
+  const winchPrefix=channel+'/winch/';
   const namePrefix = channel + '/name/';
   let patrol='idle', assist='', radioAt=-Infinity, lastRadio='';
+  let winch='', winchAt=-Infinity, lastWinch='';
   const peers = new Map(), pool = [];
   const online = document.getElementById('lobby-status'), table = document.getElementById('lobby-scores');
   const toggle = document.getElementById('lobby-toggle');
   let client, loading = false, connected = false, enabled = true, generation = 0;
   let sentAt = -Infinity, lastTable = 0, sequence = 0, recentPose, fastest = 0;
   let nameAt = -Infinity, sentName;
+  let idle = false, lastInput;
+  let packetSecond = -1, packets = 0, joins = 0;
   try { enabled = localStorage.getItem('alpine.multiplayer') !== 'off'; } catch {}
   const local = getPlayer();
   const target = new THREE.Vector3(), nextTarget = new THREE.Vector3();
@@ -163,10 +172,21 @@ export function createMultiplayer(scene, resort, getPlayer) {
     }
     rows.replaceChildren(fragment);
     online.textContent = connected ? (1 + peers.size) + (peers.size ? ' skiers online' : ' skier online') :
-      !enabled ? 'Solo' : client || loading ? 'Connecting to the mountain…' : 'Join when you drop in';
+      !enabled ? 'Solo' : idle ? 'Idle · move to rejoin' : client || loading ? 'Connecting to the mountain…' : 'Join when you drop in';
     toggle.textContent = enabled ? 'Ski solo' : 'Join multiplayer';
   }
   function onMessage(path, bytes) {
+    if (!path.startsWith(channel + '/') || path.length > channel.length + 28 || bytes.length > 560) return;
+    const time = now(), second = Math.floor(time / 1000);
+    if (second !== packetSecond) { packetSecond = second; packets = joins = 0; }
+    if (++packets > roomPacketLimit) return;
+    const sender = path.slice(path.lastIndexOf('/') + 1);
+    if (sender === id || !/^[a-f0-9]{16}$/.test(sender)) return;
+    const known = peers.get(sender);
+    if (known) {
+      if (known.packetSecond !== second) { known.packetSecond = second; known.packets = 0; }
+      if (++known.packets > peerPacketLimit) return;
+    }
     if (path.startsWith(namePrefix)) {
       const member = peers.get(path.slice(namePrefix.length));
       if (!member || bytes.length > 100) return;
@@ -181,16 +201,22 @@ export function createMultiplayer(scene, resort, getPlayer) {
       member.patrol=stage;member.assist=helper||'';
       return;
     }
-    if (!path.startsWith(channel + '/')) return;
+    if (path === winchPrefix + sender) {
+      if (!known || bytes.length > 200) return;
+      if (!bytes.length) { known.winch = null; return; }
+      const packet = readWinchPacket(bytes);
+      if (packet) { known.winch = packet; known.winchAt = time; }
+      return;
+    }
     const key = path.slice(channel.length + 1);
     if (key === id || !/^[a-f0-9]{16}$/.test(key) || bytes.length > 560) return;
     if (!bytes.length) { remove(key); return; }
+    if (!known && (peers.size >= 74 || ++joins > newPeersPerSecond)) return;
     let pose;
     try { pose = JSON.parse(bytes.toString()); } catch { return; }
     if (!validPose(pose)) return;
     const prev = peers.get(key);
     if (prev && prev.pose[16] >= pose[16]) return;
-    if (!prev && peers.size >= 256) return;
     if (!prev) sentAt = nameAt = -Infinity;
     const remote = prev ?? {};
     recordSnapshot(remote, pose, now());
@@ -209,9 +235,9 @@ export function createMultiplayer(scene, resort, getPlayer) {
       });
       const c = client;
       c.on('connect', () => {
-        c.subscribe([channel + '/+',radioPrefix+'+',namePrefix+'+'], {qos:0}, err => {
+        c.subscribe([channel + '/+',radioPrefix+'+',namePrefix+'+',winchPrefix+'+'], {qos:0}, err => {
           if (c !== client) return;
-          connected = !err; sentAt = nameAt = -Infinity; lastRadio = ''; updateTable();
+          connected = !err; sentAt = nameAt = winchAt = -Infinity; lastRadio = lastWinch = ''; updateTable();
         });
       });
       c.on('message', (path, bytes) => { if (client === c) onMessage(path, bytes); });
@@ -238,6 +264,17 @@ export function createMultiplayer(scene, resort, getPlayer) {
     updateTable();
   };
   window.addEventListener('pagehide', disconnect);
+  function returnFromIdle(event) {
+    if (!event.isTrusted) return;
+    lastInput = now();
+    if (!idle) return;
+    idle = false;
+    updateTable();
+  }
+  for (const type of ['pointerdown','keydown','wheel']) window.addEventListener(type, returnFromIdle, { passive: true });
+  document.addEventListener('mousemove', event => {
+    if (document.pointerLockElement && (event.movementX || event.movementY)) returnFromIdle(event);
+  }, { passive: true });
   document.getElementById('lobby-invite').onclick = async () => {
     const url = new URL('./',location.href);
     if (resort !== 'whistler-blackcomb') url.searchParams.set('mountain',resort);
@@ -254,10 +291,22 @@ export function createMultiplayer(scene, resort, getPlayer) {
   function update(dt, trickScore, outfit, vehicle, interactive=true) {
     const time = now(), p = local;
     if (!enabled) return;
+    lastInput ??= time;
+    if (time - lastInput >= idleTimeout) {
+      if (!idle) {
+        idle = true;
+        disconnect();
+      }
+      return;
+    }
     if (!client && !loading) connect().catch(() => { enabled=false; updateTable(); });
     const radio=patrol+'/'+assist;
     if(connected && (radio!==lastRadio || radio!=='idle/' && time-radioAt>1900)){
       client.publish(radioPrefix+id,radio);lastRadio=radio;radioAt=time;
+    }
+    if (connected && time - winchAt >= 135 && (winch !== lastWinch || (winch && time - winchAt > 900))) {
+      client.publish(winchPrefix + id, winch, {qos:0,retain:false});
+      lastWinch = winch; winchAt = time;
     }
     const speed = interactive ? p.speed : 0;
     const moving = speed >= .3;
@@ -353,5 +402,6 @@ export function createMultiplayer(scene, resort, getPlayer) {
   onProfileChange((event) => { if (event.type === 'preferences') updateTable(); });
   updateTable();
   return {update, peers, get connected(){return connected;}, id, callsign,
-    patrolRadio(stage, helping=''){patrol=stage;assist=helping;}};
+    patrolRadio(stage, helping=''){patrol=stage;assist=helping;},
+    winchRadio(packet){winch=packet ? JSON.stringify(packet) : '';}};
 }

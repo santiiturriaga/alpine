@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RUNS, WORLD, runPointAt } from './worlddata.js';
 import { heightAt, normalAt } from './terrain.js';
-import { clamp, damp, wrapAngle } from './util.js';
+import { clamp, damp, smoothstep, wrapAngle } from './util.js';
 import { createServiceAsset } from './service-assets.js';
 import { createPatrolPad } from './patrol-flight-assets.js';
 import { WingTrails } from './effects.js';
@@ -57,9 +57,12 @@ export class Expeditions {
     const pad = this.fleet.find(v=>v.pad)?.pad;
     if (pad && env?.walkSurfaceAt) {
       const walkSurfaceAt = env.walkSurfaceAt.bind(env);
-      env.walkSurfaceAt = (x,z,y) => {
+      env.raisedPadAt = (x,z,y) => {
         const deck=pad.walkAt(x,z);
-        return deck !== null && deck<=y+.65 ? deck : walkSurfaceAt(x,z,y);
+        return deck !== null && deck<=y+.65 ? deck : null;
+      };
+      env.walkSurfaceAt = (x,z,y) => {
+        return env.raisedPadAt(x,z,y) ?? walkSurfaceAt(x,z,y);
       };
     }
   }
@@ -112,7 +115,7 @@ export class Expeditions {
   addVehicle(scene, spec, pose, legacyPose) {
     const model = new THREE.Group();
     model.name = spec.label;
-    const pad = spec.id==='helicopter' ? createPatrolPad(scene,pose,this.ground.heightAt) : null;
+    const pad = spec.id==='helicopter' ? createPatrolPad(scene,pose,this.ground.heightAt,this.grid) : null;
     const homeY=pad?.y ?? this.ground.heightAt(pose.x,pose.z);
     model.position.set(pose.x,homeY,pose.z);
     scene.add(model);
@@ -261,6 +264,7 @@ export class Expeditions {
     v.asset.animate?.(0,0,0,0,false);
     v.asset.setOccupied?.(false);
     v.rescueFocus=null;
+    v.rescueSite=null;
     this.park(v);
     this.wings?.clear();
     this.fx?.breakVehicleTrack();
@@ -296,6 +300,7 @@ export class Expeditions {
     const v = this.active, p = v.model.position;
     if (v.rescueFocus) {
       v.speed=player.speed=0;
+      v.verticalSpeed=0;
       v.bank=damp(v.bank,0,5,dt);
       this.pose(v,true);
       v.asset.animate?.(dt);
@@ -307,6 +312,7 @@ export class Expeditions {
     const tuck = !!(keys.ShiftLeft||keys.ShiftRight);
     const spread = !!keys.Space;
     const heli = v.id === 'helicopter', glide = v.id === 'wingsuit', bike = v.id === 'bike';
+    const oldY = p.y;
     const up = Number(spread) - Number(tuck);
     const ground = this.ground;
     const pGround = this.floorAt(v,p.x,p.z);
@@ -326,7 +332,9 @@ export class Expeditions {
       if (spread && !v.jumpHeld && v.clearance < .1 && v.speed > 1.8) v.verticalSpeed = 3.75;
       v.jumpHeld = spread;
     } else {
-      const desired = throttle > 0 ? v.top : throttle < 0 ? -v.top*.22 : 0;
+      const limit = v.rescueSite ? 3+(v.top-3)*smoothstep(8,36,distanceTo(p,v.rescueSite)) : v.top;
+      const reverse = v.rescueSite ? Math.max(1.8,limit*.22) : limit*.22;
+      const desired = throttle > 0 ? limit : throttle < 0 ? -reverse : 0;
       v.speed = damp(v.speed,desired,heli ? .7 : 1.35,dt);
       const turn = heli ? 1.1 : 1.27 * clamp(Math.abs(v.speed)/3,0,1) * (v.speed < 0 ? -1 : 1);
       v.yaw -= steering * dt * turn;
@@ -351,6 +359,7 @@ export class Expeditions {
       if (glide) { this.leave(player,true); return; }
       if (bike) { v.verticalSpeed = 0; p.y = pGround; }
     }
+    if (heli) v.verticalSpeed = (p.y-oldY)/dt;
     v.clearance = p.y-this.floorAt(v,p.x,p.z);
     if (glide && v.clearance < .4) { this.leave(player,true); return; }
     this.pose(v,(heli||glide||bike) && v.clearance>.6);

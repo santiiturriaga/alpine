@@ -1,6 +1,10 @@
 import { activeResort,bindResortTravel } from './resorts.js';
+import { skierName } from './skier-profile.js';
+
+document.getElementById('load-skier').textContent = skierName() || 'Guest Skier';
 
 const mountain=activeResort();
+if(mountain.terrainOnly)document.getElementById('load-tip').textContent='Start at the mountain approach. Open the map for nearby summits and viewpoints.';
 bindResortTravel(mountain);
 if(mountain.data){
   try {

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  clamp, makeCanvas, canvasTexture, makeRadialTexture, mulberry32,
+  makeCanvas, canvasTexture, makeRadialTexture, mulberry32,
 } from './util.js';
 import {
   RUNS, CRYSTALS, FINISHES, runPointAt, runFromSource,
@@ -21,14 +21,30 @@ const CRYSTAL_COLORS = {
   3: 0x7dffb0,
   4: 0xffd9a1,
 };
+const COIN_CELL_SIZE = 96;
+// At this distance a coin is about a pixel tall in the chase view at 1080p.
+const COIN_RENDER_RADIUS = 420;
+const COIN_RENDER_RADIUS_SQ = COIN_RENDER_RADIUS ** 2;
+const AIR_COIN_REACH = 2.5;
 
 const _mat = new THREE.Matrix4();
 const _pos = new THREE.Vector3();
 const _quat = new THREE.Quaternion();
 const _scale = new THREE.Vector3(1, 1, 1);
-const _zero = new THREE.Vector3(0, 0, 0);
 const _axisY = new THREE.Vector3(0, 1, 0);
-const _axisX = new THREE.Vector3(1, 0, 0);
+const _cameraPos = new THREE.Vector3();
+const _viewProjection = new THREE.Matrix4();
+const _frustum = new THREE.Frustum();
+const _bounds = new THREE.Sphere();
+const _glintMatrix = new THREE.Matrix4().makeRotationX(-Math.PI / 2)
+  .scale(new THREE.Vector3(1.25, 1.25, 1));
+
+function uploadCoinMatrices(attribute, count) {
+  if (!count) return;
+  attribute.clearUpdateRanges();
+  attribute.addUpdateRange(0, count * attribute.itemSize);
+  attribute.needsUpdate = true;
+}
 
 export class Collectibles {
   constructor(scene, fx, pack=null) {
@@ -42,6 +58,8 @@ export class Collectibles {
     this.heightAt=pack?.heightAt??heightAt;
     this.rand = mulberry32(442291);
     this.coins = [];
+    this.coinCells = new Map();
+    this.coinTime = 0;
     this.crystals = [];
     this.coinCount = 0;
     this.crystalCount = 0;
@@ -104,6 +122,29 @@ export class Collectibles {
         hidden: true, collected: false, phase: rand() * Math.PI * 2, value: 15 });
     }
     this.totalCoins = this.coins.length;
+    for (let i = 0; i < this.coins.length; i++) {
+      const coin = this.coins[i];
+      const x = Math.floor(coin.x / COIN_CELL_SIZE);
+      const z = Math.floor(coin.z / COIN_CELL_SIZE);
+      if (!this.coinCells.has(x)) this.coinCells.set(x, new Map());
+      const column = this.coinCells.get(x);
+      if (!column.has(z)) column.set(z, []);
+      column.get(z).push(i);
+    }
+  }
+
+  *coinCellsInRange(x, z, radius) {
+    const minZ = Math.floor((z - radius) / COIN_CELL_SIZE);
+    const maxZ = Math.floor((z + radius) / COIN_CELL_SIZE);
+    const maxX = Math.floor((x + radius) / COIN_CELL_SIZE);
+    for (let cx = Math.floor((x - radius) / COIN_CELL_SIZE); cx <= maxX; cx++) {
+      const column = this.coinCells.get(cx);
+      if (!column) continue;
+      for (let cz = minZ; cz <= maxZ; cz++) {
+        const cell = column.get(cz);
+        if (cell) yield cell;
+      }
+    }
   }
 
   buildCrystals() {
@@ -142,7 +183,10 @@ export class Collectibles {
     });
 
     this.coinMesh = new THREE.InstancedMesh(coinGeo, faceMat, this.coins.length);
-    this.rimMesh = new THREE.InstancedMesh(rimGeo, rimMat, this.coins.length);
+    this.rimMesh = new THREE.InstancedMesh(rimGeo, rimMat, 0);
+    this.coinMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.rimMesh.instanceMatrix = this.coinMesh.instanceMatrix;
+    this.coinMesh.count = 0;
     this.coinMesh.name = 'coins';
     this.rimMesh.name = 'coin-rims';
     this.coinMesh.frustumCulled = false;
@@ -150,8 +194,8 @@ export class Collectibles {
     this.coinMesh.castShadow = false;
     this.scene.add(this.coinMesh, this.rimMesh);
 
-    // tiny ground glints under each coin
-    const glintCount = Math.min(this.coins.length, 900);
+    // tiny ground glints under the first 900 placed coins
+    this.glintLimit = Math.min(this.coins.length, 900);
     const glintGeo = new THREE.PlaneGeometry(1, 1);
     const glintTex = makeRadialTexture(32, [
       [0, 'rgba(255,219,132,.65)'],
@@ -162,12 +206,13 @@ export class Collectibles {
       map: glintTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
       color: 0xffd073,
     });
-    this.glints = new THREE.InstancedMesh(glintGeo, glintMat, glintCount);
+    this.glints = new THREE.InstancedMesh(glintGeo, glintMat, this.glintLimit);
+    this.glints.name = 'coin-glints';
+    this.glints.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.glints.count = 0;
     this.glints.frustumCulled = false;
     this.glints.renderOrder = 1;
     this.scene.add(this.glints);
-
-    for (let i = 0; i < this.coins.length; i++) this.updateCoinMatrix(i, 0, true);
 
     const beamCanvas = makeCanvas(64, 256);
     const bctx = beamCanvas.ctx;
@@ -240,59 +285,69 @@ export class Collectibles {
     }
   }
 
-  updateCoinMatrix(i, time, staticOnly = false) {
-    const c = this.coins[i];
-    if (c.collected) {
-      _mat.compose(_pos.set(c.x, c.y, c.z), _quat.identity(), _scale.set(0, 0, 0));
-      this.coinMesh.setMatrixAt(i, _mat);
-      this.rimMesh.setMatrixAt(i, _mat);
-      if (i < this.glints.count) this.glints.setMatrixAt(i, _mat);
-      return;
+  prepareRender(camera) {
+    camera.getWorldPosition(_cameraPos);
+    _viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    _frustum.setFromProjectionMatrix(_viewProjection, camera.coordinateSystem);
+    const { x, z } = _cameraPos;
+    const time = this.coinTime;
+    let coinCount = 0;
+    let glintCount = 0;
+    // Keep the full coin silhouette within the frustum test, including its bob.
+    for (const cell of this.coinCellsInRange(x, z, COIN_RENDER_RADIUS)) {
+      for (const i of cell) {
+        const coin = this.coins[i];
+        if (coin.collected) continue;
+        _bounds.center.set(coin.x, coin.y, coin.z);
+        _bounds.radius = 0.5;
+        if (_cameraPos.distanceToSquared(_bounds.center) <= COIN_RENDER_RADIUS_SQ && _frustum.intersectsSphere(_bounds)) {
+          const bob = Math.sin(time * 2.1 + coin.phase) * 0.12;
+          _pos.set(coin.x, coin.y + bob, coin.z);
+          _quat.setFromAxisAngle(_axisY, time * 2.4 + coin.phase);
+          this.coinMesh.setMatrixAt(coinCount++, _mat.compose(_pos, _quat, _scale));
+        }
+        if (i < this.glintLimit) {
+          _bounds.center.y = coin.groundY + 0.08;
+          _bounds.radius = 0.89;
+          if (_cameraPos.distanceToSquared(_bounds.center) <= COIN_RENDER_RADIUS_SQ && _frustum.intersectsSphere(_bounds)) {
+            this.glints.setMatrixAt(glintCount++, _glintMatrix.setPosition(_bounds.center));
+          }
+        }
+      }
     }
-    const bob = Math.sin(time * 2.1 + c.phase) * 0.12;
-    _pos.set(c.x, c.y + bob, c.z);
-    _quat.setFromAxisAngle(_axisY, time * 2.4 + c.phase);
-    _scale.set(1, 1, 1);
-    _mat.compose(_pos, _quat, _scale);
-    this.coinMesh.setMatrixAt(i, _mat);
-    this.rimMesh.setMatrixAt(i, _mat);
-    if (i < this.glints.count) {
-      const gy = c.groundY ?? this.heightAt(c.x, c.z);
-      _quat.setFromAxisAngle(_axisX, -Math.PI / 2);
-      _pos.set(c.x, gy + 0.08, c.z);
-      _scale.set(1.25, 1.25, 1);
-      _mat.compose(_pos, _quat, _scale);
-      this.glints.setMatrixAt(i, _mat);
-      _scale.set(1, 1, 1);
-    }
+    this.coinMesh.count = this.rimMesh.count = coinCount;
+    this.glints.count = glintCount;
+    uploadCoinMatrices(this.coinMesh.instanceMatrix, coinCount);
+    uploadCoinMatrices(this.glints.instanceMatrix, glintCount);
   }
 
-  update(dt, time, player, camera) {
-    // coin visuals + pickups
-    const replaced = [];
-    for (let i = 0; i < this.coins.length; i++) {
+  update(dt, time, player) {
+    this.coinTime = time;
+    const pickups = [];
+    const { x, y, z } = player.pos;
+    for (const cell of this.coinCellsInRange(x, z, AIR_COIN_REACH)) {
+      for (const i of cell) {
+        const coin = this.coins[i];
+        if (coin.collected) continue;
+        const dx = x - coin.x;
+        const dz = z - coin.z;
+        const dy = y + 0.9 - coin.y;
+        const reach = coin.air ? AIR_COIN_REACH : 2.15;
+        if (dx * dx + dz * dz < reach * reach && Math.abs(dy) < (coin.air ? 3.0 : 2.2)) pickups.push(i);
+      }
+    }
+    // Preserve placement order when pickups overlap across cell boundaries.
+    if (pickups.length > 1) pickups.sort((a, b) => a - b);
+    for (const i of pickups) {
       const c = this.coins[i];
       if (c.collected) continue;
-      this.updateCoinMatrix(i, time);
-      const dx = player.pos.x - c.x;
-      const dz = player.pos.z - c.z;
-      const dy = player.pos.y + 0.9 - c.y;
-      const reach = c.air ? 2.5 : 2.15;
-      if (dx * dx + dz * dz < reach * reach && Math.abs(dy) < (c.air ? 3.0 : 2.2)) {
-        c.collected = true;
-        this.coinCount++;
-        this.lastCoin = c;
-        const point = { x: c.x, y: c.y, z: c.z };
-        this.fx?.burst(point, c.air ? 'gold' : 'gold', 18);
-        this.fx?.spark.spawn(c.x, c.y, c.z, 0, 4.5, 0, 1.6, 0.8, GOLD);
-        this.updateCoinMatrix(i, time);
-        this.onCoin?.(c);
-      }
-      if (Math.random() < 0.0008) replaced.push(i);
+      c.collected = true;
+      this.coinCount++;
+      this.lastCoin = c;
+      this.fx?.burst({ x: c.x, y: c.y, z: c.z }, 'gold', 18);
+      this.fx?.spark.spawn(c.x, c.y, c.z, 0, 4.5, 0, 1.6, 0.8, GOLD);
+      this.onCoin?.(c);
     }
-    this.coinMesh.instanceMatrix.needsUpdate = true;
-    this.rimMesh.instanceMatrix.needsUpdate = true;
-    this.glints.instanceMatrix.needsUpdate = true;
 
     // crystals
     for (const c of this.crystals) {
@@ -330,13 +385,8 @@ export class Collectibles {
   }
 
   reset() {
-    for (let i = 0; i < this.coins.length; i++) {
-      this.coins[i].collected = false;
-      this.updateCoinMatrix(i, 0);
-    }
-    this.coinMesh.instanceMatrix.needsUpdate = true;
-    this.rimMesh.instanceMatrix.needsUpdate = true;
-    this.glints.instanceMatrix.needsUpdate = true;
+    for (const coin of this.coins) coin.collected = false;
+    this.coinTime = 0;
     for (const c of this.crystals) {
       c.collected = false;
       if (c.group) c.group.visible = true;

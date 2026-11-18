@@ -13,7 +13,7 @@ const cable = new THREE.MeshStandardMaterial({ color:0xe4a653, roughness:.74 });
 const beaconMaterial = new THREE.MeshBasicMaterial({ color:0xffbe58 });
 const vertical = new THREE.Vector3(0, 1, 0), ropeAxis = new THREE.Vector3();
 
-export function createPatrolPad(scene, pose, heightAt) {
+export function createPatrolPad(scene, pose, heightAt, grid) {
   const {x,z,heading} = pose;
   const deckY = Math.max(...Array.from({length: 8}, (_, i) => {
     const a = i * sector + heading + sector / 2;
@@ -22,6 +22,15 @@ export function createPatrolPad(scene, pose, heightAt) {
   const rampLength=5.0, rampWidth=2.9, rampEnd=deckEdge+rampLength;
   const rampY=heightAt(x-Math.sin(heading)*rampEnd,z-Math.cos(heading)*rampEnd)+.025;
   const rampPitch=Math.atan2(deckY-rampY,rampLength);
+  const c=Math.cos(heading),s=Math.sin(heading);
+  const deckPoint=(across,along)=>({x:x+c*across+s*along,z:z-s*across+c*along,y:deckY});
+  const halfSide = DECK_RADIUS * Math.sin(Math.PI / 8);
+  function sideWall(across, along, yaw, hw, hd, top) {
+    const p = deckPoint(across,along);
+    grid?.addBox(p.x,p.z,hw,hd,-heading-yaw,'patrol-pad',{
+      minY:Math.min(heightAt(p.x,p.z),top)-.48,maxY:top+.028,
+    });
+  }
   const group = new THREE.Group();
   group.name = 'Upper Whiskey Jack · Alpine Patrol helipad';
   group.position.set(x,deckY,z);
@@ -49,6 +58,12 @@ export function createPatrolPad(scene, pose, heightAt) {
     const sx=lx*5.22,sz=lz*5.22;
     const wx=x+sx*Math.cos(heading)+sz*Math.sin(heading), wz=z+sz*Math.cos(heading)-sx*Math.sin(heading);
     const depth=Math.max(.4,deckY-heightAt(wx,wz)+.28);
+    // The ramp opens the downhill edge of the raised platform.
+    if (i === 4) {
+      const width = halfSide - rampWidth / 2;
+      for (const direction of [-1,1]) sideWall(direction * (rampWidth / 2 + width / 2), -deckEdge, a, width/2,.16,deckY);
+    } else sideWall(lx * deckEdge, lz * deckEdge, a, halfSide+.06, .16, deckY);
+    grid?.addBox(wx,wz,.28,.28,-heading,'patrol-pad',{minY:deckY-depth-.15,maxY:deckY-.10});
     pieces.push(box(.54,depth,.54,steel,[sx,-depth/2-.08,sz]));
     pieces.push(box(.92,.34,.92,'#74797a',[sx,-depth+.08,sz]));
   }
@@ -61,6 +76,10 @@ export function createPatrolPad(scene, pose, heightAt) {
     const f=(i+.5)/11;
     pieces.push(box(rampWidth-.16,.013,.027,'#3c484d',[0,(rampY-deckY)*f,-deckEdge-rampLength*f],[-rampPitch,0,0]));
   }
+  for (const side of [-1,1]) for (let i=0;i<5;i++) {
+    const along = -deckEdge - (i + .5);
+    sideWall(side * rampWidth / 2, along, 0, .105, .52, deckY + (rampY-deckY) * ((i+.5)/rampLength));
+  }
   group.add(mergedMesh(pieces,{roughness:.85,metalness:.14}));
 
   const sign = new THREE.Mesh(new THREE.PlaneGeometry(3.08,.59),new THREE.MeshStandardMaterial({
@@ -71,8 +90,6 @@ export function createPatrolPad(scene, pose, heightAt) {
   sign.rotation.y = Math.PI;
   group.add(sign);
 
-  const c=Math.cos(heading),s=Math.sin(heading);
-  const deckPoint=(across,along)=>({x:x+c*across+s*along,z:z-s*across+c*along,y:deckY});
   return {
     group, y:deckY, boarding:{...deckPoint(3.67,.31),heading:heading-Math.PI/2},
     turns:[deckPoint(0,-deckEdge),deckPoint(3.58,-4.24)],
@@ -156,8 +173,11 @@ export function createPatrolSignal(parent, site) {
   g.name = 'Alpine Patrol · ' + site.name;
   g.position.set(site.x,site.markerY,site.z);
   const diamond = new THREE.Mesh(new THREE.OctahedronGeometry(.59),beaconMaterial);
-  const ring=new THREE.Mesh(new THREE.TorusGeometry(1.08,.034,8,34),beaconMaterial);
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(site.radius,.040,8,64),beaconMaterial);
   ring.rotation.x=-Math.PI/2;
+  const reticle=new THREE.Mesh(new THREE.RingGeometry(.22,.27,24),new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide}));
+  reticle.rotation.x=-Math.PI/2;
+  g.add(reticle);
   g.add(diamond,ring);
   parent.add(g);
   return {group:g,diamond,ring};

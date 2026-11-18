@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { bindSnowTraffic, compressSnow, snowTrafficGLSL } from './snow-traffic.js';
 import { stevensHeightDetails } from './stevens-pass-terrain.js';
 import { climateUniforms } from './climate-state.js';
+import { bindSnowCrystals } from './snow-crystals.js';
+import { nightRunsFor } from './slope-fixtures.js';
 import { clamp, lerp, smoothstep } from './util.js';
 
 const TILE = 48;
@@ -16,8 +18,11 @@ export async function loadResortRaster(baseURL, descriptor, wordSize) {
   if (buffer.byteLength !== cols * rows * wordSize) throw new Error(`Invalid dimensions for ${file}`);
   if (wordSize === 1) return new Uint8Array(buffer);
   const input = new DataView(buffer);
-  return Float32Array.from({ length: cols * rows }, (_, i) =>
-    descriptor.offset + input.getUint16(i * 2, true) * descriptor.scale);
+  const elevation = new Float32Array(cols * rows);
+  for (let i = 0; i < elevation.length; i++) {
+    elevation[i] = descriptor.offset + input.getUint16(i * 2, true) * descriptor.scale;
+  }
+  return elevation;
 }
 
 export function rasterGrid(values, { cols, rows }, bounds) {
@@ -32,7 +37,7 @@ export function rasterGrid(values, { cols, rows }, bounds) {
       const c = Math.max(0, j - 1), d = Math.min(rows - 1, j + 1);
       const x = (values[j * cols + a] - values[j * cols + b]) / ((b - a) * dx);
       const z = (values[c * cols + i] - values[d * cols + i]) / ((d - c) * dz);
-      const len = Math.hypot(x, 1, z);
+      const len = Math.sqrt(x * x + 1 + z * z);
       const index = (j * cols + i) * 3;
       normals[index] = x / len;
       normals[index + 1] = 1 / len;
@@ -109,8 +114,10 @@ export function runStyle(run) {
 }
 
 function makeSurfaceField(bounds, grid, forestAt, runs, runAreas, roads, parking, summerRoutes) {
-  const width = Math.ceil((bounds.maxX - bounds.minX) / 4);
-  const height = Math.ceil((bounds.maxZ - bounds.minZ) / 4);
+  const spanX = bounds.maxX - bounds.minX, spanZ = bounds.maxZ - bounds.minZ;
+  const spacing = Math.max(4, Math.max(spanX, spanZ) / 3072);
+  const width = Math.ceil(spanX / spacing);
+  const height = Math.ceil(spanZ / spacing);
   const sx = (bounds.maxX - bounds.minX) / width, sz = (bounds.maxZ - bounds.minZ) / height;
   const raw = new Uint8Array(width * height * 4);
   function paint(minX, maxX, minZ, maxZ, callback) {
@@ -121,6 +128,27 @@ function makeSurfaceField(bounds, grid, forestAt, runs, runAreas, roads, parking
     for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
       const x = bounds.minX + (i + .5) * sx, z = bounds.minZ + (j + .5) * sz;
       callback(x, z, (j * width + i) * 4);
+    }
+  }
+  // Scan polygon edges once per raster row and fill each covered pixel span.
+  function paintPolygon(points, callback) {
+    const zs = points.map(([, z]) => z);
+    const firstRow = clamp(Math.ceil((Math.min(...zs) - bounds.minZ) / sz - .5), 0, height);
+    const endRow = clamp(Math.ceil((Math.max(...zs) - bounds.minZ) / sz - .5), 0, height);
+    const crossings = [];
+    for (let row = firstRow; row < endRow; row++) {
+      const z = bounds.minZ + (row + .5) * sz;
+      crossings.length = 0;
+      for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+        const [ax, az] = points[i], [bx, bz] = points[j];
+        if ((az > z) !== (bz > z)) crossings.push(ax + (bx - ax) * (z - az) / (bz - az));
+      }
+      crossings.sort((a, b) => a - b);
+      for (let i = 1; i < crossings.length; i += 2) {
+        const from = clamp(Math.ceil((crossings[i - 1] - bounds.minX) / sx - .5), 0, width);
+        const to = clamp(Math.ceil((crossings[i] - bounds.minX) / sx - .5), 0, width);
+        for (let col = from; col < to; col++) callback((row * width + col) * 4);
+      }
     }
   }
 
@@ -170,20 +198,15 @@ function makeSurfaceField(bounds, grid, forestAt, runs, runAreas, roads, parking
     }
   }
   for (const area of runAreas) {
-    const { points } = area;
-    const x = points.map(p => p[0]), z = points.map(p => p[1]);
     const groomed = runStyle(area).groomed;
-    paint(Math.min(...x), Math.max(...x), Math.min(...z), Math.max(...z), (x, z, index) => {
-      if (!pointInPolygon(x, z, points)) return;
+    paintPolygon(area.points, (index) => {
       raw[index] = Math.max(raw[index], groomed ? 232 : 67);
       raw[index + 1] *= .55;
       raw[index + 3] = 0;
     });
   }
   for (const { points } of parking) {
-    const x = points.map(p => p[0]), z = points.map(p => p[1]);
-    paint(Math.min(...x), Math.max(...x), Math.min(...z), Math.max(...z), (x, z, index) => {
-      if (!pointInPolygon(x, z, points)) return;
+    paintPolygon(points, (index) => {
       raw[index] = 182;
       raw[index + 1] = 123;
       raw[index + 3] = 0;
@@ -247,10 +270,10 @@ const materialSource = /* glsl */ `
   }
 `;
 
-function snowMaterial(bounds, field, regional = false) {
+function snowMaterial(bounds, field, regional = false, nightLight = null) {
   const material = new THREE.MeshStandardMaterial({ roughness: .91, metalness: 0 });
   const summerTrails = !regional && !!field.summerTexture;
-  material.customProgramCacheKey = () => `mapped-resort-snow-${regional}-${summerTrails}`;
+  material.customProgramCacheKey = () => `mapped-resort-snow-${regional}-${summerTrails}-${!!nightLight}`;
   material.onBeforeCompile = (shader) => {
     shader.uniforms.resortField = { value: field.texture };
     if (summerTrails) shader.uniforms.summerField = { value: field.summerTexture };
@@ -258,6 +281,11 @@ function snowMaterial(bounds, field, regional = false) {
     shader.uniforms.realism = climateUniforms.realism;
     if (!regional) bindSnowTraffic(shader);
     shader.uniforms.snowline = climateUniforms.snowline;
+    if (nightLight) {
+      shader.uniforms.pisteFloodlight = nightLight.texture;
+      shader.uniforms.pisteFloodlightLimits = nightLight.limits;
+      shader.uniforms.pisteFloodlightStrength = nightLight.strength;
+    }
     shader.uniforms.resortLimits = { value: new THREE.Vector4(bounds.minX, bounds.minZ,
       bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) };
     shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 resortPoint;')
@@ -270,6 +298,7 @@ function snowMaterial(bounds, field, regional = false) {
       uniform float snowpack;
       uniform float snowline;
       uniform float realism;
+      ${nightLight ? 'uniform sampler2D pisteFloodlight; uniform vec4 pisteFloodlightLimits; uniform float pisteFloodlightStrength;' : ''}
       ${regional ? '' : snowTrafficGLSL}
     `).replace('#include <color_fragment>', `#include <color_fragment>
       vec3 p = resortPoint;
@@ -347,6 +376,21 @@ function snowMaterial(bounds, field, regional = false) {
         normal = normalize(max(abs(area),1e-9)*normal + gradient);
       `}
     `);
+    if (!regional) {
+      bindSnowCrystals(shader);
+      shader.fragmentShader = shader.fragmentShader.replace('#include <opaque_fragment>', /* glsl */ `
+        float flash = snowCrystalFlash(p, vNormal, eye, (1.0-cliff)*snow*(1.0-underTrees*.56)*(1.0-ice*.72));
+        outgoingLight += vec3(.73,.88,1.0) * flash * mix(1.35,2.3,realism);
+        ${nightLight ? `
+          if (pisteFloodlightStrength > .006) {
+            vec2 pools = texture2D(pisteFloodlight,(p.xz-pisteFloodlightLimits.xy)/pisteFloodlightLimits.zw).rg;
+            vec3 irradiance = pools.r*vec3(1.0,.70,.35) + pools.g*vec3(.77,.89,1.0);
+            outgoingLight += diffuseColor.rgb * irradiance * pisteFloodlightStrength * 1.25;
+          }
+        ` : ''}
+        #include <opaque_fragment>
+      `);
+    }
   };
   return material;
 }
@@ -357,7 +401,8 @@ function meshTerrain(group, grid, mat, hole = null) {
     const w = Math.min(cols - i, TILE + 1), h = Math.min(rows - j, TILE + 1);
     const positions = new Float32Array(w * h * 3);
     const shading = new Float32Array(w * h * 3);
-    const indices = [];
+    const indices = new Uint16Array((w - 1) * (h - 1) * 6);
+    let used = 0;
     for (let v = 0; v < h; v++) for (let u = 0; u < w; u++) {
       const src = (j + v) * cols + i + u, dst = (v * w + u) * 3;
       const x = xAt(i + u), z = zAt(j + v);
@@ -373,13 +418,18 @@ function meshTerrain(group, grid, mat, hole = null) {
       }
       if (u === w - 1 || v === h - 1 || hole?.inside(x, z, xAt(i + u + 1), zAt(j + v + 1))) continue;
       const a = v * w + u, b = a + 1, c = a + w, d = c + 1;
-      indices.push(a, c, b, b, c, d);
+      indices[used++] = a;
+      indices[used++] = c;
+      indices[used++] = b;
+      indices[used++] = b;
+      indices[used++] = c;
+      indices[used++] = d;
     }
-    if (indices.length === 0) continue;
+    if (!used) continue;
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('normal', new THREE.BufferAttribute(shading, 3));
-    geometry.setIndex(new THREE.Uint16BufferAttribute(indices, 1));
+    geometry.setIndex(new THREE.BufferAttribute(indices.subarray(0, used), 1));
     geometry.computeBoundingSphere();
     const mesh = new THREE.Mesh(geometry, mat);
     mesh.receiveShadow = !hole || !!hole.receiveShadow;
@@ -462,7 +512,9 @@ export async function loadMappedGround(scene, config, baseURL) {
   const regional = rasterGrid(regionalDem, backdrop, backdrop.bounds);
   const forestAt = forestSampler(cover, forest, forest.bounds || bounds);
   const field = makeSurfaceField(bounds, grid, forestAt, runs, runAreas, roads, parking, summerRoutes);
-  const localMaterial = snowMaterial(bounds, field);
+  const nightLight = nightRunsFor(config).length
+    ? { texture: { value: null }, limits: { value: new THREE.Vector4() }, strength: { value: 0 } } : null;
+  const localMaterial = snowMaterial(bounds, field, false, nightLight);
   const horizonMaterial = snowMaterial(bounds, field, true);
   const group = new THREE.Group();
   group.name = `${config.name} · mapped elevation`;
@@ -485,6 +537,12 @@ export async function loadMappedGround(scene, config, baseURL) {
     mesh: group, bounds, snowMaterial: localMaterial,
     forestAt, fieldAt(x, z, out = {}) { return field.at(x, z, out); },
     heightAt,
+    setNightLightField({ texture, limits }) {
+      if (!nightLight) return null;
+      nightLight.texture.value = texture;
+      nightLight.limits.value.copy(limits);
+      return nightLight.strength;
+    },
     normalAt(x, z, out = new THREE.Vector3()) { heightAt(x, z, out, true); return out; },
     surfaceAt(x, z, out = {}) {
       const pack = climateUniforms.snowpack.value;

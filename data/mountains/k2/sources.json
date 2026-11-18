@@ -1,0 +1,73 @@
+{
+  "id": "k2",
+  "name": "K2",
+  "terrainOnly": true,
+  "origin": [
+    76.5134668,
+    35.8816528
+  ],
+  "crs": "EPSG:32643",
+  "bounds": {
+    "minX": -15000,
+    "maxX": 13020,
+    "minZ": -12000,
+    "maxZ": 18000
+  },
+  "terrainStep": 30,
+  "backdropBounds": {
+    "minX": -38000,
+    "maxX": 38000,
+    "minZ": -38000,
+    "maxZ": 38000
+  },
+  "backdropStep": 100,
+  "terrainQuantization": 0.1,
+  "backdropQuantization": 0.125,
+  "coverSources": [
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N33E075_Map.tif"
+  ],
+  "elevationSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N35_00_E076_00_DEM/Copernicus_DSM_COG_10_N35_00_E076_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N36_00_E076_00_DEM/Copernicus_DSM_COG_10_N36_00_E076_00_DEM.tif"
+  ],
+  "startLonLat": [
+    76.5118925,
+    35.7416218
+  ],
+  "landmarks": [
+    {
+      "id": "k2",
+      "name": "K2",
+      "lonLat": [
+        76.5134668,
+        35.8816528
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "concordia",
+      "name": "Concordia",
+      "lonLat": [
+        76.5118925,
+        35.7416218
+      ],
+      "kind": "viewpoint"
+    },
+    {
+      "id": "broad-peak",
+      "name": "Broad Peak",
+      "lonLat": [
+        76.5655569,
+        35.8136914
+      ],
+      "kind": "peak"
+    }
+  ],
+  "viewDistance": 36300,
+  "references": [
+    "https://visitgilgitbaltistan.gov.pk/tour/id/35",
+    "https://www.openstreetmap.org/node/13681846534",
+    "https://www.openstreetmap.org/node/565159951",
+    "https://www.openstreetmap.org/node/1407583985"
+  ]
+}

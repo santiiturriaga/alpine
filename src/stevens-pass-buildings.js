@@ -1,5 +1,8 @@
 import * as THREE from 'three';
+import { pointInPolygon, segmentDistance } from './mapped-resort-ground.js';
+import { liftPoint } from './mapped-lift-profile.js';
 import { makeTextTexture, mulberry32 } from './util.js';
+import { cacheStaticTransforms } from './scenery.js';
 
 const profiles = {
   'granite-peaks-lodge': {
@@ -20,6 +23,7 @@ const profiles = {
     title: 'SKI & RIDE SCHOOL', subtitle: 'STEVENS PASS',
   },
 };
+const standardProfile = { walls: 0x766859, trim: 0x4e4134, roof: 0x414641, eave: 3.35, pitch: .37 };
 
 function textureSurface(color, kind, extra = {}) {
   const material = new THREE.MeshStandardMaterial({ color, roughness: .87, ...extra });
@@ -113,7 +117,7 @@ function triangleClip(points, cross, side) {
   return shape;
 }
 
-function snowRoof(group, points, basis, eave, pitch, overhang, roof, snow) {
+function snowRoof(addShape, points, basis, eave, pitch, overhang, roof, snow) {
   const [cx, cz] = basis.center;
   const outline = points.map(([x, z]) => [cx + (x - cx) * (1 + overhang * 2 / basis.width),
     cz + (z - cz) * (1 + overhang * 2 / basis.depth)]);
@@ -151,12 +155,66 @@ function snowRoof(group, points, basis, eave, pitch, overhang, roof, snow) {
         [p[0], snowY(p), p[1]], [q[0], snowY(q), q[1]]);
     }
   }
-  shapeMesh(group, fascia, roof);
-  shapeMesh(group, surfaces, snow);
-  return roofY;
+  addShape(fascia, roof);
+  addShape(surfaces, snow);
+  return { outline, roofY };
 }
 
-function batchBoxes(group) {
+function indexLodgeRoofs() {
+  const cells = new Map(), size = 24;
+  const cell = value => Math.floor(value / size);
+  return {
+    add(outline, height) {
+      const bounds = new THREE.Box2().setFromPoints(outline.map(point => new THREE.Vector2(...point)));
+      const roof = { outline, height };
+      for (let x = cell(bounds.min.x); x <= cell(bounds.max.x); x++) {
+        for (let z = cell(bounds.min.y); z <= cell(bounds.max.y); z++) {
+          const key = `${x}:${z}`;
+          if (!cells.has(key)) cells.set(key, []);
+          cells.get(key).push(roof);
+        }
+      }
+    },
+    heightNear(x, z, radius) {
+      let height = -Infinity;
+      for (let i = cell(x - radius); i <= cell(x + radius); i++) {
+        for (let j = cell(z - radius); j <= cell(z + radius); j++) {
+          for (const roof of cells.get(`${i}:${j}`) ?? []) {
+            if (roof.height <= height) continue;
+            const { outline } = roof;
+            if (pointInPolygon(x, z, outline) || outline.some(([ax, az], index) => {
+              const [bx, bz] = outline[(index + 1) % outline.length];
+              return segmentDistance(x, z, ax, az, bx, bz) <= radius;
+            })) height = roof.height;
+          }
+        }
+      }
+      return height;
+    },
+  };
+}
+
+const mappedStationFootprints = new Set([
+  '183549887', // Pas du Lac 1
+  '250784923', // Pionniers
+  '99265917', // Saulire Express 1
+  '37718798', // Tougnète 1
+]);
+
+function replacesLiftTerminal(building, points, basis, terminals) {
+  // The mapped structure enclosing a lift endpoint is often the station's
+  // own machinery hood. The open generated terminal already models it.
+  const namedStation = /^ski lift$|lift station|wheelhouse|gondola|télécabine|aerial tram/i.test(building.name ?? '');
+  const compactStructure = !building.name && !building.height && !building.levels
+    && basis.width <= 34 && basis.depth <= 16;
+  return (namedStation || compactStructure || mappedStationFootprints.has(building.osmId)) &&
+    terminals.some(({ x, z }) => pointInPolygon(x, z, points));
+}
+
+const batchSide = 210;
+const buildingCell = (x,z) => `${Math.floor(x / batchSide)}:${Math.floor(z / batchSide)}`;
+
+function batchBoxes(group, spatial) {
   const entries = new Map();
   const placeholder = new THREE.Object3D();
   function add(material, x, y, z, width, height, depth, yaw = 0, lean = 0) {
@@ -164,12 +222,14 @@ function batchBoxes(group) {
     placeholder.scale.set(width, height, depth);
     placeholder.rotation.set(0, yaw, lean, 'YXZ');
     placeholder.updateMatrix();
-    if (!entries.has(material)) entries.set(material, []);
-    entries.get(material).push(placeholder.matrix.clone());
+    if (!entries.has(material)) entries.set(material, new Map());
+    const cells = entries.get(material), id = spatial ? buildingCell(x,z) : '';
+    if (!cells.has(id)) cells.set(id, []);
+    cells.get(id).push(placeholder.matrix.clone());
   }
   function flush() {
     const geometry = new THREE.BoxGeometry();
-    for (const [material, matrices] of entries) {
+    for (const [material, cells] of entries) for (const matrices of cells.values()) {
       const mesh = new THREE.InstancedMesh(geometry, material, matrices.length);
       matrices.forEach((matrix, i) => mesh.setMatrixAt(i, matrix));
       mesh.instanceMatrix.needsUpdate = true;
@@ -179,6 +239,30 @@ function batchBoxes(group) {
     }
   }
   return { add, flush };
+}
+
+function batchSurfaces(group) {
+  const cells = new Map();
+  return {
+    at(x,z) {
+      const id = buildingCell(x,z);
+      if (!cells.has(id)) cells.set(id,new Map());
+      const surfaces = cells.get(id);
+      return (vertices, material) => {
+        if (!vertices.length) return;
+        if (!surfaces.has(material)) surfaces.set(material, []);
+        surfaces.get(material).push(vertices);
+      };
+    },
+    flush() {
+      for (const surfaces of cells.values()) for (const [material, parts] of surfaces) {
+        const vertices = new Float32Array(parts.reduce((sum, part) => sum + part.length, 0));
+        let offset = 0;
+        for (const part of parts) { vertices.set(part,offset); offset += part.length; }
+        shapeMesh(group, vertices, material);
+      }
+    },
+  };
 }
 
 function windowBays(add, trim, glasses, { x, y, z, width, height, yaw, seed }) {
@@ -212,8 +296,11 @@ function facadeSign(group, x, y, z, yaw, width, profile, dark, palette) {
 export function buildMappedLodges(scene, config, ground, env) {
   const group = new THREE.Group();
   group.name = `${config.name} · lodges and base landmarks`;
-  const boxes = batchBoxes(group);
+  const spatial = (config.buildings?.length ?? 0) > 160;
+  const boxes = batchBoxes(group, spatial);
+  const surfaces = spatial ? batchSurfaces(group) : null;
   const add = boxes.add;
+  const palette = new Map();
   const snow = textureSurface(0xeaf2f5, 'snow', { side: THREE.DoubleSide });
   const stone = textureSurface(0x777c76, 'stone', { side: THREE.DoubleSide });
   const iron = new THREE.MeshStandardMaterial({ color: 0x252e29, roughness: .55, metalness: .39 });
@@ -225,6 +312,10 @@ export function buildMappedLodges(scene, config, ground, env) {
   const white = new THREE.MeshStandardMaterial({ color: 0xc9c6b8, roughness: .79, side: THREE.DoubleSide });
   const rand = mulberry32(841675);
   const clock = config.id === 'stevens-pass' && config.landmarks?.find(landmark => landmark.id === 'clock-tower');
+  const roofs = indexLodgeRoofs();
+  env.roofHeightNear = roofs.heightNear;
+  const terminals = (config.lifts ?? []).filter(lift => lift.kind !== 'surface' && lift.points?.length > 1)
+    .flatMap(lift => [liftPoint(lift.points[0]), liftPoint(lift.points.at(-1))]);
   for (const building of config.buildings ?? []) {
     const points = building.points.filter((point, i) => {
       const next = building.points[(i + 1) % building.points.length];
@@ -233,18 +324,26 @@ export function buildMappedLodges(scene, config, ground, env) {
     if (points.length < 3) continue;
     const basis = polygonBasis(points);
     if (Math.min(basis.width, basis.depth) < .95) continue;
+    if (replacesLiftTerminal(building, points, basis, terminals)) continue;
     const precise = profiles[building.id] || Object.values(profiles).find(p =>
       p.title === building.name?.toUpperCase()) || (/ski (and|&) ride school|ski.+snowboard school/i.test(building.name) ? profiles.school : null);
-    const profile = precise || { walls: 0x766859, trim: 0x4e4134, roof: 0x414641, eave: 3.35, pitch: .37 };
-    const trim = textureSurface(profile.trim, 'wood', { side: THREE.DoubleSide });
-    const walls = textureSurface(profile.walls, 'wood', { side: THREE.DoubleSide });
-    const roof = new THREE.MeshStandardMaterial({ color: profile.roof, roughness: .74, side: THREE.DoubleSide });
+    const profile = precise || standardProfile;
+    if (!palette.has(profile)) palette.set(profile,{
+      trim: textureSurface(profile.trim, 'wood', { side: THREE.DoubleSide }),
+      walls: textureSurface(profile.walls, 'wood', { side: THREE.DoubleSide }),
+      roof: new THREE.MeshStandardMaterial({ color: profile.roof, roughness: .74, side: THREE.DoubleSide }),
+    });
+    const { trim,walls,roof } = palette.get(profile);
     const [cx, cz] = basis.center;
+    const addShape = surfaces?.at(cx,cz) ?? ((vertices,material)=>shapeMesh(group,vertices,material));
     const cy = ground.heightAt(cx, cz);
     const base = cy + .08;
     const eave = base + (building.height ? Math.min(16, building.height * .76) : profile.eave);
     const pitch = Math.min(profile.pitch, 10.8 / basis.depth);
-    const riseAt = snowRoof(group, points, basis, eave, pitch, precise?.eaveOverhang ?? (precise ? .78 : .34), roof, snow);
+    const overhang = precise?.eaveOverhang ?? (precise ? .78 : .34);
+    const { outline, roofY: riseAt } = snowRoof(addShape, points, basis, eave, pitch, overhang, roof, snow);
+    const ridge = eave + pitch * (basis.depth * .5 + overhang);
+    roofs.add(outline, ridge + (precise?.balcony ? 1.66 : .34));
     const foundation = [], siding = [];
     const centroid = points.reduce((p, [x, z]) => [p[0] + x / points.length, p[1] + z / points.length], [0, 0]);
     const plaza = clock?.point ?? [cx, cz - 14];
@@ -386,8 +485,8 @@ export function buildMappedLodges(scene, config, ground, env) {
         for (const du of [-1.59, 1.59]) piece(iron, u + du, y + .42, profile.balcony ? 5.2 : 4.2, .1, 1.03, .11);
       }
     }
-    shapeMesh(group, foundation, stone);
-    shapeMesh(group, siding, walls);
+    addShape(foundation, stone);
+    addShape(siding, walls);
     if (precise?.balcony && points.length > 3) {
       const [px, pz] = centroid;
       const chimneyY = riseAt([px, pz]);
@@ -396,8 +495,10 @@ export function buildMappedLodges(scene, config, ground, env) {
     }
   }
   if (clock) buildClock(group, clock.point, ground, env, add, snow, stone, orange, iron);
+  surfaces?.flush();
   boxes.flush();
   scene.add(group);
+  cacheStaticTransforms(group);
   return group;
 }
 

@@ -4,6 +4,7 @@ import { heightAt, normalAt } from './terrain.js';
 import { guestClear, makeGuestPath, sampleGuestPath, turnDelta } from './guest-navigation.js';
 import { clamp, smoothstep } from './util.js';
 import { createPatrolActor, createPatrolCable, createPatrolLedge, createPatrolSignal, posePatrolActor } from './patrol-flight-assets.js';
+import { MAX_CABLE } from './patrol-winch-link.js';
 
 const distance = (a,b)=>Math.hypot(a.x-b.x,a.z-b.z);
 const headingTo = (a,b)=>Math.atan2(b.x-a.x,b.z-a.z);
@@ -14,6 +15,13 @@ const seated = {hipY:.53,hipZ:0,hinge:.063,feet:[new THREE.Vector3(-.17,.10,.31)
 const hanging = {hipY:.79,hipZ:-.04,hinge:.06,feet:[new THREE.Vector3(-.19,.22,.28),new THREE.Vector3(.21,.13,.23)],grip:[.12,1.12,.29]};
 const patientPose = {hipY:.68,hipZ:0,hinge:.23,feet:[new THREE.Vector3(-.18,.12,.30),new THREE.Vector3(.18,.07,.29)],grip:[.21,.80,.26]};
 const top = new THREE.Vector3(), tip = new THREE.Vector3(), patientPoint = new THREE.Vector3(), slopeNormal = new THREE.Vector3();
+const attachPoint = new THREE.Vector3();
+const HOVER_RADIUS = 2.6;
+const WINCH_OFFSET = [1.74, 1.62, -.34];
+const WINCH_SPEED = 3.4;
+const REACH = 2.4;
+const MIN_CABLE = 12;
+const REACH_Y = .55;
 
 function point(x,z) { return {x,z,y:heightAt(x,z)}; }
 
@@ -36,13 +44,13 @@ function hoverSite(env,name,anchor,guest,x,z) {
   const ground=heightAt(x,z);
   let obstacleHeight=ground;
   for (const c of env.queryColliders(x,z,12)) {
-    if (c.type==='tree' && distance(c,{x,z})<(c.tree.apex*.16+4.4))
+    if (c.type==='tree' && distance(c,{x,z})<(c.tree.apex*.16+5.4+HOVER_RADIUS))
       obstacleHeight=Math.max(obstacleHeight,c.maxY);
     if(c.type==='lift-tower' && distance(c,{x,z})<12) return null;
   }
-  const hoverY=Math.max(ground+12,guest.y+9.5,obstacleHeight+3.1);
-  if(hoverY-ground>28 || hoverY-guest.y>28) return null;
-  return {name,anchor,guest,x,z,ground,hoverY,markerY:hoverY-1,heading:headingTo(anchor,{x,z})};
+  const hoverY=Math.max(ground+19,guest.y+16,obstacleHeight+4.3);
+  if(hoverY-guest.y>MAX_CABLE-5) return null;
+  return {name,anchor,guest,x,z,ground,hoverY,markerY:hoverY+.03,heading:headingTo(anchor,{x,z}),radius:HOVER_RADIUS};
 }
 
 function rescueSites(env,base) {
@@ -56,10 +64,10 @@ function rescueSites(env,base) {
     for(const angle of [0,1.15,-1.15,2.2,-2.2,Math.PI]){
       const sx=Math.sin(fromBase+angle),sz=Math.cos(fromBase+angle);
       const guest={x:c.x+sx*1.24,y:c.tree.y+clamp(c.tree.apex*.48,4.25,7.2),z:c.z+sz*1.24};
-      const candidate=hoverSite(env,'Treeline pickup',anchor,guest,c.x+sx*6.3,c.z+sz*6.3);
+      const candidate=hoverSite(env,'Treeline pickup',anchor,guest,c.x+sx*2.72,c.z+sz*2.72);
       if(!candidate)continue;
       const score=Math.abs(range-322)*.17+Math.abs(c.tree.apex-15)*.64+
-        Math.abs(angle)*.85+(candidate.hoverY-guest.y-9.5)*1.9;
+        Math.abs(angle)*.85+(candidate.hoverY-guest.y-16)*1.2;
       if(score<bestTree){tree=candidate;bestTree=score;}
     }
   }
@@ -68,8 +76,8 @@ function rescueSites(env,base) {
     const c=env.grid.circles.find(c=>c.type==='tree' && distance(c,base)>170 && distance(c,base)<550);
     const p=c?point(c.x,c.z):point(base.x+175,base.z+175);
     const guest={...p,y:p.y+5,x:p.x+1.24};
-    tree=hoverSite(env,'Treeline pickup',p,guest,p.x+6.3,p.z) ??
-      {name:'Treeline pickup',anchor:p,guest,x:p.x+6.3,z:p.z,hoverY:p.y+17,markerY:p.y+16,heading:Math.PI/2};
+    tree=hoverSite(env,'Treeline pickup',p,guest,p.x+2.72,p.z) ??
+      {name:'Treeline pickup',anchor:p,guest,x:p.x+2.72,z:p.z,hoverY:p.y+25,markerY:p.y+25,heading:Math.PI/2,radius:HOVER_RADIUS};
   }
 
   let ledge,bestLedge=Infinity;
@@ -82,20 +90,41 @@ function rescueSites(env,base) {
     const heading=Math.atan2(slopeNormal.x,slopeNormal.z);
     const sx=Math.sin(heading),sz=Math.cos(heading);
     const guest={x:anchor.x+sx*1.42,y:anchor.y+3.19,z:anchor.z+sz*1.42};
-    const candidate=hoverSite(env,'Scree ridge ledge',anchor,guest,anchor.x+sx*5.5,anchor.z+sz*5.5);
+    const candidate=hoverSite(env,'Scree ridge ledge',anchor,guest,anchor.x+sx*2.90,anchor.z+sz*2.90);
     if(!candidate)continue;
     const rise=candidate.hoverY-tree.hoverY;
     const score=Math.abs(radius-245)*.023+Math.abs(rise)*.07+
-      Math.abs(anchor.y-candidate.ground-2.7)*1.35+(candidate.hoverY-guest.y-9.5)*.7;
+      Math.abs(anchor.y-candidate.ground-2.7)*1.35+(candidate.hoverY-guest.y-16)*.7;
     if(score<bestLedge){ledge=candidate;bestLedge=score;}
   }
   if(!ledge){
     const anchor=point(tree.x-210,tree.z+90);
     const guest={...anchor,y:anchor.y+3.19,z:anchor.z+1.42};
-    ledge=hoverSite(env,'Scree ridge ledge',anchor,guest,anchor.x,anchor.z+5.5) ??
-      {name:'Scree ridge ledge',anchor,guest,x:anchor.x,z:anchor.z+5.5,hoverY:anchor.y+16,markerY:anchor.y+15,heading:0};
+    ledge=hoverSite(env,'Scree ridge ledge',anchor,guest,anchor.x,anchor.z+2.90) ??
+      {name:'Scree ridge ledge',anchor,guest,x:anchor.x,z:anchor.z+2.90,hoverY:anchor.y+22,markerY:anchor.y+22,heading:0,radius:HOVER_RADIUS};
   }
   return {tree,ledge};
+}
+
+export function winchTop(position,yaw,out) {
+  const [x,y,z]=WINCH_OFFSET;
+  const c=Math.cos(yaw),s=Math.sin(yaw);
+  return out.set(position.x+x*c+z*s,position.y+y,position.z+z*c-x*s);
+}
+
+function pickupDepth(site,overhead) {
+  return clamp(overhead.y-(site.guest.y+1.12),0,MAX_CABLE);
+}
+
+export function winchReach(site,overhead,depth) {
+  if(depth<MIN_CABLE)return false;
+  const dy=Math.abs(depth-pickupDepth(site,overhead));
+  return dy<=REACH_Y && Math.hypot(distance(overhead,site.guest),dy)<=REACH;
+}
+
+function winchEnd(overhead,depth,time,out) {
+  const sway=Math.min(1,depth/6)*.07;
+  return out.set(overhead.x+Math.sin(time*2.5)*sway,overhead.y-depth,overhead.z+Math.cos(time*1.8)*sway);
 }
 
 function flightDisplay() {
@@ -173,15 +202,16 @@ export function createPatrolFlight({scene,env,expeditions,player,ui}) {
     if(actor.frame.parent!==parent)parent.add(actor.frame);
     actor.frame.visible=true;
   }
-  function seat(actor,i,dt) {
-    moveFrame(actor,aircraft.model);
-    posePatrolActor(actor,{x:i===0?-.54:i===1?.54:0,y:.71,z:i===0?.79:-1.22,heading:0},dt,{mount:seated});
+  function seat(actor,i,dt,model=aircraft.model) {
+    moveFrame(actor,model);
+    posePatrolActor(actor,{x:[.48,.51,-.51,0][i],y:.71,z:i===0?.79:-1.22,heading:0},dt,{mount:seated});
   }
   function reset() {
     travelled=elapsed=0;
     crewReady=false;
     lift=currentSite=null;
     aircraft.rescueFocus=null;
+    aircraft.rescueSite=null;
     aircraft.boardBlocked=false;
     nav.hide();
     setVisible(null);
@@ -231,65 +261,89 @@ export function createPatrolFlight({scene,env,expeditions,player,ui}) {
     const verticalError=p.y-site.hoverY;
     const speed=Math.abs(aircraft.speed);
     const turn=turnDelta(aircraft.yaw,headingTo(p,site));
-    const ready=range<=11 && verticalError>=-3.0 && verticalError<=5.1 && speed<=4.2;
+    const verticalSpeed=Math.abs(aircraft.verticalSpeed);
+    const overhead=winchTop(p,aircraft.yaw,top);
+    const linedUp=distance(overhead,site.guest)<=REACH-.12;
+    const ready=range<=site.radius && verticalError>=-1.2 && verticalError<=4 && speed<=1.8 && verticalSpeed<=1.6 && linedUp;
     let detail='Align the gold marker and fly toward the pickup.';
     if(aircraft.clearance<5)detail='Hold Space to lift off. A/D turns, W/S moves.';
     else if(range>22 && Math.abs(turn)>.55)detail=turn>0?'Turn left toward the gold marker.':'Turn right toward the gold marker.';
-    else if(range<speed/.7+19 && speed>4.2)detail='Release W/S to slow for the pickup.';
+    else if(range<speed/.7+12 && speed>1.8)detail='Release W/S to slow for the pickup.';
     else if(range>22 && p.y<site.hoverY+8)detail='Climb with Space to clear the terrain ahead.';
-    else if(range<=22 && verticalError < -3)detail=`Climb ${Math.ceil(-verticalError)} m with Space.`;
-    else if(range<=22 && verticalError > 5.1)detail=`Descend ${Math.ceil(verticalError)} m with Shift.`;
-    else if(range<=22 && range>11)detail='Ease closer to the gold marker.';
-    if(ready)detail='Press E to lower the rescue rope.';
+    else if(range<=22 && verticalError < -1.2)detail=`Climb ${Math.ceil(-verticalError)} m with Space.`;
+    else if(range<=22 && verticalError > 4)detail=`Descend ${Math.ceil(verticalError)} m with Shift.`;
+    else if(range<=22 && range>site.radius)detail='Ease into the gold hover circle.';
+    else if(range<=site.radius && !linedUp)detail='Turn the right side of the helicopter toward the skier.';
+    else if(range<=site.radius && verticalSpeed>1.6)detail='Release the altitude controls to hold your hover.';
+    if(ready)detail='Press E to hold this hover and start the winch.';
     return {range,ready,detail};
   }
-  function beginLift(site,assisted) {
+  function beginLift(site,crew) {
     if(lift || !approach(site).ready)return false;
-    lift={site,elapsed:0,duration:assisted?8.8:10.5};
-    aircraft.rescueFocus={...site.guest,heading:site.heading};
+    lift={depth:0,phase:1,attachTime:0,crew};
+    const length=clamp((aircraft.model.position.y-site.guest.y)*1.2,23,43);
+    aircraft.rescueFocus={...site.guest,heading:site.heading,length};
     return true;
   }
-  function drawRescue(site,index,dt) {
+  function drawRescue(site,index,dt,model,yaw,depth,attachMix,firstPerson=false) {
     const {patients,crew,signals,cable}=cast;
     const guest=patients[index], rescuer=crew[1];
     const marker=signals[index];
-    marker.group.visible=!lift;
+    marker.group.visible=depth===null;
     marker.diamond.rotation.y=elapsed*1.45;
-    marker.diamond.position.y=Math.sin(elapsed*3)*.31;
+    marker.diamond.position.y=.67+Math.sin(elapsed*3)*.23;
     moveFrame(guest,root);
-    if(!lift){
+    if(depth===null){
       posePatrolActor(guest,{...site.guest,heading:site.heading},dt,{mount:patientPose,roll:index===0?.21:-.13});
-      return null;
+      return;
     }
-    const {duration}=lift;
-    const t=Math.min(1,(lift.elapsed+=dt)/duration);
-    const lower=smoothstep(0,.34,t), raise=smoothstep(.57,1,t);
-    const attach=smoothstep(.36,.56,t);
-    aircraft.model.updateMatrixWorld(true);
-    top.set(.86,1.30,-.32).applyMatrix4(aircraft.model.matrixWorld);
-    tip.set(site.guest.x+.37,site.guest.y+1.21,site.guest.z+.55).lerp(top,1-lower).lerp(top,raise);
-    tip.x+=Math.sin(elapsed*2.5)*.13*lower*(1-raise);
+    winchTop(model.position,yaw,top);
+    winchEnd(top,depth,elapsed,tip);
     cable.set(top,tip);
     moveFrame(rescuer,root);
-    posePatrolActor(rescuer,{x:tip.x,y:tip.y-1.18,z:tip.z,heading:site.heading+Math.PI},dt,
+    rescuer.frame.visible=!firstPerson;
+    const heading=headingTo(top,site.guest);
+    posePatrolActor(rescuer,{x:tip.x,y:tip.y-1.18,z:tip.z,heading},dt,
       {mount:hanging,roll:Math.sin(elapsed*2.5)*.064});
-    patientPoint.set(tip.x-.31,tip.y-1.55,tip.z+.37);
-    patientPoint.lerp(site.guest,1-attach);
+    patientPoint.set(tip.x+Math.sin(heading)*.67,tip.y-1.32,tip.z+Math.cos(heading)*.67);
+    patientPoint.lerp(site.guest,1-attachMix);
     posePatrolActor(guest,{x:patientPoint.x,y:patientPoint.y,z:patientPoint.z,heading:site.heading},dt,
-      {mount:patientPose,roll:index===0?.20*(1-attach):-.14*(1-attach)});
-    if(t<1)return t<.34?'Patroller descending…':t<.57?'Patroller securing the skier…':'Hoisting the skier into the cabin…';
-    lift=null;
-    aircraft.rescueFocus=null;
-    aircraft.snapView=true;
-    guest.frame.visible=false;
-    cable.mesh.visible=false;
-    seat(rescuer,1,dt);
-    return 'success';
+      {mount:patientPose,roll:index===0?.20*(1-attachMix):-.14*(1-attachMix)});
   }
-  function update(dt,stage,overflight) {
+  function runLift(site,index,dt,crew,direction,attach) {
+    if(!lift){
+      drawRescue(site,index,dt,aircraft.model,aircraft.yaw,null,0);
+      return null;
+    }
+    if(lift.crew!==crew)lift.crew='';
+    const overhead=winchTop(aircraft.model.position,aircraft.yaw,top);
+    const maxDepth=pickupDepth(site,overhead);
+    if(lift.phase===1){
+      lift.depth=clamp(lift.depth+(lift.crew?direction:1)*WINCH_SPEED*dt,0,maxDepth);
+      if((attach||!lift.crew) && winchReach(site,overhead,lift.depth))lift.phase=2;
+    }
+    if(lift.phase===2){
+      lift.attachTime=Math.min(.6,lift.attachTime+dt);
+      const move=lift.crew?Math.min(0,direction):-1;
+      if(lift.attachTime>=.35)lift.depth=Math.max(0,lift.depth+move*WINCH_SPEED*dt);
+      if(lift.depth<=.08){
+        lift=null;
+        aircraft.rescueFocus=null;
+        aircraft.snapView=true;
+        seat(cast.crew[1],1,dt);
+        seat(cast.patients[index],index+2,dt);
+        return 'success';
+      }
+    }
+    drawRescue(site,index,dt,aircraft.model,aircraft.yaw,lift.depth,smoothstep(0,.35,lift.attachTime));
+    if(lift.crew)return lift.phase===2?'Skier clipped in · operator reeling in':'Winch operator has the controls';
+    return lift.phase===2?'Hoisting the skier aboard…':'Ren is descending to the skier…';
+  }
+  function update(dt,stage,overflight,crew='',direction=0,attach=false) {
     elapsed+=dt;
     outcrop.visible=distance(player.pos,ledge)<470;
     setVisible(stage);
+    aircraft.rescueSite=null;
     if(!stage){
       if(lift){lift=null;aircraft.rescueFocus=null;aircraft.snapView=true;}
       aircraft.boardBlocked=false;
@@ -305,13 +359,21 @@ export function createPatrolFlight({scene,env,expeditions,player,ui}) {
     }
     seat(cast.crew[0],0,dt);
     seat(cast.crew[1],1,dt);
+    if(stage==='done'){
+      seat(cast.patients[0],2,dt);
+      seat(cast.patients[1],3,dt);
+      nav.hide();
+      return null;
+    }
     if(stage==='tree'||stage==='ledge'){
       const index=Number(stage==='ledge'), site=index?ledge:tree;
+      if(inAircraft)aircraft.rescueSite=site;
+      if(index)seat(cast.patients[0],2,dt);
       if(!inAircraft && lift){
         lift=null;
         aircraft.rescueFocus=null;
       }
-      const result=drawRescue(site,index,dt);
+      const result=runLift(site,index,dt,crew,direction,attach);
       if(inAircraft) nav.show(aircraft,site,approach(site),result==='success'?'Skier aboard':result,index+1);
       else nav.hide();
       if(currentSite!==site && inAircraft){currentSite=site;overflight?.(site);}
@@ -321,5 +383,23 @@ export function createPatrolFlight({scene,env,expeditions,player,ui}) {
     nav.hide();
     return inAircraft?'boarded':null;
   }
-  return {base,rally,path,tree,ledge,approach,beginLift,update,reset,get hoisting(){return !!lift;}};
+  function passenger(dt,stage,model,yaw,depth,phase,mix) {
+    elapsed+=dt;
+    setVisible(stage);
+    outcrop.visible=distance(player.pos,ledge)<470;
+    nav.hide();
+    cast??=makeCast();
+    seat(cast.crew[0],0,dt,model);
+    if(stage==='ledge'||stage==='done')seat(cast.patients[0],2,dt,model);
+    if(stage==='done')seat(cast.patients[1],3,dt,model);
+    if(stage==='tree'||stage==='ledge'){
+      const i=Number(stage==='ledge');
+      drawRescue(i?ledge:tree,i,dt,model,yaw,phase?depth:null,mix,true);
+    }
+    if(!phase || depth<.52)return attachPoint.set(.46,1.84,-1.13).applyMatrix4(model.matrixWorld);
+    winchEnd(winchTop(model.position,yaw,top),depth,elapsed,attachPoint);
+    attachPoint.y-=.33;
+    return attachPoint;
+  }
+  return {base,rally,path,tree,ledge,approach,beginLift,update,passenger,reset,get hoisting(){return !!lift;},get winch(){return lift;}};
 }

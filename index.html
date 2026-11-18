@@ -11,6 +11,7 @@
 <link rel="preload" href="./vendor/fonts/Barlow-Regular.ttf" as="font" type="font/ttf" crossorigin />
 <link rel="stylesheet" href="./styles.css" />
 <link rel="stylesheet" href="./trail-map.css" />
+<link rel="stylesheet" href="./sled-game.css" />
 </head>
 <body>
 <div id="app">
@@ -20,27 +21,37 @@
 
   <!-- ══════════════ LOADING ══════════════ -->
   <section id="loading-screen" class="screen loading-screen">
-    <div class="snowball-loader" aria-hidden="true">
-      <svg class="forming-snowball" viewBox="0 0 200 200">
-        <defs>
-          <radialGradient id="snow-light" cx="30%" cy="24%" r="79%">
-            <stop stop-color="#fff"/><stop offset=".48" stop-color="#f4f8fa"/><stop offset=".82" stop-color="#a3bbc8"/><stop offset="1" stop-color="#637f92"/>
-          </radialGradient>
-          <filter id="snow-grain" x="-12%" y="-12%" width="124%" height="124%">
-            <feTurbulence type="fractalNoise" baseFrequency=".075" numOctaves="4" seed="23" result="noise"/>
-            <feDisplacementMap in="SourceGraphic" in2="noise" scale="12" xChannelSelector="R" yChannelSelector="G" result="clump"/>
-            <feColorMatrix in="noise" type="saturate" values="0" result="grain"/>
-            <feBlend in="clump" in2="grain" mode="soft-light"/><feComposite in2="clump" operator="in"/>
-          </filter>
-        </defs>
-        <circle cx="100" cy="100" r="84" fill="url(#snow-light)" filter="url(#snow-grain)"/>
-      </svg>
-    </div>
     <div class="loading-copy">
       <p class="kicker">WHISTLER · BLACKCOMB</p>
       <h1>ALPINE <em>DESCENT</em></h1>
-      <div class="load-track"><div id="load-bar"></div></div>
-      <p id="load-status">Shaping the Coast Mountains…</p>
+    </div>
+    <div class="loading-stage">
+      <div class="snowball-loader">
+        <div class="snowball-path">
+          <div class="load-track" role="progressbar" aria-label="Mountain loading progress" aria-valuenow="0"><div id="load-bar"></div></div>
+          <div class="snowball-carriage" aria-hidden="true">
+            <svg class="forming-snowball" viewBox="0 0 200 200">
+              <defs>
+                <radialGradient id="snow-light" cx="34%" cy="28%" r="76%">
+                  <stop stop-color="#fff"/><stop offset=".52" stop-color="#eef6fb"/><stop offset=".83" stop-color="#adc6d6"/><stop offset="1" stop-color="#718b9f"/>
+                </radialGradient>
+                <filter id="snow-grain" x="-12%" y="-12%" width="124%" height="124%">
+                  <feTurbulence type="fractalNoise" baseFrequency=".075" numOctaves="4" seed="23" result="noise"/>
+                  <feDisplacementMap in="SourceGraphic" in2="noise" scale="12" xChannelSelector="R" yChannelSelector="G" result="clump"/>
+                  <feColorMatrix in="noise" type="saturate" values="0" result="grain"/>
+                  <feBlend in="clump" in2="grain" mode="soft-light"/><feComposite in2="clump" operator="in"/>
+                </filter>
+              </defs>
+              <path d="M98 16C145 12 178 47 184 92C192 141 153 181 106 184C62 187 16 157 16 107C10 58 53 20 98 16Z" fill="url(#snow-light)" filter="url(#snow-grain)"/>
+              <path d="M41 82c4-12 11-22 22-30m-3 96c11 10 24 15 40 17m38-107c9 5 16 14 19 24" fill="none" stroke="#89a9bf" stroke-opacity=".33" stroke-width="3" stroke-linecap="round"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+      <div class="loading-meta">
+        <p id="load-status" role="status">Shaping the Coast Mountains…</p>
+        <p id="load-skier">Guest Skier</p>
+      </div>
     </div>
     <div class="loading-tip"><span>LOCAL KNOWLEDGE</span><p id="load-tip">Unload at Roundhouse Lodge and explore the plaza or ride PEAK 2 PEAK to Blackcomb.</p></div>
   </section>
@@ -136,6 +147,11 @@
       </div>
       <p id="patrol-flight-tip"></p>
     </aside>
+    <aside id="patrol-winch" hidden aria-label="Winch controls">
+      <strong>Winch operator</strong>
+      <span id="patrol-winch-status"></span>
+      <p id="patrol-winch-controls"></p>
+    </aside>
     <div class="floater-layer" id="floater-layer" aria-hidden="true"></div>
 
     <div class="interaction-prompt hidden" id="interaction-prompt">
@@ -223,6 +239,8 @@
       <div class="arrival-links" id="assignment-list"></div>
       <div class="arrival-links" id="assignment-actions"><button type="button" id="assignment-route">Guide to objective</button><button type="button" id="assignment-abandon">Abandon assignment</button></div>
       <button type="button" id="patrol-dispatch" hidden>Guide to the ground team callout</button>
+      <button type="button" id="patrol-invite" hidden>Copy winch seat invite</button>
+      <input id="patrol-invite-url" aria-label="Winch seat invite link" type="url" readonly hidden>
       <div id="assignment-photos"></div>
     </fieldset>
     <fieldset id="mountain-lobby"><legend>Multiplayer</legend>
@@ -261,6 +279,7 @@
       <button data-course="avalanche"><b>Avalanche escape</b><span>Whistler Mountain · reach a village base</span></button>
       <button data-course="race"><b>Head-to-head</b><span>Springboard · race another skier</span></button>
       <button data-course="slalom"><b>Whiskey Jack slalom</b><span>9 gates · 350 m</span></button>
+      <button type="button" data-minigame="sled"><b>Sled Run</b><span>Jump chasms and dodge rolling snowballs</span></button>
     </div></fieldset>
     <button id="mountain-outfitter" type="button">Outfitter &amp; field notes <kbd>L</kbd></button>
   </dialog>
@@ -284,7 +303,8 @@
           <div class="key-row"><kbd>A</kbd><kbd>D</kbd><span>Edge &amp; carve — press into the turn</span></div>
           <div class="key-row"><kbd>W</kbd><span>Push on flats, tuck at speed.</span></div>
           <div class="key-row"><kbd>B</kbd><span>Switch between skis and boots. Use W and S to walk.</span></div>
-          <div class="key-row"><kbd>S</kbd><span>Brake. Quick pivots, instant speed check.</span></div>
+          <div class="key-row"><kbd>S</kbd><span>Brake. At speed, turn both skis across the slope. Use A or D to choose the side.</span></div>
+          <div class="key-row"><kbd>Click</kbd><span>Swing a pole while standing, walking, or gliding slowly.</span></div>
           <div class="key-row"><kbd>SPACE</kbd><span>Ollie. Hit the lips, catch the air.</span></div>
           <div class="key-row"><kbd>SHIFT</kbd><span>Hold in the air to grab.</span></div>
           <div class="key-row"><kbd>A</kbd><kbd>D</kbd><kbd>W</kbd><kbd>S</kbd><span>Press after takeoff to spin or flip.</span></div>

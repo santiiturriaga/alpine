@@ -1,0 +1,111 @@
+{
+  "id": "tignes-val-disere",
+  "name": "Tignes–Val d’Isère",
+  "sourceAreas": [
+    "Tignes - Val d'Isère"
+  ],
+  "origin": [
+    6.956,
+    45.445
+  ],
+  "crs": "EPSG:2154",
+  "bounds": {
+    "minX": -8000,
+    "maxX": 9600,
+    "minZ": -7800,
+    "maxZ": 5000
+  },
+  "terrainStep": 16,
+  "backdropBounds": {
+    "minX": -32000,
+    "maxX": 32000,
+    "minZ": -32000,
+    "maxZ": 32000
+  },
+  "backdropStep": 100,
+  "backdropQuantization": 0.1,
+  "terrainQuantization": 0.075,
+  "coverSources": [
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N45E006_Map.tif"
+  ],
+  "viewDistance": 30000,
+  "startLift": "tsd6-grattalu",
+  "startRun": "grattalu",
+  "beginnerLift": "tsd6-bollin",
+  "beginnerRun": "bollin",
+  "references": [
+    "https://en.tignes.net/skiing/ski-area/ski-map"
+  ],
+  "elevationWms": {
+    "url": "https://data.geopf.fr/wms-r/wms",
+    "layer": "RGEALTI-MNT_PYR-ZIP_FXX_LAMB93_WMS"
+  },
+  "backdropSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E006_00_DEM/Copernicus_DSM_COG_10_N45_00_E006_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E007_00_DEM/Copernicus_DSM_COG_10_N45_00_E007_00_DEM.tif"
+  ],
+  "sourceRegion": "FR-73",
+  "difficultyColors": {
+    "easy": "blue",
+    "intermediate": "red"
+  },
+  "sectionAnchors": {
+    "Tignes": [
+      6.9,
+      45.468
+    ],
+    "Val d’Isère": [
+      6.983,
+      45.449
+    ],
+    "Le Fornet / Iseran": [
+      7.041,
+      45.425
+    ]
+  },
+  "osmBounds": [
+    [
+      6.893,
+      45.463,
+      6.911,
+      45.475
+    ],
+    [
+      6.891,
+      45.448,
+      6.909,
+      45.46
+    ],
+    [
+      6.93,
+      45.491,
+      6.948,
+      45.503
+    ],
+    [
+      6.965,
+      45.442,
+      6.983,
+      45.454
+    ],
+    [
+      6.959,
+      45.455,
+      6.977,
+      45.467
+    ],
+    [
+      7.002,
+      45.446,
+      7.02,
+      45.458
+    ]
+  ],
+  "mountainStats": {
+    "pisteKm": 300
+  },
+  "elevationSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E006_00_DEM/Copernicus_DSM_COG_10_N45_00_E006_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E007_00_DEM/Copernicus_DSM_COG_10_N45_00_E007_00_DEM.tif"
+  ]
+}

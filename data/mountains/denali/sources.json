@@ -1,0 +1,84 @@
+{
+  "id": "denali",
+  "name": "Denali / Mount McKinley",
+  "terrainOnly": true,
+  "origin": [
+    -151.006239,
+    63.069115
+  ],
+  "crs": "EPSG:32605",
+  "bounds": {
+    "minX": -19005,
+    "maxX": 15015,
+    "minZ": -12705,
+    "maxZ": 16030
+  },
+  "terrainStep": 35,
+  "backdropBounds": {
+    "minX": -40000,
+    "maxX": 40000,
+    "minZ": -40000,
+    "maxZ": 40000
+  },
+  "backdropStep": 100,
+  "terrainQuantization": 0.1,
+  "backdropQuantization": 0.125,
+  "coverSources": [
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N60W153_Map.tif",
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N63W153_Map.tif"
+  ],
+  "elevationSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N62_00_W152_00_DEM/Copernicus_DSM_COG_10_N62_00_W152_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N62_00_W151_00_DEM/Copernicus_DSM_COG_10_N62_00_W151_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N63_00_W152_00_DEM/Copernicus_DSM_COG_10_N63_00_W152_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N63_00_W151_00_DEM/Copernicus_DSM_COG_10_N63_00_W151_00_DEM.tif"
+  ],
+  "startLonLat": [
+    -151.1652778,
+    62.9666667
+  ],
+  "landmarks": [
+    {
+      "id": "denali",
+      "name": "Denali",
+      "lonLat": [
+        -151.006239,
+        63.069115
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "kahiltna-base-camp",
+      "name": "Kahiltna Base Camp",
+      "lonLat": [
+        -151.1652778,
+        62.9666667
+      ],
+      "kind": "viewpoint"
+    },
+    {
+      "id": "denali-pass",
+      "name": "Denali Pass",
+      "lonLat": [
+        -151.0306191,
+        63.0815402
+      ],
+      "kind": "viewpoint"
+    },
+    {
+      "id": "kahiltna-peaks",
+      "name": "Kahiltna Peaks",
+      "lonLat": [
+        -151.0856934,
+        63.028285
+      ],
+      "kind": "peak"
+    }
+  ],
+  "viewDistance": 38300,
+  "references": [
+    "https://www.nps.gov/dena/planyourvisit/maps.htm",
+    "https://www.nps.gov/dena/planyourvisit/avreportcoord.htm",
+    "https://www.openstreetmap.org/node/2748929230"
+  ]
+}

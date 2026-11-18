@@ -1,0 +1,85 @@
+{
+  "id": "vail",
+  "name": "Vail",
+  "sourceAreas": [
+    "Vail"
+  ],
+  "origin": [
+    -106.358,
+    39.609
+  ],
+  "crs": "EPSG:32613",
+  "bounds": {
+    "minX": -4300,
+    "maxX": 5550,
+    "minZ": -4350,
+    "maxZ": 5750
+  },
+  "terrainStep": 10,
+  "backdropBounds": {
+    "minX": -25000,
+    "maxX": 25000,
+    "minZ": -25000,
+    "maxZ": 25000
+  },
+  "backdropStep": 100,
+  "backdropQuantization": 0.1,
+  "terrainQuantization": 0.075,
+  "coverSources": [
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N39W108_Map.tif"
+  ],
+  "viewDistance": 23000,
+  "startLift": "gondola-one",
+  "startRun": "lodgepole",
+  "beginnerLift": "sourdough-express-lift",
+  "beginnerRun": "sourdough",
+  "references": [
+    "https://www.vail.com/the-mountain/about-the-mountain/trail-map",
+    "https://www.usgs.gov/3d-elevation-program/about-3dep-products-services"
+  ],
+  "elevationSources": [
+    "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/current/n40w107/USGS_13_n40w107.tif"
+  ],
+  "sourceRegion": "US-CO",
+  "sectionAnchors": {
+    "Front Side": [
+      -106.365,
+      39.626
+    ],
+    "Game Creek Bowl": [
+      -106.394,
+      39.604
+    ],
+    "Back Bowls": [
+      -106.346,
+      39.596
+    ],
+    "Blue Sky Basin": [
+      -106.331,
+      39.571
+    ]
+  },
+  "osmBounds": [
+    [
+      -106.383,
+      39.638,
+      -106.365,
+      39.65
+    ],
+    [
+      -106.364,
+      39.636,
+      -106.346,
+      39.648
+    ],
+    [
+      -106.357,
+      39.634,
+      -106.339,
+      39.646
+    ]
+  ],
+  "mountainStats": {
+    "skiableAcres": 5317
+  }
+}

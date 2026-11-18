@@ -12,11 +12,15 @@ const transitions = {
   mapped: { value: new THREE.Vector2() },
   regional: { value: new THREE.Vector2() },
 };
-export const forestQuality = { max: false, detail: { value: 1 } };
+export const forestQuality = { detail: { value: 1 } };
+export const forestDetailTiers = {
+  '-0.5': [105, 165],
+  1: [44, 79],
+  2: [15, 35],
+};
 
 export function setForestQuality(name) {
   const profile = profiles[name] || profiles.HIGH;
-  forestQuality.max = profile === profiles.MAX;
   forestQuality.detail.value = profile.detail;
   transitions.mapped.value.fromArray(profile.mapped);
   transitions.regional.value.fromArray(profile.regional);
@@ -179,7 +183,7 @@ export class ForestCell extends THREE.LOD {
 
   update(camera) {
     const distanceSq = this.position.distanceToSquared(camera.position);
-    const useProxy = !forestQuality.max && !!this.proxy;
+    const useProxy = !!this.proxy;
     this.near.visible = distanceSq <= (this.range.y + this.radius)**2;
     const distant = distanceSq >= Math.max(0,this.range.x - this.radius)**2;
     this.far.visible = distant && !useProxy;

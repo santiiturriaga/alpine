@@ -7,6 +7,7 @@ import { createSkier } from './skier.js';
 import { box, mergedMesh, part } from './scenery.js';
 import { createServiceAsset } from './service-assets.js';
 import { createPatrolFlight } from './patrol-flight.js';
+import { createPatrolCrew } from './patrol-crew.js';
 
 const assignments = {
   overlook:{name:'The overlook',giver:'Nora',instruction:'Photograph the inukshuk beyond the Olympic rings.',reward:8,color:'Glacier teal'},
@@ -62,6 +63,7 @@ export function createMountainQuests({scene,env,ui,wildlife,expeditions,shop,pla
   };
   const home=expeditions.fleet.find(v=>v.id==='helicopter');
   const flight=createPatrolFlight({scene,env,ui,expeditions,player});
+  const crew=createPatrolCrew({scene,multiplayer,flight,home,player,camera,ui});
   const {tree:airSite,ledge,base,rally}=flight;
   const legacySite=airliftSite(env,home.legacyPose ?? base);
   const siteFor=stage=>stage==='tree'?airSite:stage==='ledge'?ledge:legacySite;
@@ -113,6 +115,15 @@ export function createMountainQuests({scene,env,ui,wildlife,expeditions,shop,pla
   const message=document.getElementById('assignment-next');
   const dispatch=document.getElementById('patrol-dispatch');
   dispatch.onclick=()=>{if(call)atlas.setDestination(targetFor(call[1].patrol),player);};
+  const inviteButton=document.getElementById('patrol-invite');
+  const inviteLink=document.getElementById('patrol-invite-url');
+  inviteButton.onclick=async ()=>{
+    const url=new URL('./',location.href);
+    url.searchParams.set('start','helicopter');
+    url.searchParams.set('patrol',multiplayer.id);
+    try { await navigator.clipboard.writeText(url.href); ui.toast('Winch seat invite copied','Share the link while you wait at the helipad.','green','check'); }
+    catch { inviteLink.value=url.href;inviteLink.hidden=false;inviteLink.select(); }
+  };
   const save=()=>{try{localStorage.setItem(storageKey,JSON.stringify(state));}catch{}};
   const title=()=>assignments[state.id];
   function targetId() {
@@ -133,9 +144,10 @@ export function createMountainQuests({scene,env,ui,wildlife,expeditions,shop,pla
       case 'escort':return dist(player.pos,base)<24?
         'Follow the patrollers up the ramp. Press B to switch to boots at the pad.':
         'Follow the red jackets down Upper Whiskey Jack to the helipad.';
-      case 'board':return 'Walk up the ramp and board from the side. Sasha and Ren are seated.';
-      case 'tree':return expeditions.active===home?'Fly to the tree pickup. Hover over the marker and press E.':'Board the helicopter to reach the skier in the tree.';
-      case 'ledge':return expeditions.active===home?'Fly to the second pickup at the rock ledge.':'Board the helicopter to reach the skier on the rock ledge.';
+      case 'board':return crew.crew?'Winch operator aboard. Walk up the ramp and press E to fly.':
+        'Board from the side or invite a winch operator in the Mountain menu.';
+      case 'tree':return expeditions.active===home?'Fly to the tree pickup. Settle inside the gold hover circle.':'Board the helicopter to reach the skier in the tree.';
+      case 'ledge':return expeditions.active===home?'Fly to the gold hover circle at the rock ledge.':'Board the helicopter to reach the skier on the rock ledge.';
       default:return title().instruction;
     }
   }
@@ -196,10 +208,14 @@ export function createMountainQuests({scene,env,ui,wildlife,expeditions,shop,pla
     }else if(item.kind==='wait'){
       return true;
     }else if(item.kind==='lift'){
-      const site=siteFor(state.stage);
-      const assisted=Array.from(multiplayer.peers.values()).some(({pose,assist})=>assist===multiplayer.id &&
-        Math.hypot(pose[0]-site.anchor.x,pose[2]-site.anchor.z)<17);
-      if(flight.beginLift(site,assisted))ui.toast('Hold position','Sasha is holding the helicopter steady for the pickup.','blue','lift');
+      if(flight.beginLift(siteFor(state.stage),crew.crew))ui.toast('Holding hover',crew.crew?
+        'Your operator has the winch controls.':'Ren is working the winch.','blue','lift');
+    }else if(item.kind==='join-winch'){
+      crew.join(item.id);
+    }else if(item.kind==='clip-skier'){
+      crew.attach();
+    }else if(item.kind==='leave-winch'){
+      crew.leave();
     }else if(item.kind==='assist'){
       helping={id:item.id,stage:item.stage,site:siteFor(item.stage)};
       ui.toast('Ground team ready','Hold position near the pickup while the helicopter lifts.','green','check');
@@ -225,10 +241,12 @@ export function createMountainQuests({scene,env,ui,wildlife,expeditions,shop,pla
   }
   function nearby(){
     const p=player.pos, rescue=state.id==='rescue'&&season()!=='summer';
+    const winch=crew.nearby(season()!=='summer' && !expeditions.active && (!rescue || !!crew.invite));
+    if(winch)return winch;
     if(rescue && expeditions.active===home && ['tree','ledge'].includes(state.stage)){
-      if(flight.hoisting)return {kind:'wait',title:'Rescue in progress',detail:'Watch the patroller work the winch'};
+      if(flight.hoisting)return {kind:'wait',title:'Rescue in progress',detail:crew.crew?'The winch operator is working below':'Watch Ren work the winch'};
       if(flight.approach(siteFor(state.stage)).ready)
-        return {kind:'lift',title:'Lower rescue rope',detail:state.stage==='tree'?'Pick up the skier in the tree':'Pick up the skier on the rock ledge'};
+        return {kind:'lift',title:'Hold hover and start winch',detail:state.stage==='tree'?'Pick up the skier in the tree':'Pick up the skier on the rock ledge'};
     }
     if(player.riding || player.speed>4)return null;
     if(rescue && state.stage==='rally' && dist(p,rally)<5 && Math.abs(p.y-rally.y)<2.5)
@@ -293,22 +311,42 @@ export function createMountainQuests({scene,env,ui,wildlife,expeditions,shop,pla
       remoteAircraft.animate?.(dt);
     }
   }
-  function update(dt) {
+  function awardPatrol() {
+    if(shop.find(keyFor('rescue'),assignments.rescue.reward)){
+      shop.equipPatrolShell();
+      ui.toast('Alpine Patrol Shell equipped','Both skiers aboard · 2× landing trick points · 20 mountain coins','gold','star');
+    }
+  }
+  function pilotStage() {
+    if(season()==='summer')return null;
+    if(delivered>0)return 'done';
+    if(state.id!=='rescue'||!['board','tree','ledge'].includes(state.stage))return null;
+    return expeditions.active===home || (dist(home.model.position,base)<1 && Math.abs(home.model.position.y-base.y)<.3) ? state.stage : null;
+  }
+  function update(dt,keys={}) {
     for(const spot of Object.values(stops)) if(spot?.mark?.visible)
       spot.mark.rotation.y=Math.atan2(camera.position.x-spot.x,camera.position.z-spot.z);
+    if(crew.pilot){
+      multiplayer.patrolRadio('idle');
+      dispatch.hidden=inviteButton.hidden=true;
+      call=null;
+      drawRemoteCall(dt);
+      if(season()==='summer')crew.leave('Patrol airlift is available in winter.');
+      else if(crew.updateGuest(dt,keys)==='done')awardPatrol();
+      return;
+    }
+    delivered=Math.max(0,delivered-dt);
     const stage=state.id==='rescue'&&season()!=='summer'&&flightStages.includes(state.stage)?state.stage:null;
-    const result=flight.update(dt,stage,guide);
+    const orders=crew.pilotOrders(pilotStage(),expeditions.active===home);
+    const result=flight.update(dt,delivered>0?'done':stage,guide,orders.crew,orders.direction,orders.attach);
     if(result==='crew-ready')advance('board');
     if(result==='boarded')advance('tree');
     if(result==='tree-rescued'){
       advance('ledge');
-      ui.toast('Skier aboard','Ren is back inside. The next pickup is on the rock ledge.','green','check');
+      ui.toast('Skier aboard','The next pickup is on the rock ledge.','green','check');
     }
     if(result==='ledge-rescued'){
-      if(shop.find(keyFor('rescue'),assignments.rescue.reward)){
-        shop.equipPatrolShell();
-        ui.toast('Alpine Patrol Shell equipped','Both skiers aboard · 2× landing trick points · 20 mountain coins','gold','star');
-      }
+      awardPatrol();
       delivered=9;
       clearAssignment();
     }
@@ -316,7 +354,10 @@ export function createMountainQuests({scene,env,ui,wildlife,expeditions,shop,pla
       const instruction=rescueInstruction();
       if(message.textContent!==instruction)message.textContent=instruction;
     }
-    delivered=Math.max(0,delivered-dt);
+    const hostStage=pilotStage();
+    crew.announce(hostStage);
+    inviteButton.hidden=!multiplayer.connected || !hostStage || hostStage==='done' || !!crew.crew || dist(home.model.position,base)>9 || home.clearance>2;
+    if(inviteButton.hidden)inviteLink.hidden=true;
     const phase=delivered>0?'delivered':expeditions.active===home && ['tree','ledge'].includes(stage)?stage:'idle';
     if(helping){
       const pilot=multiplayer.peers.get(helping.id);
@@ -346,5 +387,12 @@ export function createMountainQuests({scene,env,ui,wildlife,expeditions,shop,pla
   document.getElementById('assignment-route').onclick=guide;
   document.getElementById('assignment-abandon').onclick=clearAssignment;
   show();
-  return {nearby,act,update,capture,stops,airSite,base,flight,get state(){return state;}};
+  return {nearby,act,update,capture,stops,airSite,base,flight,
+    leaveWinch:crew.leave,lookWinch:crew.look,hideParkedAircraft:crew.hideParkedAircraft,
+    get winchPassenger(){return crew.joined;},
+    get winchLive(){
+      return !!(crew.pilot || multiplayer.connected && pilotStage() &&
+        (crew.crew || !flight.hoisting && dist(home.model.position,base)<9 && home.clearance<2));
+    },
+    get state(){return state;}};
 }

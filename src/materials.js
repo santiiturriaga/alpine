@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { WORLD } from './worlddata.js';
 import { climateUniforms } from './climate-state.js';
 import { bindSnowTraffic, snowTrafficGLSL } from './snow-traffic.js';
+import { bindSnowCrystals } from './snow-crystals.js';
 
 const noise = /* glsl */ `
   varying vec3 surfacePoint;
@@ -352,6 +353,7 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
       .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' + surface.normal)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n' + surface.roughness);
     if (kind === 'snow') {
+      bindSnowCrystals(shader);
       // The sun shadow follows the rider. Fade before its finite rectangular
       // extent so an aerial view does not see the edge across a hillside.
       const shadowChunk = THREE.ShaderChunk.shadowmap_pars_fragment.replace('return shadow;', `
@@ -362,6 +364,12 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
         #include <lights_fragment_end>
         reflectedLight.directDiffuse *= sunFromTerrain;
         reflectedLight.directSpecular *= sunFromTerrain;
+      `);
+      shader.fragmentShader = shader.fragmentShader.replace('#include <opaque_fragment>', /* glsl */ `
+        float flash = snowCrystalFlash(p, vNormal, distanceToEye,
+          cover*(1.0-exposed*.94)*(1.0-forestExtent*.55)*(1.0-ice*.71)*(1.0-traffic*.35));
+        outgoingLight += vec3(.73,.88,1.0) * flash * sunFromTerrain * mix(1.35,2.3,climateRealism);
+        #include <opaque_fragment>
       `);
     }
   };

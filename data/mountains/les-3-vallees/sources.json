@@ -1,0 +1,260 @@
+{
+  "id": "les-3-vallees",
+  "name": "Les 3 Vallées",
+  "sourceAreas": [
+    "Les Trois Vallées",
+    "Courchevel",
+    "Méribel",
+    "Les Ménuires",
+    "Val Thorens - Orelle",
+    "Val Thorens",
+    "Orelle"
+  ],
+  "origin": [
+    6.591,
+    45.333
+  ],
+  "crs": "EPSG:2154",
+  "bounds": {
+    "minX": -7800,
+    "maxX": 6400,
+    "minZ": -13700,
+    "maxZ": 14800
+  },
+  "terrainStep": 20,
+  "backdropBounds": {
+    "minX": -36000,
+    "maxX": 36000,
+    "minZ": -36000,
+    "maxZ": 36000
+  },
+  "backdropStep": 100,
+  "backdropQuantization": 0.1,
+  "terrainQuantization": 0.075,
+  "coverSources": [
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N45E006_Map.tif"
+  ],
+  "viewDistance": 34000,
+  "startLift": "plein-sud",
+  "startRun": "plein-sud",
+  "beginnerLift": "castor-pollux",
+  "beginnerRun": "montagnette",
+  "references": [
+    "https://www.les3vallees.com/en/guide/the-world-s-largest-ski-area/ski-area-map",
+    "https://www.valthorens.com/app/uploads/2026/10/plan-3-vallees-avec-legende-hiver-2026-2027.pdf",
+    "https://www.openstreetmap.org/node/324232145",
+    "https://www.openstreetmap.org/node/1186523773",
+    "https://www.openstreetmap.org/node/324040107",
+    "https://www.openstreetmap.org/node/7882542922",
+    "https://www.openstreetmap.org/node/1789614074",
+    "https://www.openstreetmap.org/node/41645023"
+  ],
+  "elevationWms": {
+    "url": "https://data.geopf.fr/wms-r/wms",
+    "layer": "RGEALTI-MNT_PYR-ZIP_FXX_LAMB93_WMS"
+  },
+  "backdropSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N44_00_E006_00_DEM/Copernicus_DSM_COG_10_N44_00_E006_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N44_00_E007_00_DEM/Copernicus_DSM_COG_10_N44_00_E007_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E006_00_DEM/Copernicus_DSM_COG_10_N45_00_E006_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N45_00_E007_00_DEM/Copernicus_DSM_COG_10_N45_00_E007_00_DEM.tif"
+  ],
+  "sourceRegion": "FR-73",
+  "difficultyColors": {
+    "easy": "blue",
+    "intermediate": "red"
+  },
+  "sourceSections": {
+    "Orelle": "Orelle",
+    "Val Thorens": "Val Thorens",
+    "Les Ménuires": "Les Menuires / Saint-Martin",
+    "Méribel": "Méribel",
+    "Courchevel": "Courchevel",
+    "Val Thorens - Orelle": "Val Thorens / Orelle"
+  },
+  "sectionAnchors": {
+    "Courchevel": [
+      6.634,
+      45.416
+    ],
+    "Méribel": [
+      6.568,
+      45.392
+    ],
+    "Les Menuires / Saint-Martin": [
+      6.541,
+      45.324
+    ],
+    "Val Thorens": [
+      6.578,
+      45.298
+    ],
+    "Orelle": [
+      6.57,
+      45.226
+    ]
+  },
+  "osmBounds": [
+    [
+      6.571,
+      45.289,
+      6.589,
+      45.301
+    ],
+    [
+      6.528,
+      45.317,
+      6.546,
+      45.329
+    ],
+    [
+      6.496,
+      45.372,
+      6.514,
+      45.384
+    ],
+    [
+      6.557,
+      45.388,
+      6.575,
+      45.4
+    ],
+    [
+      6.573,
+      45.364,
+      6.591,
+      45.376
+    ],
+    [
+      6.626,
+      45.408,
+      6.644,
+      45.42
+    ],
+    [
+      6.639,
+      45.413,
+      6.657,
+      45.425
+    ],
+    [
+      6.628,
+      45.426,
+      6.646,
+      45.438
+    ],
+    [
+      6.587,
+      45.425,
+      6.605,
+      45.437
+    ],
+    [
+      6.557,
+      45.447,
+      6.575,
+      45.459
+    ],
+    [
+      6.535,
+      45.201,
+      6.553,
+      45.213
+    ]
+  ],
+  "mountainStats": {
+    "pisteKm": 600
+  },
+  "landmarks": [
+    {
+      "id": "val-thorens",
+      "name": "Val Thorens",
+      "lonLat": [
+        6.58,
+        45.298
+      ],
+      "kind": "village"
+    },
+    {
+      "id": "les-menuires",
+      "name": "Les Menuires",
+      "lonLat": [
+        6.538,
+        45.323
+      ],
+      "kind": "village"
+    },
+    {
+      "id": "meribel",
+      "name": "Méribel",
+      "lonLat": [
+        6.566,
+        45.397
+      ],
+      "kind": "village"
+    },
+    {
+      "id": "courchevel",
+      "name": "Courchevel 1850",
+      "lonLat": [
+        6.633,
+        45.415
+      ],
+      "kind": "village"
+    },
+    {
+      "id": "cime-caron",
+      "name": "Cime de Caron",
+      "lonLat": [
+        6.5609518,
+        45.2632226
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "pointe-de-la-masse",
+      "name": "Pointe de la Masse",
+      "lonLat": [
+        6.5083067,
+        45.2973154
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "saulire",
+      "name": "Saulire",
+      "lonLat": [
+        6.6093404,
+        45.3824698
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "col-de-la-loze",
+      "name": "Col de la Loze",
+      "lonLat": [
+        6.6016031,
+        45.4050808
+      ],
+      "kind": "viewpoint"
+    },
+    {
+      "id": "pointe-du-bouchet",
+      "name": "Pointe du Bouchet",
+      "lonLat": [
+        6.6042942,
+        45.253888
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "brides-les-bains",
+      "name": "Brides-les-Bains",
+      "lonLat": [
+        6.5667816,
+        45.4525213
+      ],
+      "kind": "village"
+    }
+  ]
+}

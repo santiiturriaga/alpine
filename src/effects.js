@@ -2,9 +2,12 @@ import * as THREE from 'three';
 import { clamp, makeCanvas, mulberry32, makeRadialTexture } from './util.js';
 import { heightAt, normalAt, terrain } from './terrain.js';
 import { WORLD } from './worlddata.js';
+import { climateUniforms } from './climate-state.js';
 
-export const SUN_DIR = new THREE.Vector3(-0.56, 0.415, 0.715).normalize();
-const middayDirection=SUN_DIR.clone(), lowSunDirection=new THREE.Vector3(-.89,.212,.403).normalize();
+export const SUN_DIR = climateUniforms.snowSunDirection.value;
+const middayDirection = SUN_DIR.clone(), skySunDirection = SUN_DIR.clone();
+const lowSunDirection = new THREE.Vector3(-.89,.212,.403).normalize();
+const goldenDirection = new THREE.Vector3(-.94,.085,.33).normalize();
 const moonDirection = new THREE.Vector3(.55,.48,-.68).normalize();
 
 /* ═══════════════════════════════════════════════════════════════
@@ -42,11 +45,14 @@ export function createLighting(scene) {
     setClimate(palette) {
       if (palette.cycle) {
         const azimuth = (palette.hour - 12) * Math.PI / 12 + .47;
-        SUN_DIR.set(-Math.sin(azimuth), Math.max(.035, palette.sunArc * .65), Math.cos(azimuth))
-          .normalize().lerp(moonDirection, palette.darkness).normalize();
+        skySunDirection.set(-Math.sin(azimuth), Math.max(-.24, palette.sunArc * .67), Math.cos(azimuth)).normalize();
       } else {
-        SUN_DIR.copy(middayDirection).lerp(lowSunDirection, palette.late).lerp(moonDirection, palette.darkness).normalize();
+        skySunDirection.copy(middayDirection).lerp(lowSunDirection, palette.late)
+          .lerp(goldenDirection, palette.golden).normalize();
       }
+      SUN_DIR.copy(skySunDirection);
+      SUN_DIR.y = Math.max(.028, SUN_DIR.y);
+      SUN_DIR.lerp(moonDirection, palette.darkness).normalize();
       sun.color.copy(palette.lightColor); sun.intensity = palette.sunIntensity;
       hemi.color.copy(palette.hemiSky); hemi.groundColor.copy(palette.hemiGround);
       hemi.intensity = palette.hemiIntensity;
@@ -100,7 +106,7 @@ export function createSky(scene) {
     depthWrite: false,
     fog: false,
     uniforms: {
-      uSun: { value: SUN_DIR },
+      uSun: { value: skySunDirection },
       uEye: { value: new THREE.Vector3() },
       uTime: { value: 0 },
       uZenith: { value: new THREE.Color(0x295b94) },
@@ -114,6 +120,8 @@ export function createSky(scene) {
       uMoon: { value: moonDirection },
       uMoonStrength: { value: 0 },
       uSunStrength: { value: 1 },
+      uGolden: { value: 0 },
+      uWhiteout: { value: 0 },
     },
     vertexShader: /* glsl */`
       varying vec3 vDir;
@@ -140,6 +148,8 @@ export function createSky(scene) {
       uniform vec3 uMoon;
       uniform float uMoonStrength;
       uniform float uSunStrength;
+      uniform float uGolden;
+      uniform float uWhiteout;
 
       float skyHash(vec2 p) {
         p = fract(p * vec2(.1031, .1030));
@@ -173,18 +183,23 @@ export function createSky(scene) {
         float horizon = exp(-h*5.8);
         vec3 col = mix(uMid,uZenith,smoothstep(.07,.86,h));
         col = mix(col,uHorizon,horizon*.9);
-        float sd = max(dot(d, normalize(uSun)), 0.0);
-        col += uSunColor*uSunStrength*(smoothstep(.99993,.999986,sd)*5.4 + pow(sd,132.0)*.23 + pow(sd,14.0)*.16);
+        float sd = max(dot(d, uSun), 0.0);
+        float edge = max(fwidth(sd) * .85, .000006);
+        float solarDisk = smoothstep(.999958-edge,.999958+edge,sd);
+        float forwardScatter = pow(sd, mix(16.0, 7.0, uGolden)) * mix(.092, .33, uGolden);
+        float longPath = exp(-h * 6.5) * pow(sd, 3.0) * uGolden;
+        col = mix(col, uSunColor, longPath * uSunStrength * .40);
+        vec3 sunlight = uSunColor*uSunStrength*(solarDisk*6.1 + pow(sd,175.0)*.33 + forwardScatter);
         float md = max(dot(d, uMoon), 0.0);
         col += vec3(.66,.77,.98)*uMoonStrength*(smoothstep(.999968,.999984,md)*1.75 + pow(md,150.0)*.041);
         col = mix(col, uHorizon, 1.0-smoothstep(-.12,0.0,d.y));
-        if (d.y > .008) {
+        if (d.y > .008 && uWhiteout < .995) {
           vec2 wind=vec2(uTime*.007,-uTime*.0028);
           vec2 farPlane=(uEye.xz*.43+d.xz*(2700.0/(d.y+.065)))*.00052;
           vec2 cirrus=vec2(farPlane.x*.72 + farPlane.y*.37,farPlane.y*3.71-farPlane.x*.75);
           cirrus.y+=2.9*skyNoise(farPlane*.76);
           float streak=smoothstep(.43,.74,cloudNoise(cirrus+wind*1.49));
-          float veil=streak*(.08+.26*uCloud)*smoothstep(.008,.18,d.y);
+          float veil=streak*(.08+.26*uCloud+.16*uGolden)*smoothstep(.008,.18,d.y)*(1.0-uWhiteout);
           col=mix(col,uCloudLight,veil);
           vec2 nearPlane=(uEye.xz*.57+d.xz*(1470.0/(d.y+.084)))*.00165+wind;
           float cloud=cloudDensity(nearPlane);
@@ -193,12 +208,20 @@ export function createSky(scene) {
           cloud=clamp(cloud+(ridges-.5)*.76*cloud*(1.-cloud),0.,1.);
           float light = clamp(.57+.22*ridges-.24*shade+(cloud-shade)*.89+pow(sd,8.)*.24, 0.0, 1.0);
           vec3 cloudColor=mix(uCloudShade,uCloudLight,light);
-          col=mix(col,cloudColor,cloud*.88*smoothstep(.008,.14,d.y));
+          float backlit = pow(sd, 11.0) * uSunStrength * (.25 + .75 * uGolden);
+          cloudColor += uSunColor * backlit * (.18 + .80 * max(0.0, cloud - shade));
+          col=mix(col,cloudColor,cloud*.88*smoothstep(.008,.14,d.y)*(1.0-uWhiteout));
+          sunlight *= (1.0-veil*.33) * (1.0-cloud*mix(.74,.99,solarDisk));
           // A few dim stars emerge through clear gaps at the end of dusk.
           vec2 starUv = vec2(atan(d.z,d.x),asin(d.y))*460.0;
           vec2 cell = floor(starUv);
           float star = step(.9965,skyHash(cell))*exp(-length(fract(starUv)-.5)*18.0);
           col += vec3(.48,.61,.87)*star*uNight*(1.0-cloud)*smoothstep(.12,.45,d.y);
+        }
+        col += sunlight * smoothstep(-.02,.015,d.y) * (1.0-uWhiteout);
+        if (uWhiteout > .01) {
+          vec2 haze = d.xz*6.0 + vec2(uTime*.38,-uTime*.12);
+          col *= 1.0 - uWhiteout*.07*skyNoise(haze + d.y*vec2(2.9,6.0));
         }
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
@@ -222,6 +245,8 @@ export function createSky(scene) {
       skyMat.uniforms.uNight.value = palette.night;
       skyMat.uniforms.uMoonStrength.value = palette.darkness;
       skyMat.uniforms.uSunStrength.value = palette.sunStrength;
+      skyMat.uniforms.uGolden.value = palette.golden;
+      skyMat.uniforms.uWhiteout.value = palette.whiteout;
     },
     update(dt, camera) {
       sky.position.copy(camera.position);
@@ -597,62 +622,80 @@ export class TuckWind {
 
 export class Snowstorm {
   constructor(scene) {
-    const count = 14500;
+    this.count = 16384;
     const rand = mulberry32(5511);
-    const positions = new Float32Array(count * 3);
-    const motion = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-      positions.set([rand() * 92, rand() * 44, rand() * 92], i * 3);
-      motion.set([.68 + rand() * .96, .006 + rand() ** 2 * .024, rand()], i * 3);
+    const positions = new Float32Array(this.count * 3);
+    const motion = new Float32Array(this.count * 4);
+    for (let i = 0; i < this.count; i++) {
+      const near = i % 16 < 3;
+      const span = near ? 19 : 92;
+      positions.set([rand() * span, rand() * (near ? 11 : 44), rand() * span], i * 3);
+      motion.set([.68 + rand() * .96, .008 + rand() ** 2 * (near ? .051 : .023), rand(), Number(near)], i * 4);
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('flake', new THREE.BufferAttribute(motion, 3));
+    geometry.setAttribute('flake', new THREE.BufferAttribute(motion, 4));
     this.wind = 2.8;
     this.gust = .2;
     this.uniforms = {
       seconds: { value: 0 }, frameHeight: { value: 900 }, shelter: { value: 0 },
+      fallSeconds: { value: 0 },
       precipitation: { value: .22 }, drift: { value: new THREE.Vector3() },
-      squall: { value: 0 }, night: { value: 0 }, snowline: { value: 210 },
+      squall: { value: 0 }, night: { value: 0 }, snowline: { value: 210 }, whiteout: { value: 0 },
     };
     const material = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
       transparent: true, depthWrite: false,
       vertexShader: /* glsl */`
-        attribute vec3 flake;
+        attribute vec4 flake;
         uniform float seconds;
+        uniform float fallSeconds;
         uniform float frameHeight;
         uniform float shelter;
         uniform float precipitation;
         uniform vec3 drift;
         uniform float squall;
         uniform float snowline;
+        uniform float whiteout;
         varying float opacity;
         varying float rotation;
         varying float aspectRatio;
         varying float rain;
         void main() {
+          float nearLayer = flake.w;
+          float density = mix(precipitation, mix(precipitation*.26, 1., whiteout),nearLayer);
+          if (flake.z > density + .026) {
+            gl_Position = vec4(2.,2.,2.,1.);
+            gl_PointSize = 1.0;
+            return;
+          }
           float phase = flake.z * 6.283;
           rain = 1.0-smoothstep(snowline-120.0,snowline+120.0,cameraPosition.y);
-          vec3 volume = vec3(92.0,44.0,92.0);
-          vec3 fall = vec3(0.0,-seconds*flake.x*mix(1.0,8.0,rain),0.0);
-          vec3 flutter = vec3(sin(seconds*1.7+phase)*.24, cos(seconds*1.9+phase)*.10,
-            cos(seconds*1.2+phase)*.34) * (1.0-rain);
+          vec3 volume = mix(vec3(92.,44.,92.),vec3(19.,11.,19.),nearLayer);
+          vec3 fall = vec3(0.,-flake.x*mix(fallSeconds,seconds*8.0,rain),0.);
+          float eddies = 1.0 + nearLayer * squall * .85;
+          vec3 flutter = vec3(sin(seconds*2.4+phase)*.23, cos(seconds*2.05+phase)*.16,
+            cos(seconds*1.7+phase)*.32) * (1.0-rain) * eddies;
           vec3 eyeOffset = mod(position + drift + fall + flutter - cameraPosition, volume) - volume * .5;
           vec3 world = cameraPosition + eyeOffset;
           vec4 view = viewMatrix * vec4(world, 1.0);
           gl_Position = projectionMatrix * view;
-          float metresToPixels = frameHeight * .5 * projectionMatrix[1][1] / max(.35, -view.z);
-          float flakePixels = flake.y * metresToPixels;
-          gl_PointSize = clamp(flakePixels + 1.0 + rain * 2.0, 1.1, mix(10.0,18.0,rain));
+          float distanceToEye = -view.z;
+          float metresToPixels = frameHeight * .5 * projectionMatrix[1][1] / max(.35, distanceToEye);
+          float windStretch = nearLayer * squall * mix(.65,2.85,whiteout);
+          float flakePixels = flake.y * metresToPixels * (1.0 + windStretch * .94);
+          gl_PointSize = clamp(flakePixels + 1.1 + rain * 2.0, 1.1, mix(10.0,19.0,max(nearLayer,rain)));
           vec3 edge = 1.0 - smoothstep(vec3(.38),vec3(.50),abs(eyeOffset)/volume);
           opacity = (.35 + .40 * flake.z) * edge.x * edge.y * edge.z
-            * smoothstep(.38,1.8,-view.z) * (1.0-smoothstep(32.0,57.0,-view.z));
-          opacity *= smoothstep(flake.z-.025,flake.z+.025,precipitation);
+            * smoothstep(.48,1.85,distanceToEye) * (1.0-smoothstep(32.0,57.0,distanceToEye));
+          opacity *= smoothstep(flake.z-.025,flake.z+.025,density) * mix(1.,1.39,whiteout*nearLayer);
           opacity *= 1.0-shelter;
-          opacity *= mix(1.0,.54,rain);
-          rotation = mix(phase + seconds * (flake.z - .5) * 1.9,-.24-squall*.30,rain);
-          aspectRatio = mix(.56 + .39 * abs(sin(phase+seconds*1.2)),.075,rain);
+          opacity *= mix(1.0,mix(.54,.13,nearLayer),rain);
+          vec3 flow = mat3(viewMatrix) * vec3(-.78*squall,-.18,.39*squall);
+          // Point coordinates increase down the screen, unlike the view basis.
+          float windAngle = atan(flow.x,-flow.y);
+          rotation = mix(phase + seconds * (flake.z - .5) * 1.9,windAngle,max(rain,smoothstep(.12,1.3,windStretch)));
+          aspectRatio = mix((.63 + .33 * abs(sin(phase+seconds*1.2)))/(1.0+windStretch),.10,rain);
         }
       `,
       fragmentShader: /* glsl */`
@@ -683,11 +726,13 @@ export class Snowstorm {
     scene.add(this.points);
   }
 
-  setWeather({ precipitation = .22, wind = 2.8, gust = .2, night = 0, snowline = 210 } = {}) {
+  setWeather({ precipitation = .22, wind = 2.8, gust = .2, night = 0, whiteout = 0, snowline = 210 } = {}) {
     this.uniforms.precipitation.value = precipitation;
     this.uniforms.night.value = night;
     this.uniforms.snowline.value = snowline;
     this.uniforms.squall.value = gust;
+    this.uniforms.whiteout.value = whiteout;
+    this.points.geometry.setDrawRange(0, precipitation < .30 ? 4096 : precipitation < .90 ? 12288 : this.count);
     this.wind = wind;
     this.gust = gust;
     this.points.visible = precipitation > .006;
@@ -697,6 +742,7 @@ export class Snowstorm {
 
   update(dt, sheltered = false) {
     this.uniforms.seconds.value += dt;
+    this.uniforms.fallSeconds.value += dt * (1 + this.gust * .9);
     this.uniforms.shelter.value += (Number(sheltered)-this.uniforms.shelter.value)*(1-Math.exp(-dt*12));
     const t=this.uniforms.seconds.value;
     // Integrate wind displacement rather than multiplying time by speed: a
@@ -1065,8 +1111,8 @@ export class SkiTracks {
     this.sampleNormal=new THREE.Vector3();
     this.scene = scene;
     this.build();
-    this.dirtyStart = Infinity;
-    this.dirtyEnd = 0;
+    this.uploadStart = 0;
+    this.uploadCount = 0;
   }
 
   createMaterial() {
@@ -1138,7 +1184,6 @@ export class SkiTracks {
     const birth = new Float32Array(verts);
     const across = new Float32Array(verts);
     const soft = new Float32Array(verts);
-    const shade = new Float32Array(verts);
     const color=new Float32Array(verts*3),normal=new Float32Array(verts*3);
     const idx = new Uint32Array(max * (cols-1) * 6);
     for (let s = 0; s < max; s++) {
@@ -1154,7 +1199,6 @@ export class SkiTracks {
     geo.setAttribute('aBirth', new THREE.BufferAttribute(birth, 1));
     geo.setAttribute('aAcross', new THREE.BufferAttribute(across, 1));
     geo.setAttribute('aSoft', new THREE.BufferAttribute(soft, 1));
-    geo.setAttribute('aShade', new THREE.BufferAttribute(shade, 1));
     geo.setAttribute('color',new THREE.BufferAttribute(color,3));
     geo.setAttribute('normal',new THREE.BufferAttribute(normal,3));
     for (const attribute of Object.values(geo.attributes)) attribute.setUsage(THREE.DynamicDrawUsage);
@@ -1172,7 +1216,6 @@ export class SkiTracks {
     this.birthAttr = geo.attributes.aBirth;
     this.acrossAttr = geo.attributes.aAcross;
     this.softAttr = geo.attributes.aSoft;
-    this.shadeAttr = geo.attributes.aShade;
     this.colorAttr=geo.attributes.color;
     this.normalAttr=geo.attributes.normal;
   }
@@ -1181,6 +1224,9 @@ export class SkiTracks {
     const points = [left, right];
     const soft = options.surface === 'ice' ? .012 : clamp(snowDepth, 0, 1);
     const carve = clamp(Math.abs(options.carve || 0) + Number(options.brake || 0)*.65, 0, 1.5);
+    const stop = clamp(options.stop ?? 0, 0, 1);
+    const motion = options.velocity;
+    const acrossSlip = stop > .08 && motion && Math.hypot(motion.x, motion.z) > .3;
     for (let ski = 0; ski < 2; ski++) {
       if (options.planted?.[ski] === false) {
         this.inputs[ski] = this.last[ski] = null;
@@ -1193,10 +1239,11 @@ export class SkiTracks {
       const heading = options.heading ?? (previous ? Math.atan2(p.x-previous.x,p.z-previous.z) : 0);
       const axis = options.axes?.[ski];
       const horizontal = axis ? Math.hypot(axis.x,axis.z) : 1;
+      const slipSpeed = acrossSlip ? Math.hypot(motion.x, motion.z) : 1;
       const row = {
-        x:p.x, z:p.z, time, rx:axis ? axis.z/horizontal : Math.cos(heading),
-        rz:axis ? -axis.x/horizontal : -Math.sin(heading),
-        soft, carve, compression:clamp(options.compression?.[ski] ?? options.compression ?? soft*.075,0,.15),
+        x:p.x, z:p.z, time, rx:acrossSlip ? motion.z/slipSpeed : axis ? axis.z/horizontal : Math.cos(heading),
+        rz:acrossSlip ? -motion.x/slipSpeed : axis ? -axis.x/horizontal : -Math.sin(heading),
+        soft, carve, stop, compression:clamp(options.compression?.[ski] ?? options.compression ?? soft*.075,0,.15),
       };
       const length = previous ? Math.hypot(row.x-previous.x,row.z-previous.z) : 0;
       // Teleports, landings and an individually lifted ski start a fresh strip.
@@ -1217,6 +1264,7 @@ export class SkiTracks {
           time:previous.time+(time-previous.time)*t, rx, rz,
           soft:previous.soft+(soft-previous.soft)*t,
           carve:previous.carve+(carve-previous.carve)*t,
+          stop:previous.stop+(stop-previous.stop)*t,
           compression:previous.compression+(row.compression-previous.compression)*t,
         };
         this.writeSegment(this.last[ski],next);
@@ -1235,8 +1283,8 @@ export class SkiTracks {
       const p=row === 0 ? a : b;
       const skim = Math.sin(p.x*1.6+p.z*.92 + 1.2*Math.sin(p.z*.81-p.x*.4));
       const brokenSnow = Math.sin(p.z*5.3 - p.x*2.7 + 2.8*skim);
-      const width=(.112+p.soft*.074+p.carve*p.soft*.022) * (1 + p.soft*.095*skim);
-      const berm=(.001+p.soft*.020+p.compression*.16)*(1+p.carve*.25);
+      const width=(.112+p.soft*.074+p.carve*p.soft*.022+p.stop*.37) * (1 + p.soft*.095*skim);
+      const berm=(.001+p.soft*.020+p.compression*.16+p.stop*p.soft*.09)*(1+p.carve*.25);
       this.sampleColor.setRGB(.85,.91,.96);
       this.sampleNormal.set(0,1,0);
       this.ground.sampleSnowSurface?.(p.x,p.z,this.sampleColor,this.sampleNormal);
@@ -1257,16 +1305,13 @@ export class SkiTracks {
         const before=Math.max(0,c-1),after=Math.min(cols-1,c+1);
         const slope=(this.profile[after]-this.profile[before])*berm*rough/
           ((this.columns[after]-this.columns[before])*width);
-        const normalLength=Math.sqrt(1+slope*slope);
-        const sunlight=(-p.rx*slope*SUN_DIR.x+SUN_DIR.y-p.rz*slope*SUN_DIR.z)/normalLength;
-        this.shadeAttr.setX(vertex,.73+Math.max(0,sunlight)*.43);
         const nx=this.sampleNormal.x-p.rx*slope*.65,ny=this.sampleNormal.y,nz=this.sampleNormal.z-p.rz*slope*.65;
         const length=Math.hypot(nx,ny,nz);
         this.normalAttr.setXYZ(vertex,nx/length,ny/length,nz/length);
       }
     }
-    this.dirtyStart=Math.min(this.dirtyStart,base);
-    this.dirtyEnd=Math.max(this.dirtyEnd,base+cols*2);
+    if (this.uploadCount === 0) this.uploadStart = this.segmentCursor;
+    this.uploadCount = Math.min(this.maxSegments, this.uploadCount + 1);
     this.segmentCursor = (this.segmentCursor + 1) % this.maxSegments;
     this.segmentCount = Math.min(this.maxSegments, this.segmentCount + 1);
   }
@@ -1281,8 +1326,7 @@ export class SkiTracks {
     this.segmentCount = 0;
     this.segmentCursor = 0;
     this.geo.setDrawRange(0, 0);
-    this.dirtyStart=Infinity;
-    this.dirtyEnd=0;
+    this.uploadCount=0;
   }
 
   update(time,player=null,active=true) {
@@ -1298,13 +1342,17 @@ export class SkiTracks {
         uniforms.uSink.value.setComponent(i,player.rig.skiPlanted?.[i] === false ? 0 : player.rig.skiSink?.[i] ?? player.snowSink ?? 0);
       }
     }
-    if (this.dirtyEnd > this.dirtyStart) {
+    if (this.uploadCount > 0) {
+      const first = Math.min(this.uploadCount, this.maxSegments - this.uploadStart);
+      const wrapped = this.uploadCount - first;
+      const span = this.columns.length * 2;
       for (const attribute of Object.values(this.geo.attributes)) {
-        attribute.addUpdateRange(this.dirtyStart*attribute.itemSize,(this.dirtyEnd-this.dirtyStart)*attribute.itemSize);
+        const width = span * attribute.itemSize;
+        attribute.addUpdateRange(this.uploadStart * width, first * width);
+        if (wrapped) attribute.addUpdateRange(0, wrapped * width);
         attribute.needsUpdate=true;
       }
-      this.dirtyStart=Infinity;
-      this.dirtyEnd=0;
+      this.uploadCount=0;
     }
   }
 }

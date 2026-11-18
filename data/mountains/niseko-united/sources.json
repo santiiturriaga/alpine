@@ -1,0 +1,102 @@
+{
+  "id": "niseko-united",
+  "name": "Niseko United",
+  "sourceAreas": [
+    "ニセコユナイテッド, Niseko United"
+  ],
+  "origin": [
+    140.667,
+    42.851
+  ],
+  "crs": "EPSG:32654",
+  "bounds": {
+    "minX": -2304,
+    "maxX": 3408,
+    "minZ": -5112,
+    "maxZ": 1320
+  },
+  "terrainStep": 12,
+  "backdropBounds": {
+    "minX": -23000,
+    "maxX": 23000,
+    "minZ": -23000,
+    "maxZ": 23000
+  },
+  "backdropStep": 100,
+  "backdropQuantization": 0.1,
+  "terrainQuantization": 0.075,
+  "coverSources": [
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N42E138_Map.tif"
+  ],
+  "viewDistance": 21000,
+  "startLift": "ace-gondola",
+  "startRun": "paradise",
+  "beginnerLift": "ace-family-quad-1",
+  "beginnerRun": "family",
+  "references": [
+    "https://www.niseko.ne.jp/en/map/"
+  ],
+  "elevationSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N42_00_E140_00_DEM/Copernicus_DSM_COG_10_N42_00_E140_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N43_00_E140_00_DEM/Copernicus_DSM_COG_10_N43_00_E140_00_DEM.tif"
+  ],
+  "sourceRegion": "JP-01",
+  "difficultyColors": {
+    "intermediate": "red"
+  },
+  "sectionAnchors": {
+    "Annupuri": [
+      140.646,
+      42.856
+    ],
+    "Niseko Village": [
+      140.668,
+      42.859
+    ],
+    "Grand Hirafu": [
+      140.697,
+      42.866
+    ],
+    "Hanazono": [
+      140.703,
+      42.89
+    ]
+  },
+  "osmBounds": [
+    [
+      140.635,
+      42.843,
+      140.653,
+      42.855
+    ],
+    [
+      140.659,
+      42.841,
+      140.677,
+      42.853
+    ],
+    [
+      140.691,
+      42.853,
+      140.709,
+      42.865
+    ],
+    [
+      140.7,
+      42.89,
+      140.718,
+      42.902
+    ]
+  ],
+  "landmarks": [
+    {
+      "id": "niseko-annupuri",
+      "name": "Niseko Annupuri",
+      "lonLat": [
+        140.6589,
+        42.8751
+      ],
+      "kind": "peak"
+    }
+  ]
+}

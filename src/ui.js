@@ -26,6 +26,7 @@ const NEARBY_LINE_STYLES = {
   unrated: { color: '#d3dce4', dash: [1, 3] },
   green: { color: '#a6f88c', dash: [] },
   blue: { color: '#7bddff', dash: [] },
+  red: { color: '#ff8b90', dash: [] },
   black: { color: '#f5fbff', dash: [] },
   double: { color: '#f5fbff', dash: [5, 2.5] },
 };
@@ -127,14 +128,22 @@ export class UI {
 
   setLoading(p, text) {
     const pct = clamp(p, 0, 1);
-    this.el.loading?.style.setProperty('--snowball-size', (.09 + .91 * Math.cbrt(pct)).toFixed(3));
-    this.el.loading?.style.setProperty('--snowball-roll', (-65 + 85 * pct) + 'deg');
-    if (this.el.loadBar) this.el.loadBar.style.width = `${(pct * 100).toFixed(1)}%`;
+    this.el.loading?.style.setProperty('--loading-progress', pct);
+    this.el.loadBar?.parentElement.setAttribute('aria-valuenow', Math.round(pct * 100));
     if (text && this.el.loadStatus) this.el.loadStatus.textContent = text;
   }
 
   finishLoading() {
-    this.el.loading?.classList.add('hidden');
+    const screen = this.el.loading;
+    if (!screen) return;
+    if (Number(screen.style.getPropertyValue('--loading-progress')) < 1) {
+      this.setLoading(1, 'Ready when you are.');
+      if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        setTimeout(() => screen.classList.add('hidden'), 280);
+        return;
+      }
+    }
+    screen.classList.add('hidden');
   }
 
   showStart(show = true) {

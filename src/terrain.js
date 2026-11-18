@@ -647,23 +647,8 @@ export function buildCoastMountains({ heights, cover }, tusk) {
   }
   const regionalNear = coniferGeometry('hemlock', -1);
   const regionalFar = coniferGeometry('hemlock', -2);
-  const rimedRegionalMaterial = (level) => {
-    const material = coniferMaterial(level, 'regional'), compile = material.onBeforeCompile;
-    material.onBeforeCompile = (shader, renderer) => {
-      compile(shader,renderer);
-      // Snow-laden subalpine crowns become pale and rimed; the lower
-      // valley stays predominantly green beneath its exposed upper lips.
-      shader.vertexShader = shader.vertexShader.replace(
-        'crownSnow=deposition*smoothstep(1370.0,1820.0,forestOrigin.y);',
-        'crownSnow=deposition*smoothstep(1110.0,1580.0,forestOrigin.y);');
-      shader.fragmentShader = shader.fragmentShader.replace(
-        'rime = crownSnow*frostedLip*.62;',
-        'rime = crownSnow*(.38+.62*frostedLip)*.91;');
-    };
-    material.customProgramCacheKey = () => `regional-subalpine-rime-${level}-v1`;
-    return material;
-  };
-  const regionalMaterial = rimedRegionalMaterial(0), regionalFarMaterial=rimedRegionalMaterial(-2);
+  const regionalMaterial = coniferMaterial(-1, 'regional');
+  const regionalFarMaterial = coniferMaterial(-2, 'regional');
   const tree = new THREE.Object3D();
   for (const groves of groveCells.values()) {
     const center = new THREE.Vector3();

@@ -1,0 +1,106 @@
+{
+  "id": "ski-arlberg",
+  "name": "Ski Arlberg",
+  "sourceAreas": [
+    "Ski Arlberg",
+    "St. Anton/St. Christoph/Stuben",
+    "Lech/Zürs",
+    "Warth-Schröcken"
+  ],
+  "origin": [
+    10.152,
+    47.142
+  ],
+  "crs": "EPSG:32632",
+  "bounds": {
+    "minX": -5600,
+    "maxX": 11000,
+    "minZ": -15000,
+    "maxZ": 5800
+  },
+  "terrainStep": 20,
+  "backdropBounds": {
+    "minX": -33000,
+    "maxX": 33000,
+    "minZ": -33000,
+    "maxZ": 33000
+  },
+  "backdropStep": 100,
+  "backdropQuantization": 0.1,
+  "terrainQuantization": 0.075,
+  "coverSources": [
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N45E009_Map.tif"
+  ],
+  "viewDistance": 31000,
+  "startLift": "galzigbahn",
+  "startRun": "osthang-einfahrt",
+  "beginnerLift": "ubungslift-gampen-i",
+  "beginnerRun": "piste-ubungslift-gampen-i-ii",
+  "references": [
+    "https://www.skiarlberg.at/en/live-info/map-navigation"
+  ],
+  "elevationSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E009_00_DEM/Copernicus_DSM_COG_10_N46_00_E009_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E010_00_DEM/Copernicus_DSM_COG_10_N46_00_E010_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N47_00_E009_00_DEM/Copernicus_DSM_COG_10_N47_00_E009_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N47_00_E010_00_DEM/Copernicus_DSM_COG_10_N47_00_E010_00_DEM.tif"
+  ],
+  "difficultyColors": {
+    "easy": "blue",
+    "intermediate": "red"
+  },
+  "sourceSections": {
+    "Warth-Schröcken": "Warth–Schröcken",
+    "Lech/Zürs": "Lech–Zürs",
+    "St. Anton/St. Christoph/Stuben": "St. Anton–St. Christoph–Stuben"
+  },
+  "sectionAnchors": {
+    "Warth–Schröcken": [
+      10.16,
+      47.255
+    ],
+    "Lech–Zürs": [
+      10.14,
+      47.203
+    ],
+    "St. Anton–St. Christoph–Stuben": [
+      10.246,
+      47.129
+    ]
+  },
+  "osmBounds": [
+    [
+      10.253,
+      47.122,
+      10.271,
+      47.134
+    ],
+    [
+      10.131,
+      47.203,
+      10.149,
+      47.215
+    ],
+    [
+      10.153,
+      47.162,
+      10.171,
+      47.174
+    ],
+    [
+      10.172,
+      47.253,
+      10.19,
+      47.265
+    ],
+    [
+      10.151,
+      47.134,
+      10.169,
+      47.146
+    ]
+  ],
+  "mountainStats": {
+    "pisteKm": 301
+  }
+}

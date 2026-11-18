@@ -3,6 +3,7 @@ import { createMapRelief, drawMapRelief } from './map-relief.js';
 const STYLES = {
   green: { text: 'Easiest', ink: '#177141', symbol: 'circle' },
   blue: { text: 'Intermediate', ink: '#09579b', symbol: 'square' },
+  red: { text: 'Red piste', ink: '#a6242e', symbol: 'red' },
   black: { text: 'Most difficult', ink: '#1f2c38', symbol: 'diamond' },
   double: { text: 'Expert only', ink: '#1f2c38', symbol: 'double', dash: [4, 2] },
   unrated: { text: 'Unrated', ink: '#63787b', dash: [2, 2] },
@@ -67,7 +68,7 @@ function metric(value) {
   return value >= 1000 ? `${(value / 1000).toFixed(value % 1000 ? 1 : 0)} km` : `${Math.round(value)} m`;
 }
 
-function lineFeatures(runs, lifts) {
+function lineFeatures(runs, lifts, colorNames = false) {
   const runLines = runs.filter(run => run.points?.length > 1).map(run => {
     const difficulty = STYLES[run.difficulty] ? run.difficulty : 'unrated';
     return {
@@ -84,7 +85,9 @@ function lineFeatures(runs, lifts) {
     approachRadius: lift.board ? 0 : 8, description: lift.rideable === false ? 'Private lift' : 'Lift · base station',
   }));
   return [...runLines, ...liftsLines].map(feature => ({
-    ...feature, badge: STYLES[feature.style],
+    ...feature, badge: colorNames && ['green', 'blue', 'red', 'black'].includes(feature.style)
+      ? { ...STYLES[feature.style], text: `${feature.style[0].toUpperCase()}${feature.style.slice(1)} piste` }
+      : STYLES[feature.style],
     bounds: extent(feature.points, 1), path: linePath(feature.points),
   }));
 }
@@ -121,6 +124,8 @@ export function mappedAtlasSettings({ mountain, config, runs, ground, lifts }) {
   const summerLifts = config.summerLifts ?? (config.id === 'crystal-mountain' ? ['mt-rainier-gondola']
     : config.id === 'snoqualmie' ? ['silver-fir-express', 'pacific-crest'] : []);
   return { name: mountain.label, bounds: ground.bounds, heightAt: ground.heightAt,
+    pisteColors: config.difficultyColors?.intermediate === 'red',
+    terrainOnly: config.terrainOnly,
     landmarks, views, runs, lifts: mappedLifts, roads: config.roads ?? [], buildings: config.buildings ?? [],
     summerRoutes: config.summerRoutes ?? [], summerLifts: mappedLifts.filter(lift => summerLifts.includes(lift.id)), summerSource: summerHref,
     source: href ?? null };
@@ -146,7 +151,7 @@ export class ResortMap {
   configure(settings, route) {
     this.settings = settings;
     this.route = route;
-    this.winterLines = lineFeatures(settings.runs, settings.lifts);
+    this.winterLines = lineFeatures(settings.runs, settings.lifts, settings.pisteColors);
     this.summerLines = settings.summerRoutes?.length ? lineFeatures(settings.summerRoutes, settings.summerLifts) : null;
     this.features = new Map([...this.winterLines, ...this.summerLines ?? []].map(feature => [feature.id, feature]));
     this.findSelect.replaceChildren(new Option('Choose a destination', ''));
@@ -169,7 +174,8 @@ export class ResortMap {
     this.lines = summer ? this.summerLines : this.winterLines;
     const points = this.lines.flatMap(feature => feature.points);
     for (const { x, z } of this.landmarks) points.push([x, z]);
-    this.overview = { id: 'all', name: 'Entire resort', bounds: points.length ? extent(points, 230) : settings.bounds };
+    this.overview = { id: 'all', name: settings.terrainOnly ? 'Entire mountain' : 'Entire resort',
+      bounds: settings.terrainOnly || !points.length ? settings.bounds : extent(points, 230) };
     const sections = new Map();
     if (summer) for (const feature of this.lines) {
       if (!feature.section) continue;
@@ -182,13 +188,33 @@ export class ResortMap {
     this.addOptions('Lifts', this.lines.filter(feature => feature.kind === 'lift'));
     this.addOptions('Trails', this.lines.filter(feature => feature.kind === 'run' && feature.named));
     $('map-title').textContent = summer ? 'Summer trail map' : 'Trail map';
+    if (settings.terrainOnly) $('map-title').textContent = 'Mountain map';
     const legend = this.screen.querySelector('.trail-key');
+    legend.classList.toggle('terrain-map', !!settings.terrainOnly);
+    const grades = legend.querySelectorAll('.trail-key-grade:not(.trail-key-red)');
+    const usePisteColors = settings.pisteColors && !summer;
+    ['Easiest', 'Intermediate', 'Most difficult'].forEach((label, i) => {
+      grades[i].lastChild.textContent = usePisteColors ? ['Green', 'Blue', 'Black'][i] : label;
+    });
+    let redGrade = legend.querySelector('.trail-key-red');
+    if (!redGrade) {
+      redGrade = document.createElement('li');
+      redGrade.className = 'trail-key-grade trail-key-red';
+      const symbol = document.createElement('i');
+      symbol.dataset.symbol = 'red';
+      redGrade.append(symbol, 'Red');
+      grades[1].after(redGrade);
+    }
+    redGrade.style.display = usePisteColors && this.lines.some(feature => feature.style === 'red') ? '' : 'none';
     legend.classList.toggle('summer-hike', summer && this.lines.some(feature => feature.activity === 'hike'));
     legend.classList.toggle('summer-bike', summer && this.lines.some(feature => feature.activity === 'bike'));
     const source = $('atlas-original');
     const reference = summer ? settings.summerSource ?? settings.source : settings.source;
     source.hidden = !reference;
-    if (reference) source.href = reference;
+    if (reference) {
+      source.href = reference;
+      source.textContent = settings.terrainOnly ? '· Mountain reference ↗' : '· Official resort map ↗';
+    }
     this.byStyle = Object.fromEntries(Object.keys(STYLES).map(style => [
       style, this.lines.filter(feature => feature.style === style),
     ]));
@@ -352,7 +378,7 @@ export class ResortMap {
     this.title.textContent = selected?.name ?? 'Choose a destination';
     this.description.textContent = selected
       ? [selected.description ?? selected.badge.text, selected.section, selected.length && metric(selected.length)].filter(Boolean).join(' · ')
-      : 'Select a trail, lift or landmark on the map.';
+      : this.settings?.terrainOnly ? 'Select a viewpoint or summit on the map.' : 'Select a trail, lift or landmark on the map.';
     this.badge.dataset.symbol = selected?.badge.symbol ?? selected?.style ?? '';
     this.badge.style.color = selected?.badge.ink ?? '';
     const destination = state?.destination;
@@ -645,7 +671,8 @@ export class ResortMap {
         return;
       }
       case 'blue':
-        ctx.fillStyle = STYLES.blue.ink;
+      case 'red':
+        ctx.fillStyle = STYLES[style].ink;
         ctx.fillRect(x - 3.5, z - 3.5, 7, 7);
         return;
       case 'peak':

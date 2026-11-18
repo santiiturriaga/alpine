@@ -1,0 +1,110 @@
+{
+  "id": "eiger",
+  "name": "Eiger",
+  "terrainOnly": true,
+  "origin": [
+    8.0054694,
+    46.5776321
+  ],
+  "crs": "EPSG:32632",
+  "bounds": {
+    "minX": -8500,
+    "maxX": 8500,
+    "minZ": -7600,
+    "maxZ": 7200
+  },
+  "terrainStep": 20,
+  "backdropBounds": {
+    "minX": -32000,
+    "maxX": 32000,
+    "minZ": -32000,
+    "maxZ": 32000
+  },
+  "backdropStep": 100,
+  "terrainQuantization": 0.1,
+  "backdropQuantization": 0.125,
+  "coverSources": [
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N45E006_Map.tif"
+  ],
+  "elevationSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E007_00_DEM/Copernicus_DSM_COG_10_N46_00_E007_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E008_00_DEM/Copernicus_DSM_COG_10_N46_00_E008_00_DEM.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2025_2642-1157/swissalti3d_2025_2642-1157_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2025_2642-1158/swissalti3d_2025_2642-1158_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2025_2642-1159/swissalti3d_2025_2642-1159_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2025_2642-1160/swissalti3d_2025_2642-1160_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2025_2643-1157/swissalti3d_2025_2643-1157_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2025_2643-1158/swissalti3d_2025_2643-1158_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2025_2643-1159/swissalti3d_2025_2643-1159_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2025_2643-1160/swissalti3d_2025_2643-1160_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2025_2644-1157/swissalti3d_2025_2644-1157_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2025_2644-1158/swissalti3d_2025_2644-1158_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2025_2644-1159/swissalti3d_2025_2644-1159_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2025_2644-1160/swissalti3d_2025_2644-1160_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2025_2645-1157/swissalti3d_2025_2645-1157_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2025_2645-1158/swissalti3d_2025_2645-1158_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2025_2645-1159/swissalti3d_2025_2645-1159_2_2056_5728.tif",
+    "https://data.geo.admin.ch/ch.swisstopo.swissalti3d/swissalti3d_2025_2645-1160/swissalti3d_2025_2645-1160_2_2056_5728.tif"
+  ],
+  "startLonLat": [
+    7.9613132,
+    46.5852463
+  ],
+  "landmarks": [
+    {
+      "id": "eiger",
+      "name": "Eiger",
+      "lonLat": [
+        8.0054694,
+        46.5776321
+      ],
+      "kind": "peak"
+    },
+    {
+      "id": "kleine-scheidegg",
+      "name": "Kleine Scheidegg",
+      "lonLat": [
+        7.9613132,
+        46.5852463
+      ],
+      "kind": "viewpoint"
+    },
+    {
+      "id": "nordliches-eigerjoch",
+      "name": "Nördliches Eigerjoch",
+      "lonLat": [
+        8.0066621,
+        46.5723876
+      ],
+      "kind": "viewpoint"
+    },
+    {
+      "id": "lauterhorn",
+      "name": "Lauberhorn",
+      "lonLat": [
+        7.9486724,
+        46.5907734
+      ],
+      "kind": "viewpoint"
+    }
+  ],
+  "viewDistance": 30300,
+  "references": [
+    "https://www.sac-cas.ch/en/huts-and-tours/sac-route-portal/eiger-555/",
+    "https://www.openstreetmap.org/node/31664302",
+    "https://www.openstreetmap.org/node/272856213",
+    "https://www.swisstopo.admin.ch/en/height-model-swissalti3d"
+  ],
+  "osmBounds": [
+    [
+      7.953,
+      46.579,
+      7.971,
+      46.591
+    ]
+  ],
+  "backdropSources": [
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E007_00_DEM/Copernicus_DSM_COG_10_N46_00_E007_00_DEM.tif",
+    "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N46_00_E008_00_DEM/Copernicus_DSM_COG_10_N46_00_E008_00_DEM.tif"
+  ]
+}

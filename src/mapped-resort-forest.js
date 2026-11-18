@@ -1,12 +1,13 @@
 import * as THREE from 'three';
-import { coniferGeometry, coniferMaterial } from './conifers.js';
-import { ForestCell, makeForestCrowns, preloadForestCrowns } from './forest-lod.js';
+import { coniferDepthMaterial, coniferGeometry, coniferMaterial } from './conifers.js';
+import { ForestCell, forestDetailTiers, makeForestCrowns, preloadForestCrowns } from './forest-lod.js';
 import { pointInPolygon, runStyle, segmentDistance } from './mapped-resort-ground.js';
 import { stevensTraverseTrees, STEVENS_POWERLINE } from './stevens-pass-details.js';
 import { hash2, smoothstep } from './util.js';
 
 const PATCH = 210;
 const TREE_SPACING = 12;
+const FOREST_TILE = 240;
 const species = ['fir', 'spruce', 'hemlock'];
 const detailProfiles = {
   LOW: [90, 158, 3500, .74],
@@ -72,19 +73,49 @@ function exclusionMap(config) {
   return (x, z) => cells.get(key(Math.floor(x / spacing), Math.floor(z / spacing)))?.some(fn => fn(x, z));
 }
 
+function resortForestTiles(config) {
+  const active = new Set();
+  function include(ax, az, bx, bz, pad) {
+    const x0 = Math.floor((Math.min(ax, bx) - pad) / FOREST_TILE);
+    const x1 = Math.floor((Math.max(ax, bx) + pad) / FOREST_TILE);
+    const z0 = Math.floor((Math.min(az, bz) - pad) / FOREST_TILE);
+    const z1 = Math.floor((Math.max(az, bz) + pad) / FOREST_TILE);
+    for (let z = z0; z <= z1; z++) {
+      for (let x = x0; x <= x1; x++) active.add(`${x}:${z}`);
+    }
+  }
+  for (const { points } of [...config.runs, ...config.lifts, ...(config.summerRoutes ?? [])]) {
+    for (let i = 1; i < points.length; i++) {
+      const [ax, az] = points[i - 1], [bx, bz] = points[i];
+      include(ax, az, bx, bz, 135);
+    }
+  }
+  if (config.startPoint) {
+    const [x, z] = config.startPoint;
+    include(x, z, x, z, 340);
+  }
+  return (x, z) => active.has(`${Math.floor(x / FOREST_TILE)}:${Math.floor(z / FOREST_TILE)}`);
+}
+
 export async function buildMappedForest(scene, ground, config, env) {
   await preloadForestCrowns();
   const group = new THREE.Group();
   group.name = 'Cascade conifers · mapped canopy and clearings';
   scene.add(group);
   const { minX, minZ, maxX, maxZ } = ground.bounds;
+  // Keep the close spacing around ski terrain even on multi-valley maps.
+  // Wide background stands use fewer sample points and larger draw batches.
+  const footprint = (maxX - minX) * (maxZ - minZ);
+  const stride = Math.max(1, Math.ceil(Math.sqrt(footprint / 100e6)));
+  const fullDensity = stride > 1 ? resortForestTiles(config) : null;
+  const patchSize = fullDensity ? PATCH * 2 : PATCH;
   const excluded = exclusionMap(config);
   const patches = new Map();
   const normal = new THREE.Vector3();
   let count = 0;
   function plant(tree) {
     const { x, y, z, height } = tree;
-    const id = `${Math.floor(x / PATCH)}:${Math.floor(z / PATCH)}`;
+    const id = `${Math.floor(x / patchSize)}:${Math.floor(z / patchSize)}`;
     if (!patches.has(id)) patches.set(id, []);
     patches.get(id).push(tree);
     env.addCircle(x, z, .19 + height * .012, 'tree', { maxY: y + height, minY: y - .7, tree });
@@ -95,44 +126,56 @@ export async function buildMappedForest(scene, ground, config, env) {
     if (!env.isOpen(x, y + .4, z, 2.6)) continue;
     plant({ x, y, z, height, kind: 2, yaw: hash2(x, z, 2131) * Math.PI * 2, spread: 1.06, tint: hash2(x, z, 311) });
   }
-  for (let iz = Math.ceil(minZ / TREE_SPACING); iz < maxZ / TREE_SPACING; iz++) {
-    for (let ix = Math.ceil(minX / TREE_SPACING); ix < maxX / TREE_SPACING; ix++) {
-      const x = (ix + .12 + .76 * hash2(ix, iz, 747)) * TREE_SPACING;
-      const z = (iz + .12 + .76 * hash2(ix, iz, 519)) * TREE_SPACING;
-      if (x > maxX - 2 || z > maxZ - 2) continue;
-      const cover = ground.forestAt(x, z);
-      const patchiness = .73 + .27 * Math.sin(x * .009 - z * .014 + Math.sin(z * .035) * .9) ** 2;
-      if (hash2(ix, iz, 1291) > smoothstep(.10, .84, cover) * patchiness || excluded(x, z)) continue;
-      if (ground.normalAt(x, z, normal).y < .56) continue;
-      const y = ground.heightAt(x, z);
-      if (config.id === 'stevens-pass' && !env.isOpen(x, y + .4, z, 1.4)) continue;
-      const wind = smoothstep(1430, 1900, y);
-      const age = hash2(ix, iz, 1923);
-      const height = (14 + 29 * age ** .67) * (1 - .59 * wind);
-      const variety = hash2(ix, iz, 2497);
-      const kind = variety > .76 ? 1 : variety > .29 - wind * .14 ? 2 : 0;
-      const yaw = hash2(ix, iz, 2131) * Math.PI * 2;
-      const spread = .78 + .28 * hash2(ix, iz, 2789);
-      const tint = hash2(ix, iz, 311);
-      plant({ x, y, z, height, kind, yaw, spread, tint });
+  function sample(ix, iz) {
+    const x = (ix + .12 + .76 * hash2(ix, iz, 747)) * TREE_SPACING;
+    const z = (iz + .12 + .76 * hash2(ix, iz, 519)) * TREE_SPACING;
+    if (x > maxX - 2 || z > maxZ - 2) return;
+    const cover = ground.forestAt(x, z);
+    const patchiness = .73 + .27 * Math.sin(x * .009 - z * .014 + Math.sin(z * .035) * .9) ** 2;
+    if (hash2(ix, iz, 1291) > smoothstep(.10, .84, cover) * patchiness || excluded(x, z)) return;
+    if (ground.normalAt(x, z, normal).y < .56) return;
+    const y = ground.heightAt(x, z);
+    if (config.id === 'stevens-pass' && !env.isOpen(x, y + .4, z, 1.4)) return;
+    const wind = smoothstep(1430, 1900, y);
+    const age = hash2(ix, iz, 1923);
+    const height = (14 + 29 * age ** .67) * (1 - .59 * wind);
+    const variety = hash2(ix, iz, 2497);
+    const kind = variety > .76 ? 1 : variety > .29 - wind * .14 ? 2 : 0;
+    const yaw = hash2(ix, iz, 2131) * Math.PI * 2;
+    const spread = .78 + .28 * hash2(ix, iz, 2789);
+    const tint = hash2(ix, iz, 311);
+    plant({ x, y, z, height, kind, yaw, spread, tint });
+  }
+  const lastX = maxX / TREE_SPACING, lastZ = maxZ / TREE_SPACING;
+  const center = stride * .5;
+  for (let iz = Math.ceil(minZ / TREE_SPACING); iz < lastZ; iz += stride) {
+    for (let ix = Math.ceil(minX / TREE_SPACING); ix < lastX; ix += stride) {
+      if (!fullDensity || fullDensity((ix + center) * TREE_SPACING, (iz + center) * TREE_SPACING)) {
+        for (let z = iz; z < iz + stride; z++) {
+          for (let x = ix; x < ix + stride; x++) sample(x, z);
+        }
+      } else {
+        sample(ix + Math.floor(hash2(ix, iz, 1453) * stride), iz + Math.floor(hash2(ix, iz, 9601) * stride));
+      }
     }
   }
 
   const range = { value: new THREE.Vector2() };
   const farRange = { value: 4400 };
-  const branchRange = { value: .43 }, sprayRange = { value: .37 }, twigRange = { value: .35 };
+  const branchRange = { value: 0 }, sprayRange = { value: 0 }, twigRange = { value: 0 };
   let quality = 1;
   function setQuality(name) {
     const [min, max, far, detail] = detailProfiles[name] ?? detailProfiles.BALANCED;
     range.value.set(min, max);
     farRange.value = far;
     quality = detail;
-    branchRange.value = .43 * quality;
-    sprayRange.value = .37 * quality;
-    twigRange.value = .35 * quality;
+    branchRange.value = .67 * quality;
+    sprayRange.value = .53 * quality;
+    twigRange.value = .49 * quality;
   }
   setQuality('BALANCED');
   const mapped = bindCascadeRange(coniferMaterial(-1, 'mapped'), range);
+  const shadowMaterial = coniferDepthMaterial();
   const silhouette = bindCascadeRange(coniferMaterial(-2, 'mapped'), range);
   let proxyMaterial = null;
   const medium = species.map(kind => coniferGeometry(kind, -1));
@@ -166,6 +209,7 @@ export async function buildMappedForest(scene, ground, config, env) {
       const grove = trees.filter(tree => tree.kind === kind);
       if (!grove.length) continue;
       const mesh = new THREE.InstancedMesh(medium[kind], mapped, grove.length);
+      mesh.customDepthMaterial = shadowMaterial;
       mesh.name = species[kind] + ' crowns';
       for (let i = 0; i < grove.length; i++) setTree(mesh, i, grove[i]);
       mesh.receiveShadow = true;
@@ -221,7 +265,6 @@ export async function buildMappedForest(scene, ground, config, env) {
       mesh.name = level < 0 ? `${kind} · boughs and bark` : `${kind} · needles and snow deposits`;
       mesh.count = 0;
       mesh.frustumCulled = false;
-      mesh.castShadow = level < 0;
       mesh.receiveShadow = true;
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       mesh.setColorAt(0, color);
@@ -253,7 +296,11 @@ export async function buildMappedForest(scene, ground, config, env) {
       for (const mesh of cell.near.children) mesh.castShadow = shadows;
     }
     for (const mesh of details) mesh.count = 0;
-    const radius = 108 * quality;
+    // The shader finishes shrinking each tier before the CPU stops submitting
+    // it. Leave room for the camera to move between detail queries.
+    const radius = forestDetailTiers[-.5][1] * branchRange.value + 6;
+    const sprayRadius = forestDetailTiers[1][1] * sprayRange.value + 6;
+    const twigRadius = forestDetailTiers[2][1] * twigRange.value + 6;
     for (const { tree } of env.queryColliders(eye.x, eye.z, radius)) {
       if (!tree) continue;
       const { x, y, z, height, kind } = tree;
@@ -263,8 +310,8 @@ export async function buildMappedForest(scene, ground, config, env) {
       crown.radius = height * .58 + 13;
       if (d > 47 && !frustum.intersectsSphere(crown)) continue;
       if (boughs[kind].count < boughs[kind].instanceMatrix.count) setTree(boughs[kind], boughs[kind].count++, tree);
-      if (d < 42 * quality && sprays[kind].count < sprays[kind].instanceMatrix.count) setTree(sprays[kind], sprays[kind].count++, tree);
-      if (d < 17 * quality && twigs[kind].count < twigs[kind].instanceMatrix.count) setTree(twigs[kind], twigs[kind].count++, tree);
+      if (d < sprayRadius && sprays[kind].count < sprays[kind].instanceMatrix.count) setTree(sprays[kind], sprays[kind].count++, tree);
+      if (d < twigRadius && twigs[kind].count < twigs[kind].instanceMatrix.count) setTree(twigs[kind], twigs[kind].count++, tree);
     }
     for (const mesh of details) {
       mesh.visible = mesh.count > 0;

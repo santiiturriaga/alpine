@@ -5,6 +5,7 @@ import { baseThickness, isSkiStyle, skiDeck } from './skier-equipment.js';
 export { skiProfile } from './skier-equipment.js';
 
 const down = new THREE.Vector3(0, -1, 0);
+const up = new THREE.Vector3(0, 1, 0);
 
 function loft(a, b, c, d, t) {
   const value = b + .5 * t * ((c - a) + t * (2 * a - 5 * b + 4 * c - d + t * (3 * (b - c) + d - a)));
@@ -410,6 +411,7 @@ function helmetTrim(profile, start, end, minY, maxY, ribbon = false) {
 export function createSkier({
   jacket: jacketColor = 0x925041, pants: pantsColor = 0x2e3237,
   helmet: helmetColor = 0xddd9cc, backpack: backpackColor = 0x353f41, accessories = true,
+  snowDetail = false,
 } = {}) {
   const group = new THREE.Group();
   group.name = 'Skier';
@@ -457,7 +459,30 @@ export function createSkier({
     });
   };
   const jacketMesh = put(torso, shapeJacket(shell(jacketProfile, .021, 40, true)), jacket);
-  let rescueTrim;
+  let rescueTrim, summitBadge;
+  function brandBadge(brand, x, y, width, height) {
+    const {canvas,ctx} = makeCanvas(256, 96);
+    ctx.fillStyle = ctx.strokeStyle = '#edf1f4';
+    ctx.textAlign = 'left';
+    if (brand === 'north-face') {
+      ctx.font = '900 30px Arial';
+      for (const [i, line] of ['THE','NORTH','FACE'].entries()) ctx.fillText(line, 31, 27 + i * 31);
+      ctx.lineWidth = 10;
+      for (const radius of [42,60,78]) {
+        ctx.beginPath();ctx.arc(158, 93, radius, -Math.PI / 2, 0);ctx.stroke();
+      }
+    } else {
+      ctx.font = '700 47px Barlow Condensed, Arial';
+      ctx.fillText("ARC’TERYX", 9, 74, 238);
+    }
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshStandardMaterial({
+      map:canvasTexture(canvas),roughness:.95,transparent:true,alphaTest:.28,
+    }));
+    mesh.position.set(...jacketFront([[x,y],[x,y+.003]],.009)[0]);
+    mesh.rotation.y = x*.92;
+    torso.add(mesh);
+    return mesh;
+  }
   function patrolTrim() {
     const group = new THREE.Group();
     group.name = 'Patrol shell · high storm collar, bonded pockets and stitched crest';
@@ -559,6 +584,9 @@ export function createSkier({
 
   let activeStyle = 'all-mountain', activeDeck = skiDeck(activeStyle);
   const decks = [];
+  const snowCoats = [];
+  const snowClump = snowDetail ? new THREE.IcosahedronGeometry(1, 1) : null;
+  const trappedSnow = snowDetail ? material(0xe7f0f6, .93) : null;
   const arms = [], legs = [], helmetHands = [];
   const helmetGear = new THREE.Group();
   helmetGear.name = 'Helmet view gloves and poles';
@@ -604,6 +632,19 @@ export function createSkier({
     equipment.name = 'Ski equipment';
     ski.add(equipment);
     addEquipment(equipment);
+    if (snowDetail) {
+      const dust = new THREE.InstancedMesh(snowClump, trappedSnow, 17);
+      dust.name = 'Wind-packed crystals on ski tops';
+      dust.count = 0;
+      dust.frustumCulled = false;
+      equipment.add(dust);
+      const random = mulberry32(side === 1 ? 405 : 883);
+      const grains = Array.from({length: 17}, (_, i) => ({
+        fraction: i / 17, width: .62 * (random() * 2 - 1),
+        zone: .08 + random() * .85, diameter: .009 + random() * .017, rotation: random() * 6.28,
+      }));
+      snowCoats.push({ dust, grains });
+    }
     const carried = new THREE.Group();
     carried.position.set(side * .066, .23, -.319);
     carried.rotation.set(-Math.PI / 2, side * .035, side * .075);
@@ -713,6 +754,36 @@ export function createSkier({
   const skiAxes = legs.map(() => new THREE.Vector3(0, 0, 1));
   const skiRights = legs.map(() => new THREE.Vector3(1, 0, 0));
   const skiSink = [0, 0], skiPlanted = [false, false];
+  const snowPoint = new THREE.Object3D();
+  let snowCoverage = -1;
+
+  function setSkiSnow(amount) {
+    if (!snowCoats.length || Math.abs(amount - snowCoverage) < .008) return;
+    snowCoverage = amount;
+    for (const { dust, grains } of snowCoats) {
+      const sections = activeDeck.profile;
+      const base = sections[0][0], length = sections.at(-1)[0] - base;
+      let count = 0;
+      for (const grain of grains) {
+        if (grain.fraction >= amount) break;
+        const z = base + grain.zone * length;
+        const index = sections.findIndex(section => section[0] >= z);
+        const first = sections[index - 1], second = sections[index];
+        const t = (z - first[0]) / (second[0] - first[0]);
+        const width = first[1] + (second[1] - first[1]) * t;
+        const rocker = first[2] + (second[2] - first[2]) * t;
+        const size = grain.diameter * clamp((amount - grain.fraction) * 5, .22, 1.2);
+        snowPoint.position.set(grain.width * width, rocker + .003, z);
+        snowPoint.rotation.y = grain.rotation;
+        snowPoint.scale.set(size * .8, size * .19, size * 1.46);
+        snowPoint.updateMatrix();
+        dust.setMatrixAt(count++, snowPoint.matrix);
+      }
+      dust.count = count;
+      dust.visible = count > 0;
+      dust.instanceMatrix.needsUpdate = true;
+    }
+  }
 
   function plantSki(ski, groundHeight, edgeAngle, footMode, sink, stairTreadAt) {
     skiCenter.copy(ski.position).applyMatrix4(frameMatrix);
@@ -758,7 +829,8 @@ export function createSkier({
   function animate(dt, params, groundHeight) {
     const { speed, steer, tuck, brake, airborne, grab, crash, crashTime,
       stride = 0, stridePhase = 0, climb = 0, footMode = false, walk = 0, snowSink = 0,
-      walkStride = .49, walkDirection = 1, switchStance = false, switchSide = 1, stairTreadAt, mount } = params;
+      walkStride = .49, walkDirection = 1, switchStance = false, switchSide = 1, stairTreadAt, mount,
+      stop = 0, stopSign = 1, skiYaw = 0, poleSwing = -1, poleSide = 1 } = params;
     if (groundHeight) {
       frameMatrix.copy(group.parent.matrix);
       inverseFrame.copy(frameMatrix).invert();
@@ -773,7 +845,7 @@ export function createSkier({
     switchLook = damp(switchLook, switchStance && !airborne && !crash ? switchSide : 0, 8, dt);
     const racingTuck = airborne || crash || footMode ? 0 : clamp(tuck, 0, 1);
     const gait = airborne || crash ? 0 : footMode ? walk : stride;
-    const relaxedCrouch = footMode ? .025 + gait * .075 : .25 + sf * .31 + gait * .07;
+    const relaxedCrouch = footMode ? .025 + gait * .075 : .25 + sf * .31 + gait * .07 + stop * .24;
     crouch = damp(crouch, airborne ? .57 + grab * .28 : relaxedCrouch + (.94 - relaxedCrouch) * racingTuck, 8, dt);
     airtuck = damp(airtuck, airborne ? 1 : 0, 7, dt);
     phase += dt * (1.7 + sf * 3.5);
@@ -803,17 +875,22 @@ export function createSkier({
     torso.updateMatrix();
     for (const { side, shoulder, elbow, pole, sleeve } of arms) {
       const swing = Math.sin(phase + side * 1.57) * (.025 + sf * .065);
-      const polePlant = Math.sin(stridePhase + (side < 0 ? Math.PI : 0)) * gait;
+      // Recover the opposite pole as the supporting ski pushes back.
+      const poleCycle = stridePhase + (side < 0 ? Math.PI : 0);
+      const polePlant = Math.sin(poleCycle - (footMode ? 0 : .71)) * gait;
+      const planting = Math.max(0, Math.cos(poleCycle - .55)) * gait;
+      const sweep = side === poleSide && poleSwing >= 0 ? Math.sin(poleSwing * Math.PI) : 0;
+      const flick = sweep * Math.cos((poleSwing - .2) * Math.PI * 1.1);
       const outside = side * lean;
       const reach = Math.max(0, outside) * (1 - racingTuck) * 1.16;
       shoulder.rotation.set(
         (-(footMode ? .16 : .36) - crouch * .43 + swing + outside * .41) * (1 - racingTuck)
-          - .34 * racingTuck + polePlant * (footMode ? .48 : .52),
-        -side * (.08 + racingTuck * .20),
-        side * (.19 * (1 - racingTuck) - .04 * racingTuck + airtuck * .54 + reach) - lean * .24,
+          - .34 * racingTuck + polePlant * (footMode ? .48 : .64) - flick * .52,
+        -side * (.08 + racingTuck * .20) + side * sweep * .44,
+        side * (.19 * (1 - racingTuck) - .04 * racingTuck + airtuck * .54 + reach + sweep * .69) - lean * .24,
       );
       elbow.rotation.x = (-.66 + crouch * .17 - grab * .35 - outside * .29) * (1 - racingTuck)
-        - 2.44 * racingTuck - gait * .22;
+        - 2.44 * racingTuck - gait * .22 - planting * .24 - flick * .38;
       if (mount) {
         const [gripX, gripY, gripZ] = mount.grip;
         poleGrip.set(side * gripX, gripY, gripZ);
@@ -837,8 +914,9 @@ export function createSkier({
       if (mount) continue;
       // Keep the shaft trailing independently of forearm flex, and let the pole
       // trail further if its unadjusted tip would pass through the snow.
-      poleDirection.set(side * (.23 + sf * .09) * (1 - racingTuck),
-        -1 + racingTuck * .91, (footMode ? -.34 : -.37 - sf * .45) - racingTuck * .34 + polePlant * .78).normalize();
+      poleDirection.set(side * (.23 + sf * .09) * (1 - racingTuck) + side * sweep * 1.48,
+        -1 + racingTuck * .91 + sweep * .78,
+        (footMode ? -.34 : -.37 - sf * .45) - racingTuck * .34 + polePlant * .78 + sweep * .92).normalize();
       if (groundHeight) {
         shoulder.updateMatrix();
         poleGrip.copy(pole.position).applyMatrix4(elbow.matrix).applyMatrix4(shoulder.matrix)
@@ -867,10 +945,12 @@ export function createSkier({
       const step = footMode ? (walkPhase < 1 ? 1 - 2 * walkPhase : -Math.cos((walkPhase - 1) * Math.PI)) : Math.sin(cycle);
       const recovery = footMode ? (walkPhase < 1 ? 0 : Math.sin((walkPhase - 1) * Math.PI)) : Math.max(0, Math.cos(cycle));
       const skating = footMode ? 0 : gait * (1 - climb);
-      ski.position.set(side * ((footMode ? .135 : .21) + brake * .09 + skating * (.035 + recovery * .105)),
+      ski.position.set(side * ((footMode ? .135 : .21 - stop * .063) + brake * .09 * (1 - stop) + skating * (.035 + recovery * .105)),
         .018 + airtuck * .065, airtuck * .07 * side + step * gait * (footMode ? walkStride * .5 * walkDirection : .23 + climb * .09));
-      const edge = footMode ? 0 : lean * .96;
-      ski.rotation.set(-airtuck * .06, -side * brake * .25 - steer * (footMode ? .025 : .072) + side * skating * (.12 + recovery * .14), groundHeight ? 0 : edge);
+      if (stop > .002) ski.position.applyAxisAngle(up, skiYaw);
+      const edge = footMode ? 0 : lean * .96 * (1 - stop) + stopSign * stop * .48;
+      ski.rotation.set(-airtuck * .06, skiYaw - side * brake * .25 * (1-stop) - steer * (footMode ? .025 : .072)
+        + side * skating * (.12 + recovery * .14), groundHeight ? 0 : edge);
       const stepLift = recovery * gait * (footMode ? .105 : .035 + climb * .065);
       if (mount) {
         ski.position.copy(mount.feet[i]);
@@ -927,6 +1007,12 @@ export function createSkier({
         .24 + plant * .16 - player.tuckAmount * .05);
       hand.rotation.set(-.99 + plant * .21, side * .09, side * -.14 - player.steer * .08);
       pole.rotation.set(1.00 + player.tuckAmount * .88 - plant * .46, 0, side * .22);
+      if (player.poleSide === side && player.poleSwing > 0) {
+        const hit = Math.sin(player.poleSwing / .54 * Math.PI);
+        hand.position.z += hit * .22;
+        hand.rotation.y += side * hit * .43;
+        pole.rotation.z += side * hit * .74;
+      }
       // The arm enters from the elbow beside the ribcage and ends inside
       // the existing rolled gauntlet, including when a pole is planted.
       forearm.position.set(side*.46,.88-player.tuckAmount*.17,-.54);
@@ -940,8 +1026,14 @@ export function createSkier({
   const acceptsColor = (value) => typeof value === 'string' && /^#(?:[\da-f]{3}|[\da-f]{6})$/i.test(value);
   function setAppearance({ jacket: color, pants: trousers, helmet: shellColor, backpack, sticker, skis, apparel } = {}) {
     const patrol = apparel === 'patrol-shell';
-    if (patrol && !rescueTrim) rescueTrim = patrolTrim();
+    if (patrol && !rescueTrim) {
+      rescueTrim = patrolTrim();
+      const text = brandBadge('arcteryx',.091,.352,.080,.031);
+      rescueTrim.add(text);
+    }
     if (rescueTrim) rescueTrim.visible = patrol;
+    if (apparel === 'summit-shell' && !summitBadge) summitBadge = brandBadge('north-face',.101,.383,.074,.049);
+    if (summitBadge) summitBadge.visible = apparel === 'summit-shell';
     jacket.map = shoulderPanel.map = patrol ? patrolFabric() : cloth.map;
     if (acceptsColor(color)) {
       jacket.color.set(color);
@@ -969,6 +1061,9 @@ export function createSkier({
     if (isSkiStyle(skis) && activeStyle !== skis) {
       activeStyle = skis;
       activeDeck = skiDeck(activeStyle);
+      const snow = snowCoverage;
+      snowCoverage = -1;
+      setSkiSnow(Math.max(0, snow));
       for (const deck of decks) {
         deck.geometry = activeDeck.geometry;
         deck.material = activeDeck.materials;
@@ -976,5 +1071,5 @@ export function createSkier({
     }
   }
   setAppearance({ sticker: 'none' });
-  return { group, torso, animate, contactPoints, skiAxes, skiRights, skiSink, skiPlanted, showHelmetGear, setAppearance };
+  return { group, torso, animate, contactPoints, skiAxes, skiRights, skiSink, skiPlanted, showHelmetGear, setAppearance, setSkiSnow };
 }
