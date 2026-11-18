@@ -117,13 +117,13 @@ export function mappedAtlasSettings({ mountain, config, runs, ground, lifts }) {
     lifts.filter(lift => Math.hypot(lift.boardPose.x - base.boardPose.x, lift.boardPose.z - base.boardPose.z) < 550)
       .map(lift => [lift.boardPose.x, lift.boardPose.z]), 250,
   ) });
-  const { href, pdf, root, summerHref } = mountain.atlas ?? {};
+  const { href, summerHref } = mountain.atlas ?? {};
   const summerLifts = config.summerLifts ?? (config.id === 'crystal-mountain' ? ['mt-rainier-gondola']
     : config.id === 'snoqualmie' ? ['silver-fir-express', 'pacific-crest'] : []);
   return { name: mountain.label, bounds: ground.bounds, heightAt: ground.heightAt,
     landmarks, views, runs, lifts: mappedLifts, roads: config.roads ?? [], buildings: config.buildings ?? [],
     summerRoutes: config.summerRoutes ?? [], summerLifts: mappedLifts.filter(lift => summerLifts.includes(lift.id)), summerSource: summerHref,
-    source: href ?? (pdf && root ? new URL(pdf, root).href : null) };
+    source: href ?? null };
 }
 
 export class ResortMap {

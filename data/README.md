@@ -40,4 +40,4 @@ The checked-in assets are sufficient to play. To regenerate, install Python pack
 
 At Olympic Plaza, the ring sculpture and neighbouring buildings use local mapped positions. The tower, the roof over Eagle Lodge’s octagonal north bay, the balcony rails and festive lights were interpreted from the supplied winter photograph. [Olympic rings](https://www.openstreetmap.org/node/1210013028), [BrewHouse](https://www.openstreetmap.org/way/146628098), [Eagle Lodge](https://www.openstreetmap.org/way/146630821), [Tyndall Stone Lodge](https://www.openstreetmap.org/way/146589337).
 
-The skier, trees, lift assets, snow material and buildings are generated in code. The printed artwork on trail-map boards uses the [bundled resort atlas](../assets/maps/README.md).
+The skier, trees, lift assets, snow material and buildings are generated in code. The Creekside trail board uses mapped trail and lift geometry. The original [resort maps](../assets/maps/README.md) are available for comparison.

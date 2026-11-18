@@ -15,7 +15,7 @@ import { climateUniforms } from './climate-state.js';
 import { buildNeedleShoots } from './needle-shoots.js';
 import { ForestCell, forestQuality, makeForestCrowns } from './forest-lod.js';
 import { part, box, beam, mergeParts, mergedMesh } from './scenery.js';
-import { buildRoundhouseSkiers } from './roundhouse-skiers.js';
+import { buildResortPeople } from './resort-people.js';
 import { buildRoundhouseArrival } from './roundhouse.js';
 import { buildFairmont,FAIRMONT_REPLACED_IDS } from './fairmont.js';
 import { roofHeights } from '../data/roof-heights.js';
@@ -2112,7 +2112,7 @@ export async function buildEnvironment(scene, { onProgress = () => {} } = {}) {
   }).filter(Boolean);
 
   const flags = buildFlags(scene);
-  const people = buildRoundhouseSkiers(scene, { grid, interiors, lifts, queueSlots: stationOperations.queueSlots,
+  const people = buildResortPeople(scene, { grid, interiors, lifts, queueSlots: stationOperations.queueSlots,
     socialSlots: [...lodgeSocialSlots(), ...skiersPlaza.socialSlots, ...roundhouseArrival.operators] });
 
   onProgress(0.95, 'Checking the snow…');

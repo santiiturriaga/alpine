@@ -706,6 +706,8 @@ export function createSkier({
   let lean = 0, crouch = .2, airtuck = 0, phase = 0, windPhase = 0, wind = 0, switchLook = 0;
   const sleeveStart = new THREE.Vector3(0, .012, .008), sleeveEnd = new THREE.Vector3();
   const armRotation = new THREE.Quaternion(), poleTarget = new THREE.Quaternion();
+  // Ski planting still needs the frame inverse after the arms are posed.
+  const inverseJoint = new THREE.Matrix4();
   const poleDirection = new THREE.Vector3(), poleGrip = new THREE.Vector3(), poleTip = new THREE.Vector3();
   const cuffRotation = new THREE.Quaternion();
   function animate(dt, params, groundHeight) {
@@ -770,8 +772,8 @@ export function createSkier({
       if (mount) {
         const [gripX, gripY, gripZ] = mount.grip;
         poleGrip.set(side * gripX, gripY, gripZ);
-        poleGrip.applyMatrix4(inverseFrame.copy(body.matrix).invert())
-          .applyMatrix4(inverseFrame.copy(torso.matrix).invert()).sub(shoulder.position);
+        poleGrip.applyMatrix4(inverseJoint.copy(body.matrix).invert())
+          .applyMatrix4(inverseJoint.copy(torso.matrix).invert()).sub(shoulder.position);
         const reach = clamp(poleGrip.length(), .14, .625);
         const forearm = .328, upper = Math.hypot(.303, .009);
         poleGrip.normalize();
@@ -814,7 +816,7 @@ export function createSkier({
       pole.quaternion.copy(armRotation).multiply(poleTarget);
     }
     for (const [i, { side, ski, equipment, trousers, cuff }] of legs.entries()) {
-      equipment.visible = !footMode && (!mount || mount.skis);
+      equipment.visible = !footMode && (!mount || !!mount.skis);
       const cycle = stridePhase + (side < 0 ? Math.PI : 0);
       const walkPhase = ((cycle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) / Math.PI;
       const step = footMode ? (walkPhase < 1 ? 1 - 2 * walkPhase : -Math.cos((walkPhase - 1) * Math.PI)) : Math.sin(cycle);

@@ -1,7 +1,10 @@
 import { updatePassGates } from './pass-gates.js';
 import { createMountainQuests } from './mountain-quests.js';
 import { createMultiplayer } from './multiplayer.js';
-import { graphicsProfiles, graphicsIndex, bindGraphics, applyShadowResolution } from './graphics.js';
+import {
+  graphicsProfiles, graphicsIndex, bindGraphics, createRenderer, resizeViewport,
+  applyShadowResolution, updateSunShadow,
+} from './graphics.js';
 import * as THREE from 'three';
 import { buildTerrain, heightAt, normalAt, surfaceAt, treeCoverAt } from './terrain.js';
 import { buildEnvironment } from './environment.js';
@@ -24,9 +27,6 @@ import { Expeditions } from './expeditions.js';
 import { SKIERS_PLAZA_START,SKIERS_PLAZA_VIEW } from './skiers-plaza.js';
 import { introShot, INTRO_SECONDS } from './intro-sequence.js';
 import { createIntroRiders } from './intro-riders.js';
-import {
-  query, destination, directArrival, challengeArrival,
-} from './intro-reel.js';
 import { MountainChallenges } from './mountain-challenges.js';
 import { LIFTS } from './worlddata.js';
 import { Player } from './player.js';
@@ -52,11 +52,16 @@ import { GLACIER_CAVE_START } from './glacier-cave.js';
    ═══════════════════════════════════════════════════════════════ */
 
 const $ = (id) => document.getElementById(id);
+const query = new URLSearchParams(location.search);
+const destination = query.get('view') === 'valley' ? 'valley' : query.get('start');
+const arrivalButtons = [...$('mountain-panel').querySelectorAll('[data-arrival]')];
+const courseButtons = [...$('mountain-panel').querySelectorAll('[data-course]')];
+const challengeArrival = courseButtons.some(button => button.dataset.course === query.get('challenge'));
+const directArrival = challengeArrival || arrivalButtons.some(button => button.dataset.arrival === destination);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const nextFrame = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const COMBO_TIME = 4.8;
-const QUALITIES = graphicsProfiles;
 let renderer, scene, camera;
 let terrain, env, sky, lighting, fx, tracks, storm, tuckWind, skiContact;
 let valley;
@@ -87,7 +92,7 @@ let mapReturn = null;
 let previousShot=null;
 let introRiders=null;
 let qualityIndex = graphicsIndex(query, 'HIGH');
-setForestQuality(QUALITIES[qualityIndex].name);
+setForestQuality(graphicsProfiles[qualityIndex].name);
 let markersOn = true;
 let audioOn = true;
 let score = 0;
@@ -114,8 +119,6 @@ const _rideView = new THREE.Vector3();
 const _rideAnchor = new THREE.Vector3();
 const shadowAnchor = new THREE.Vector3(200, 1450, 200);
 const lastShadowAnchor = new THREE.Vector3(Infinity, Infinity, Infinity);
-const lightRight = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), SUN_DIR).normalize();
-const lightUp = new THREE.Vector3().crossVectors(SUN_DIR,lightRight).normalize();
 let lastShadowTime = -Infinity;
 
 /* ── boot ───────────────────────────────────────────────────── */
@@ -123,24 +126,12 @@ let lastShadowTime = -Infinity;
 async function boot() {
   const host = $('webgl');
   try {
-    renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      powerPreference: 'high-performance',
-      alpha: false,
-      stencil: false,
-    });
+    renderer = createRenderer({ exposure: 1.03, shadows: true });
   } catch (err) {
     showFatal('WebGL is required for Alpine Descent.', err);
     return;
   }
 
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.03;
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.autoUpdate = false;
-  renderer.shadowMap.needsUpdate = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   host.appendChild(renderer.domElement);
 
   scene = new THREE.Scene();
@@ -698,7 +689,9 @@ function bindMountainPanel() {
   $('mountain-done').onclick=()=>closeMountainPanel();
   dialog.addEventListener('cancel',e=>{e.preventDefault();closeMountainPanel();});
   $('menu-mountain').onclick=$('pause-mountain').onclick=openMountainPanel;
-  dialog.querySelectorAll('[data-arrival]').forEach(b=>b.onclick=()=>travelTo(b.dataset.arrival,b.hasAttribute('data-photo')));
+  for (const button of arrivalButtons) {
+    button.onclick = () => travelTo(button.dataset.arrival, button.hasAttribute('data-photo'));
+  }
   $('scenic-return').onclick=leaveScenicView;
   $('mountain-outfitter').onclick=openShop;
   const file=$('scenic-file'),preview=$('scenic-reference'),opacity=$('scenic-opacity');
@@ -717,7 +710,7 @@ function bindMountainPanel() {
     preview.src=referenceUrl;
   };
   opacity.oninput=()=>{preview.style.opacity=Number(opacity.value)/100;};
-  dialog.querySelectorAll('[data-course]').forEach(b=>b.onclick=()=>startCourse(b.dataset.course));
+  for (const button of courseButtons) button.onclick = () => startCourse(button.dataset.course);
   $('course-retry').onclick=()=>{if(challenges.state)startCourse(challenges.state.id);};
   $('course-explore').onclick=()=>challenges.clear();
 }
@@ -1497,27 +1490,18 @@ async function toggleAudio() {
 }
 
 function applyQuality() {
-  const q = QUALITIES[qualityIndex];
-  setForestQuality(q.name);
-  applyShadowResolution(renderer, lighting.sun, q.shadow);
+  const quality = graphicsProfiles[qualityIndex];
+  setForestQuality(quality.name);
+  applyShadowResolution(renderer, lighting.sun, quality.shadow);
   onResize();
 }
 
 function onResize() {
   if (!renderer || !camera) return;
   const host = $('webgl');
-  const width = Math.max(1, host.clientWidth), height = Math.max(1, host.clientHeight);
-  const quality = QUALITIES[qualityIndex];
-  const dpr = Math.min(quality.pixel, (window.devicePixelRatio || 1) * quality.samples,
-    Math.sqrt(quality.maxPixels / (width * height)));
-  camera.aspect = width / height;
-  camera.updateProjectionMatrix();
-  if (renderer.getPixelRatio() !== dpr) renderer.setPixelRatio(dpr);
-  renderer.setSize(width, height, false);
-  storm?.resize(renderer.domElement.height);
-  tuckWind?.resize(width, height);
-  if(scenicPose)frameScenicView();
-
+  const quality = graphicsProfiles[qualityIndex];
+  resizeViewport({ host, renderer, camera, quality, storm, tuckWind });
+  if (scenicPose) frameScenicView();
 }
 
 /* ── frame ──────────────────────────────────────────────────── */
@@ -1538,28 +1522,13 @@ function updateSun() {
   if (!lighting?.sun?.castShadow || paused) return;
   const anchor = scenicPose ? scenicTarget : playing && player ? player.pos : shadowAnchor;
   const change = anchor.distanceToSquared(lastShadowAnchor);
-  const interval = QUALITIES[qualityIndex].name === 'LOW' ? .05 : .025;
-  if (displayTime - lastShadowTime < interval && change < 4) return;
+  const { shadowInterval } = graphicsProfiles[qualityIndex];
+  if (displayTime - lastShadowTime < shadowInterval && change < 4) return;
   lastShadowTime = displayTime;
   lastShadowAnchor.copy(anchor);
-  const shadowCamera = lighting.sun.shadow.camera;
   const flightHeight = expeditions.active?.id === 'helicopter' ? expeditions.active.clearance : 0;
   const radius = Math.round(73 + 126 * clamp((flightHeight - 20) / 105, 0, 1));
-  if (shadowCamera.right !== radius) {
-    shadowCamera.left = shadowCamera.bottom = -radius;
-    shadowCamera.right = shadowCamera.top = radius;
-    shadowCamera.updateProjectionMatrix();
-  }
-  const texel = 2 * radius / lighting.sun.shadow.mapSize.x;
-  lightRight.set(0,1,0).cross(SUN_DIR).normalize();
-  lightUp.crossVectors(SUN_DIR,lightRight).normalize();
-  const right = anchor.dot(lightRight), up = anchor.dot(lightUp);
-  lighting.sun.target.position.copy(anchor)
-    .addScaledVector(lightRight, Math.round(right/texel)*texel-right)
-    .addScaledVector(lightUp, Math.round(up/texel)*texel-up);
-  lighting.sun.position.copy(lighting.sun.target.position).addScaledVector(SUN_DIR, 460);
-  lighting.sun.target.updateMatrixWorld();
-  renderer.shadowMap.needsUpdate = true;
+  updateSunShadow(renderer, lighting.sun, SUN_DIR, anchor, radius);
 }
 
 /* rAF stalls when the tab is not painting. Keep a slow timer fallback so

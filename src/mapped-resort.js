@@ -1,7 +1,10 @@
 import { updatePassGates } from './pass-gates.js';
 import { setForestQuality } from './forest-lod.js';
 import { createMultiplayer } from './multiplayer.js';
-import { graphicsProfiles as qualities, graphicsIndex, bindGraphics, applyShadowResolution } from './graphics.js';
+import {
+  graphicsProfiles, graphicsIndex, bindGraphics, createRenderer, resizeViewport,
+  applyShadowResolution, updateSunShadow,
+} from './graphics.js';
 import * as THREE from 'three';
 import { AudioEngine } from './audio.js';
 import { createClimate, CLIMATE_PRESETS } from './climate.js';
@@ -255,15 +258,9 @@ export async function startMappedResort(mountain) {
   const query = new URLSearchParams(location.search);
   const runs = prepareRuns(config.runs);
   const host = $('webgl');
-  const renderer = new THREE.WebGLRenderer({
-    antialias: true, alpha: false, stencil: false, powerPreference: 'high-performance',
-  });
+  const renderer = createRenderer();
   const canvas = renderer.domElement;
   host.append(canvas);
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.shadowMap.autoUpdate = false;
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xbdd0e1);
   scene.fog = new THREE.FogExp2(0xbdd0e1, .00005);
@@ -340,7 +337,6 @@ export async function startMappedResort(mountain) {
   const heldAtTakeoff = new Set();
   const input = {};
   const lastShadowAnchor = new THREE.Vector3(Infinity, Infinity, Infinity);
-  const shadowRight = new THREE.Vector3(), shadowUp = new THREE.Vector3();
   const menuCenter = new THREE.Vector3();
   let playing = false;
   let panelReturn = null;
@@ -451,20 +447,12 @@ export async function startMappedResort(mountain) {
   prepareExploration(mountainPanel, choices, travel);
 
   function resize() {
-    const { clientWidth, clientHeight } = host;
-    const width = Math.max(1, clientWidth), height = Math.max(1, clientHeight);
-    const quality = qualities[qualityIndex];
-    const ratio = Math.min((devicePixelRatio || 1) * quality.samples, quality.pixel, Math.sqrt(quality.maxPixels / (width * height)));
-    if (ratio !== renderer.getPixelRatio()) renderer.setPixelRatio(ratio);
-    renderer.setSize(width, height, false);
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
-    storm.resize(canvas.height);
-    tuckWind.resize(width, height);
+    const quality = graphicsProfiles[qualityIndex];
+    resizeViewport({ host, renderer, camera, quality, storm, tuckWind });
   }
 
   function applyQuality() {
-    const quality = qualities[qualityIndex];
+    const quality = graphicsProfiles[qualityIndex];
     applyShadowResolution(renderer, lighting.sun, quality.shadow);
     setForestQuality(quality.name);
     world.setQuality?.(quality.name);
@@ -717,20 +705,11 @@ export async function startMappedResort(mountain) {
   function updateShadow() {
     if (!lighting.sun.castShadow) return;
     const anchor = playing ? player.pos : menuCenter;
-    const interval = qualities[qualityIndex].name === 'LOW' ? .05 : .025;
-    if (present - lastShadow < interval && anchor.distanceToSquared(lastShadowAnchor) < 4) return;
+    const { shadowInterval } = graphicsProfiles[qualityIndex];
+    if (present - lastShadow < shadowInterval && anchor.distanceToSquared(lastShadowAnchor) < 4) return;
     lastShadow = present;
     lastShadowAnchor.copy(anchor);
-    shadowRight.set(0,1,0).cross(SUN_DIR).normalize();
-    shadowUp.crossVectors(SUN_DIR, shadowRight).normalize();
-    const texel = 146 / lighting.sun.shadow.mapSize.x;
-    const right = anchor.dot(shadowRight), up = anchor.dot(shadowUp);
-    lighting.sun.target.position.copy(anchor)
-      .addScaledVector(shadowRight, Math.round(right / texel) * texel - right)
-      .addScaledVector(shadowUp, Math.round(up / texel) * texel - up);
-    lighting.sun.position.copy(lighting.sun.target.position).addScaledVector(SUN_DIR, 460);
-    lighting.sun.target.updateMatrixWorld();
-    renderer.shadowMap.needsUpdate = true;
+    updateSunShadow(renderer, lighting.sun, SUN_DIR, anchor);
   }
 
   function draw(now) {
