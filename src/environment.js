@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { cameraClipper } from './camera-obstacles.js';
 import {
   clamp, lerp, smoothstep, noise2, mulberry32, makeTextTexture, makeCanvas,
   canvasTexture, makeRadialTexture, formatNumber,
@@ -14,7 +15,7 @@ import { coniferGeometry, coniferMaterial } from './conifers.js';
 import { climateUniforms } from './climate-state.js';
 import { buildNeedleShoots } from './needle-shoots.js';
 import { ForestCell, forestQuality, makeForestCrowns } from './forest-lod.js';
-import { part, box, beam, mergeParts, mergedMesh } from './scenery.js';
+import { part, box, beam, cacheStaticTransforms, mergeParts, mergedMesh } from './scenery.js';
 import { buildResortPeople } from './resort-people.js';
 import { buildRoundhouseArrival } from './roundhouse.js';
 import { buildFairmont,FAIRMONT_REPLACED_IDS } from './fairmont.js';
@@ -80,18 +81,19 @@ class ColliderGrid {
   addCircle(x, z, r, type, extra = {}) {
     const c = { x, z, r, type, ...extra };
     this.circles.push(c);
-    const k = this.key(x, z);
-    let arr = this.cells.get(k);
-    if (!arr) { arr = []; this.cells.set(k, arr); }
-    arr.push(c);
+    this.register(c, r);
     return c;
   }
 
   addBox(x, z, hw, hd, rot, type, extra = {}) {
     const b = { x, z, hw, hd, rot, type, ...extra };
     this.boxes.push(b);
-    // register the box in all cells its bounding circle touches
-    const rad = Math.hypot(hw, hd);
+    this.register(b, Math.hypot(hw, hd));
+    return b;
+  }
+
+  register(collider, rad) {
+    const { x, z } = collider;
     const x0 = Math.floor((x - rad) / GRID_CELL), x1 = Math.floor((x + rad) / GRID_CELL);
     const z0 = Math.floor((z - rad) / GRID_CELL), z1 = Math.floor((z + rad) / GRID_CELL);
     for (let ix = x0; ix <= x1; ix++) {
@@ -99,10 +101,9 @@ class ColliderGrid {
         const k = `${ix},${iz}`;
         let arr = this.cells.get(k);
         if (!arr) { arr = []; this.cells.set(k, arr); }
-        arr.push(b);
+        arr.push(collider);
       }
     }
-    return b;
   }
 
   addBuilding(building) {
@@ -255,7 +256,7 @@ function buildForest(scene, grid, rand) {
     if (!buckets.has(cell)) buckets.set(cell, { kind, trees: [] });
     const tree = { x, y: treeAnchorHeightAt(x,z), z, apex, yaw, stretch, kind };
     buckets.get(cell).trees.push(tree);
-    grid.addCircle(x, z, Math.min(.88, apex * .021), 'tree', { tree });
+    grid.addCircle(x, z, Math.min(.88, apex * .021), 'tree', { tree, minY:tree.y-.75, maxY:tree.y+apex });
     count++;
   };
 
@@ -954,40 +955,82 @@ function makeSampler(points) {
   };
 }
 
+function liftTube(points, radius, color, segments) {
+  const path = new THREE.CatmullRomCurve3(points.map(point => new THREE.Vector3(...point)));
+  return part(new THREE.TubeGeometry(path, segments, radius, 6), color);
+}
+
+function chairCushion(profile) {
+  const shape = new THREE.Shape();
+  shape.moveTo(-profile[0][1], profile[0][0]);
+  for (const [y, z] of profile.slice(1)) shape.lineTo(-z, y);
+  shape.closePath();
+  return new THREE.ExtrudeGeometry(shape, {depth: 1, bevelEnabled: false})
+    .translate(0, 0, -.5).rotateY(Math.PI / 2);
+}
+
 function makeChairGeometry(seatCount, modern = false) {
-  // DCD seat width is 520 mm in Doppelmayr's D-Line technical brochure.
-  const pitch=modern?.52:.51,span=seatCount*pitch+.18;
+  // The wider carrier uses the documented 520 mm DCD seat width as its spacing.
+  const pitch = modern ? .52 : .51, half = (seatCount * pitch + .18) / 2;
+  const fixed = seatCount <= 3;
+  const steel = modern ? '#9da8aa' : '#737f85', bright = '#b6c0bf', dark = '#3e4a51';
+  const pad = modern ? '#9b2634' : '#34434a';
+  const back = modern ? '#932431' : '#303d44';
+  const sleeve = new THREE.CylinderGeometry(.064, .064, 1, 8);
   const parts = [
-    box(0.15, 0.23, 0.58, '#6e7a7e', [0, -0.08, 0]),
-    box(0.11, 1.75, 0.11, '#6c777b', [0, -0.99, 0]),
-    box(span, 0.13, 0.09, '#788589', [0, -1.78, -0.25]),
-    box(span, 0.12, 0.56, '#242e32', [0, -2.25, 0]),
-    box(span, 0.48, 0.09, '#36454c', [0, -1.99, -0.25]),
-    box(span + 0.08, 0.07, 0.07, '#8b999b', [0, -1.79, 0.47]),
-    box(span * 0.96, 0.055, 0.22, '#68767b', [0, -2.68, 0.44]),
+    // The jaw stays at the rope origin. The body and hanger run outboard,
+    // clear of the wheel flanges on the support side of the rope.
+    box(.15, .105, fixed ? .39 : .54, steel, [-.018, -.016, 0]),
+    box(.15, .115, fixed ? .26 : .43, dark, [-.14, -.046, .006]),
+    part(sleeve, bright, [-.167, -.13, .009], [0, 0, Math.PI / 2], [.84, .17, .84]),
+    liftTube([[-.171,-.15,.01],[-.17,-.31,.04],[-.11,-.56,.11],[-.06,-1.27,-.02],[0,-1.73,-.26]], .055, steel, 7),
+    box(.27, .12, .19, bright, [0, -1.71, -.25]),
+    box(half * 1.98, .095, .115, steel, [0, -1.755, -.28]),
+    box(half * 1.96, .105, .48, dark, [0, -2.236, -.015]),
+    // The padded crossbar and both hinge arms are one bent tube.
+    liftTube([[-half,-1.84,-.19],[-half,-1.80,.32],[-half+.08,-1.79,.46],
+      [half-.08,-1.79,.46],[half,-1.80,.32],[half,-1.84,-.19]], .034, steel, 13),
+    part(sleeve, dark, [0, -1.79, .46], [0, 0, Math.PI / 2], [.6, half * 1.66, .6]),
   ];
-  for (let i = 0; i < seatCount; i++) {
-    const x = (i - (seatCount - 1) / 2) * pitch;
-    const pad = modern?'#aa1530':'#304047';
-    parts.push(box(0.46, 0.065, 0.48, pad, [x, -2.16, 0.015]));
-    parts.push(box(0.46, 0.36, 0.05, pad, [x, -2.0, -0.18]));
+
+  if (!fixed) {
+    const driveWheel = new THREE.CylinderGeometry(.078, .078, .047, 10);
+    parts.push(part(driveWheel, '#3c484b', [-.249, .055, .12], [0, 0, Math.PI / 2]));
+    parts.push(part(sleeve, modern ? '#b1313b' : dark, [-.14, .048, -.08], [Math.PI / 2, 0, 0], [.72, .29, .72]));
+    parts.push(box(.11, .065, .19, bright, [-.247, -.026, -.19]));
   }
-  for (const x of [-span / 2, span / 2]) {
-    parts.push(box(0.055, 0.06, 0.8, '#738286', [x, -1.79, 0.07]));
-    parts.push(box(0.06, 0.87, 0.06, '#68767b', [x, -2.23, 0.46]));
+  for (const side of [-1, 1]) {
+    const x = side * half;
+    parts.push(liftTube([[x-.12*side,-1.76,-.28],[x,-1.82,-.27],[x,-2.15,-.24],
+      [x,-2.26,-.11],[x,-2.25,.22],[x-.10*side,-2.25,.24]], .034, steel, 7));
+    parts.push(part(sleeve, dark, [x, -1.85, -.22], [0, 0, Math.PI / 2], [1, .095, 1]));
   }
-  if(modern){
-    parts.push(box(span+.10,.10,.10,'#c5ccca',[0,-1.69,-.31]));
-    for(let i=0;i<seatCount;i++){
-      const x=(i-(seatCount-1)/2)*pitch;
-      parts.push(box(.46,.048,.10,'#d82b40',[x,-1.78,-.31]));
-      parts.push(box(.032,.40,.028,'#79898c',[x+pitch*.46,-1.98,-.31]));
-    }
-    for(const side of [-1,1])parts.push(box(.07,.52,.07,'#bbc6c5',[side*span/2,-1.95,.15]));
-    for(let i=0;i<5;i++)parts.push(part(new THREE.TorusGeometry(.055,.011,4,10),'#b5283d',[.11,-.04,-.20+i*.09],[0,Math.PI/2,0]));
-    parts.push(box(.39,.12,.58,'#8fa0a2',[0,-.10,0]));
+
+  const pads = fixed ? 1 : seatCount;
+  const padWidth = fixed ? half * 1.82 : pitch - .057;
+  const seatPad = chairCushion([[-.036,-.23],[-.036,.196],[-.018,.238],[.016,.240],[.041,.192],[.035,-.23]]);
+  const backPad = chairCushion([[-.182,-.009],[-.166,.041],[.151,.005],[.190,-.029],[.175,-.069],[-.144,-.069]]);
+  for (let i = 0; i < pads; i++) {
+    const x = (i - (pads - 1) / 2) * pitch;
+    parts.push(
+      part(seatPad, pad, [x, -2.163, .008], [0, 0, 0], [padWidth, 1, 1]),
+      part(backPad, back, [x, -1.99, -.216], [0, 0, 0], [padWidth, 1, 1]),
+    );
   }
-  const geometry=mergeParts(parts);geometry.userData.seatPitch=pitch;geometry.userData.seats=seatCount;return geometry;
+  // The crossbar can be identified from both sides. Its footrests are spaced
+  // apart so the lower silhouette reads as a chair rather than a solid slab.
+  const rests = fixed ? 1 : Math.ceil(seatCount / 2);
+  for (let i = 0; i < rests; i++) {
+    const x = (i - (rests - 1) / 2) * (half * 2 / rests);
+    const width = half * (.90 / rests) * 2;
+    parts.push(box(.048, .86, .046, steel, [x, -2.22, .447], [-.055, 0, 0]));
+    parts.push(box(width, .054, .124, dark, [x, -2.68, .425]));
+    parts.push(box(width * .82, .022, .094, '#667478', [x, -2.644, .425]));
+  }
+  const geometry = mergeParts(parts);
+  geometry.userData.seatPitch = pitch;
+  geometry.userData.seats = seatCount;
+  return geometry;
 }
 
 function makeCabinGeometry(color = '#1d2529', accent = '#e7e1d3', big = false, creekside = false) {
@@ -1036,6 +1079,52 @@ function towerHeadGeometry() {
   }
   for(let i=0;i<7;i++)parts.push(box(.43,.025,.027,'#c0c7c4',[0,-.62+i*.145,-.73]));
   for(const x of [-.24,.24])parts.push(box(.026,1.18,.028,'#80969e',[x,-.11,-.73]));
+  return mergeParts(parts);
+}
+
+function chairTowerHeadGeometry() {
+  const steel = '#829196', flange = '#a4b1b3', dark = '#596a72';
+  const parts = [
+    box(4.03, .14, .25, flange, [0, -.35, 0]),
+    box(3.98, .29, .13, steel, [0, -.52, 0]),
+    box(4.03, .105, .24, dark, [0, -.67, 0]),
+    box(.66, .205, .49, steel, [0, -.62, 0]),
+    box(.48, .53, .41, dark, [0, -.87, 0]),
+    box(1.80, .062, 1.28, steel, [0, -.58, 0]),
+  ];
+  for (const side of [-1, 1]) {
+    const x = side * 1.56;
+    parts.push(box(.31, .34, .33, dark, [x, -.39, 0]));
+    parts.push(box(.19, .16, 1.4, steel, [x, -.48, 0]));
+    parts.push(beam([side*.24,-1.06,0],[side*1.55,-.67,0],.11,.14,flange));
+    for (const z of [-.31, .31]) parts.push(beam([side*.31,-1.02,0],[side*1.45,-.42,z],.06,.075,dark));
+  }
+  for (const z of [-.59, .59]) {
+    parts.push(box(1.75, .045, .045, flange, [0, .275, z]));
+    parts.push(box(1.75, .035, .035, dark, [0, -.13, z]));
+    for (const x of [-.86,0,.86]) parts.push(box(.035, .85, .035, steel, [x, -.15, z]));
+  }
+  for (const x of [-.22, .22]) parts.push(box(.041,1.18,.041,dark,[x,-.55,-.69]));
+  for (let i = 0; i < 6; i++) parts.push(box(.42,.027,.034,flange,[0,-1.05+i*.18,-.69]));
+  return mergeParts(parts);
+}
+
+function chairSheaveGeometry() {
+  // The rope sits in the groove, with steel flanges outside the rope width.
+  const wheel = new THREE.LatheGeometry([
+    [0,-.085], [.122,-.085], [.147,-.064], [.147,-.046], [.105,0],
+    [.147,.046], [.147,.064], [.122,.085], [0,.085],
+  ].map(([r, x]) => new THREE.Vector2(r, x)), 10).rotateZ(Math.PI / 2);
+  const axle = new THREE.CylinderGeometry(.044, .044, .234, 8).rotateZ(Math.PI / 2);
+  const parts = [
+    box(.29,.18,.30,'#66777d',[0,-.37,0]),
+    box(.27,.12,.76,'#778b92',[0,-.26,0]),
+  ];
+  for (const z of [-.28, 0, .28]) {
+    parts.push(part(wheel, '#283238', [0, -.142, z]));
+    parts.push(part(axle, '#a4b0b2', [0, -.142, z]));
+    for (const x of [-.107,.107]) parts.push(box(.038,.13,.11,'#8b9b9f',[x,-.205,z]));
+  }
   return mergeParts(parts);
 }
 
@@ -1143,6 +1232,7 @@ function buildLifts(scene, grid) {
   const towers = [];
   const cableMat = new THREE.MeshStandardMaterial({ color: 0x424e53, roughness: 0.48, metalness: 0.42 });
   const carrierMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.65, metalness: 0.2 });
+  const chairMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .54, metalness: .18 });
   const chairGeometries = new Map();
   const lifts = [];
   const position = new THREE.Vector3();
@@ -1242,11 +1332,15 @@ function buildLifts(scene, grid) {
       group.add(cable);
     }
 
-    for (const { x, z, y, nx, nz } of supports.slice(1, -1).filter(node=>!node.virtual)) {
+    for (let i = 1; i < supports.length - 1; i++) {
+      const support = supports[i];
+      const { x, z, y, nx, nz } = support;
+      if (support.virtual) continue;
       const angle = Math.atan2(nz, -nx);
       const foot = isP2P ? 3.6 : .69;
       const base = Math.min(...[-foot, 0, foot].flatMap(dx => [-foot, 0, foot].map(dz => heightAt(x + dx, z + dz)))) - .24;
-      towers.push({ x, z, y, base, angle, lateral, isP2P });
+      towers.push({ x, z, y, base, angle, lateral, isP2P, chair, support,
+        previous: supports[i - 1], next: supports[i + 1] });
       grid.addCircle(x, z, isP2P ? 3.6 : 1.15, 'lift-tower', { liftId: def.id, maxY: y + .4 });
     }
 
@@ -1269,7 +1363,8 @@ function buildLifts(scene, grid) {
     const shell=geometry.userData.carrierShell;
     const doorOpen=shell?new THREE.InstancedBufferAttribute(new Float32Array(perSide*2),1).setUsage(THREE.DynamicDrawUsage):null;
     const hull=shell?gondolaFleetGeometry(shell,'hull',doorOpen):geometry;
-    const carriers = new THREE.InstancedMesh(hull, shell?shell.materials.hull:carrierMat, perSide * 2);
+    const material = shell ? shell.materials.hull : chairMat;
+    const carriers = new THREE.InstancedMesh(hull, material, perSide * 2);
     carriers.name = def.name;
     carriers.boundingSphere = new THREE.Box3()
       .setFromPoints(samplers.flatMap((sampler) => sampler.points))
@@ -1292,7 +1387,7 @@ function buildLifts(scene, grid) {
       }
     }
 
-    const passenger=shell?new THREE.Group():new THREE.Mesh(geometry,carrierMat);
+    const passenger=shell?new THREE.Group():new THREE.Mesh(geometry,material);
     const setPassengerDoors=shell?addGondolaShell(passenger,shell):null;
     passenger.userData.gondolaCarrier=!!shell;
     passenger.visible = false;
@@ -1303,9 +1398,18 @@ function buildLifts(scene, grid) {
 
   const regular = towers.filter((t) => !t.isP2P);
   const valley = towers.filter((t) => t.isP2P);
+  const chairs = towers.filter(t => t.chair);
+  const gondolas = towers.filter(t => !t.chair);
   const shafts = new THREE.InstancedMesh(towerShaftGeometry(), carrierMat, regular.length);
   const lattices = new THREE.InstancedMesh(latticeGeometry(), carrierMat, valley.length);
-  const heads = new THREE.InstancedMesh(towerHeadGeometry(), carrierMat, towers.length);
+  const heads = new THREE.InstancedMesh(towerHeadGeometry(), carrierMat, gondolas.length);
+  const chairHeads = new THREE.InstancedMesh(chairTowerHeadGeometry(), chairMat, chairs.length);
+  const chairSheaves = new THREE.InstancedMesh(chairSheaveGeometry(), chairMat, chairs.length * 4);
+  shafts.name = 'Lift tower shafts';
+  lattices.name = 'PEAK 2 PEAK lattice towers';
+  heads.name = 'Gondola tower heads';
+  chairHeads.name = 'Chairlift tower crossarms';
+  chairSheaves.name = 'Chairlift sheave groups';
   const setTower = (mesh, t, i, y, sx, sy) => {
     dummy.position.set(t.x, y, t.z);
     dummy.rotation.set(0, t.angle, 0);
@@ -1315,8 +1419,34 @@ function buildLifts(scene, grid) {
   };
   regular.forEach((t, i) => setTower(shafts, t, i, t.base, 1, t.y - t.base));
   valley.forEach((t, i) => setTower(lattices, t, i, t.base, 1, (t.y - t.base) / 45));
-  towers.forEach((t, i) => setTower(heads, t, i, t.y, t.lateral / 1.65, 1));
-  for (const mesh of [shafts, lattices, heads]) {
+  gondolas.forEach((t, i) => setTower(heads, t, i, t.y, t.lateral / 1.65, 1));
+  chairs.forEach((t, i) => setTower(chairHeads, t, i, t.y, t.lateral / 1.65, 1));
+  const bankAxis = new THREE.Vector3(), bankUp = new THREE.Vector3(), bankBasis = new THREE.Matrix4();
+  let bankIndex = 0;
+  for (const tower of chairs) {
+    const { support, previous, next, lateral } = tower;
+    for (const side of [-lateral, lateral]) {
+      const origin = new THREE.Vector3(support.x + support.nx*side, support.y, support.z + support.nz*side);
+      for (const half of [-1, 1]) {
+        const node = half < 0 ? previous : next;
+        // Pitch each bogie to the exact first sampled rope interval on its side
+        // of the support. The line itself and the carrier path stay fixed.
+        const adjacent = new THREE.Vector3(node.x + node.nx*side, node.y, node.z + node.nz*side);
+        const fraction = 1 / Math.max(2, Math.ceil(adjacent.distanceTo(origin) / 4));
+        adjacent.lerp(origin, 1-fraction);
+        adjacent.y -= 4 * fraction * (1-fraction) * (half < 0 ? support.sag : next.sag);
+        tangent.subVectors(adjacent, origin).normalize().multiplyScalar(half);
+        bankAxis.set(tangent.z, 0, -tangent.x).normalize();
+        bankUp.crossVectors(tangent, bankAxis);
+        dummy.position.copy(origin).addScaledVector(tangent, half*.45);
+        dummy.quaternion.setFromRotationMatrix(bankBasis.makeBasis(bankAxis, bankUp, tangent));
+        dummy.scale.setScalar(1);
+        dummy.updateMatrix();
+        chairSheaves.setMatrixAt(bankIndex++, dummy.matrix);
+      }
+    }
+  }
+  for (const mesh of [shafts, lattices, heads, chairHeads, chairSheaves]) {
     mesh.castShadow = true;
     group.add(mesh);
   }
@@ -1500,7 +1630,10 @@ function batchTrailSigns(scene, markers, signs) {
   scene.onBeforeRender = function (renderer, activeScene, camera, target) {
     scene.onBeforeRender = prepareScene;
     prepareScene.call(this, renderer, activeScene, camera, target);
-    if (!renderer.capabilities.isWebGL2) return;
+    if (!renderer.capabilities.isWebGL2) {
+      cacheStaticTransforms(markers);
+      return;
+    }
 
     for (const markersInCell of signCells.values()) {
       // Isolated array layers preserve the original board pixels and mipmaps.
@@ -1557,7 +1690,7 @@ function batchTrailSigns(scene, markers, signs) {
         markers.add(boards);
       }
     }
-    markers.updateWorldMatrix(true, true);
+    cacheStaticTransforms(markers);
   };
 }
 
@@ -1828,6 +1961,7 @@ function buildVillage(scene, grid) {
     }
   }
   scene.add(village);
+  cacheStaticTransforms(village);
 }
 
 function buildFitzTerminal(scene, grid, markers, def, pointIndex) {
@@ -2019,31 +2153,8 @@ function buildFlags(scene) {
 
 const cameraObstacles = new Set([
   'lodge', 'station', 'building-wall', 'lift-tower', 'furniture', 'landmark',
-  'plaza-building-wall', 'plaza-railing', 'plaza-planter',
+  'plaza-building-wall', 'plaza-railing', 'plaza-planter', 'plaza-canopy', 'tree', 'fallen log',
 ]);
-
-function clipCameraArm(grid, x, y, z, camera) {
-  const dx = camera.x - x, dy = camera.y - y, dz = camera.z - z;
-  const distance = Math.hypot(dx, dy, dz);
-  if (distance < .42) return distance;
-  const solids = grid.query(x + dx / 2, z + dz / 2, distance / 2 + .4)
-    .filter(c => cameraObstacles.has(c.type));
-  if (!solids.length) return distance;
-  const blocked = (c, px, py, pz) =>
-    py > (c.minY ?? -Infinity) - .18 && py < (c.maxY ?? Infinity) + .18 &&
-    (c.r ? Math.hypot(c.x - px, c.z - pz) < c.r + .18 : pointInBox(px, pz, c, .24, .24));
-  // A wall surrounding the starting anchor cannot shorten an outward view.
-  const inFront = solids.filter(c => !blocked(c, x, y, z));
-  const steps = Math.ceil(distance / .24);
-  for (let i = 1; i <= steps; i++) {
-    const t = i / steps, px = x + dx * t, py = y + dy * t, pz = z + dz * t;
-    if (!inFront.some(c => blocked(c, px, py, pz))) continue;
-    const safe = Math.max(.17 / distance, t - .36 / distance);
-    camera.set(x + dx * safe, y + dy * safe, z + dz * safe);
-    return safe * distance;
-  }
-  return distance;
-}
 
 export async function buildEnvironment(scene, { onProgress = () => {} } = {}) {
   const rand = mulberry32(9102026);
@@ -2131,7 +2242,7 @@ export async function buildEnvironment(scene, { onProgress = () => {} } = {}) {
     interiorAt(x, z, y) { return glacierCave.interiorAt(x,z,y) ?? interiors.interiorAt(x,z,y); },
     lodgeEntrances: interiors.rooms.map(({ id, name, entry }) => ({ id, name, ...entry })),
     queryColliders(x, z, r = 3) { return grid.query(x, z, r); },
-    clipCameraArm(x, y, z, position) { return clipCameraArm(grid, x, y, z, position); },
+    clipCameraArm: cameraClipper(grid.query.bind(grid), cameraObstacles),
     pointInBox,
     update(dt, time, camera) {
       clock = time;

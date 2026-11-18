@@ -84,13 +84,21 @@ export function treeCoverAt(x, z) {
 
 function buildSnowField() {
   const data = new Uint8Array(maskN * maskN * 4);
+  // A land-cover cell spans about 17 metres. Feather mapped forest edges
+  // before packing coverage so a single cell cannot color an entire patch.
+  const woodland = boxBlurGrid(Float32Array.from(landCover, kind => Number(kind === 10)), 1, 2);
+  const gridScale = (n - 1) / maskN;
   for (let j = 0; j < maskN; j++) {
     const z = WORLD.minZ + (j + .5) * WORLD.sizeZ / maskN;
+    const gz = (j + .5) * gridScale;
+    const row = Math.floor(gz) * n, tz = gz % 1;
     for (let i = 0; i < maskN; i++) {
       const x = WORLD.minX + (i + .5) * WORLD.sizeX / maskN;
+      const gx = (i + .5) * gridScale;
+      const gridIndex = row + Math.floor(gx), tx = gx % 1;
       const index = j * maskN + i, key = 4 * index;
       const piste = mask[index];
-      const h = triangleHeight(heights, n, ...worldIndex(x, z, WORLD));
+      const h = triangleHeight(heights, n, gx, gz);
       const drift = .5 + .5 * noise.fbm(x * .034, z * .027, 3);
       const scoured = noise2.fbm(x * .062 + z * .019, z * .024 - x * .009, 3);
       const wind = .5 + .5 * noise.fbm(x * .012 + 12, z * .014, 2);
@@ -103,10 +111,53 @@ function buildSnowField() {
       data[key] = Math.round(255 * piste);
       data[key + 1] = Math.round(255 * powder);
       data[key + 2] = Math.round(255 * ice);
-      data[key + 3] = landCoverAt(x, z) === 10 ? Math.round(255 * (1 - smoothstep(.13,.65,piste))) : 0;
+      const forest = lerp(lerp(woodland[gridIndex], woodland[gridIndex + 1], tx),
+        lerp(woodland[gridIndex + n], woodland[gridIndex + n + 1], tx), tz);
+      data[key + 3] = Math.round(255 * forest);
     }
   }
   return data;
+}
+
+function buildGroomingMap() {
+  const data = new Uint16Array(maskN * maskN);
+  const closest = new Float32Array(maskN * maskN).fill(Infinity);
+  const dx = WORLD.sizeX / maskN, dz = WORLD.sizeZ / maskN;
+  for (const run of RUNS) {
+    if (run.gladed) continue;
+    const reach = run.width * .5 + 2 * Math.max(dx, dz);
+    for (let k = 1; k < run.points.length; k++) {
+      const [ax, az] = run.points[k - 1], [bx, bz] = run.points[k];
+      const vx = bx - ax, vz = bz - az;
+      const length = Math.hypot(vx, vz);
+      if (length === 0) continue;
+      const inverseLength = 1 / length;
+      const inverseLengthSquared = inverseLength * inverseLength;
+      const reachSquared = reach * reach;
+      const ix0 = Math.max(0, Math.floor((Math.min(ax, bx) - reach - WORLD.minX) / dx));
+      const iz0 = Math.max(0, Math.floor((Math.min(az, bz) - reach - WORLD.minZ) / dz));
+      const ix1 = Math.min(maskN - 1, Math.floor((Math.max(ax, bx) + reach - WORLD.minX) / dx));
+      const iz1 = Math.min(maskN - 1, Math.floor((Math.max(az, bz) + reach - WORLD.minZ) / dz));
+      for (let iz = iz0; iz <= iz1; iz++) {
+        const z = WORLD.minZ + (iz + .5) * dz - az;
+        for (let ix = ix0; ix <= ix1; ix++) {
+          const index = iz * maskN + ix;
+          if (mask[index] < .24) continue;
+          const x = WORLD.minX + (ix + .5) * dx - ax;
+          const t = clamp((x * vx + z * vz) * inverseLengthSquared, 0, 1);
+          const distance = (x - t * vx) ** 2 + (z - t * vz) ** 2;
+          if (distance > reachSquared || distance >= closest[index]) continue;
+          closest[index] = distance;
+          const across = (z * vx - x * vz) * inverseLength;
+          data[index] = THREE.DataUtils.toHalfFloat(across);
+        }
+      }
+    }
+  }
+  const map = new THREE.DataTexture(data, maskN, maskN, THREE.RedFormat, THREE.HalfFloatType);
+  map.minFilter = map.magFilter = THREE.LinearFilter;
+  map.needsUpdate = true;
+  return map;
 }
 
 function buildMountainShade() {
@@ -659,7 +710,7 @@ function sampleMask(x, z) {
   return lerp(lerp(a, b, tx), lerp(c, d, tx), tz);
 }
 
-function boxBlurHeights(src, radius, iterations = 2) {
+function boxBlurGrid(src, radius, iterations = 2) {
   const N = n;
   let a = src, b = new Float32Array(src.length);
   const w = radius * 2 + 1;
@@ -723,10 +774,8 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
   const snowPiste = new THREE.Color().setRGB(0.995, 0.998, 1.0, THREE.SRGBColorSpace);
   const snowShade = new THREE.Color().setRGB(0.84, 0.895, 0.95, THREE.SRGBColorSpace);
   const snowWind = new THREE.Color().setRGB(0.83, 0.895, 0.945, THREE.SRGBColorSpace);
-  const rock = new THREE.Color().setRGB(0.30, 0.29, 0.285, THREE.SRGBColorSpace);
-  const rockLight = new THREE.Color().setRGB(0.42, 0.405, 0.39, THREE.SRGBColorSpace);
   const col = new THREE.Color();
-  const blurred = boxBlurHeights(gradedHeights.slice(), 3, 1);
+  const blurred = boxBlurGrid(gradedHeights.slice(), 3, 1);
   const lake = new THREE.Color(0x416d7e);
 
   onProgress(0.5, 'Shading the alpine…');
@@ -776,11 +825,6 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
       // Land-cover class 10 describes canopy seen from a distance, not the
       // uncovered snow beneath a skier. The snow shader adds distant canopy.
       if (cover === 50) col.multiplyScalar(0.86 + 0.14 * p);
-      // rock bands and cliff faces
-      const rocky = smoothstep(0.30, 0.54, slope) * smoothstep(0.2, 0.72, nBig + nFine * 0.25 + (h > 1700 ? 0.2 : -0.1));
-      if (rocky > 0.01) {
-        col.copy(col).lerp(nFine > 0 ? rockLight : rock, clamp(rocky * 1.4, 0, 0.94));
-      }
       // concave shading / ambient depth
       const conc = clamp((blurred[k] - h) * 0.009, -0.05, 0.12);
       col.multiplyScalar(1 - conc * 0.85);
@@ -808,7 +852,8 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
   };
   const roomCutout = new THREE.Vector4(), roomYaw = new THREE.Vector2(1, 0);
   const mountainShade = buildMountainShade();
-  const snowMaps = { pisteMap, tracks, roomCutout, roomYaw, mountainShade };
+  const groomingMap = buildGroomingMap();
+  const snowMaps = { pisteMap, tracks, roomCutout, roomYaw, mountainShade, groomingMap };
   const mat = surfaceMaterial('snow', { vertexColors: true }, snowMaps);
   const mesh = makePatches(N, [
     ['position', positions, 3], ['normal', normals, 3], ['color', colors, 3],

@@ -316,7 +316,7 @@ export class UI {
     node.textContent = value;
   }
 
-  update({ player, collectibles = this.collectibles, nearest, time, mountainName, trailName }) {
+  update({ player, collectibles = this.collectibles, nearest, time, mountainName, trailName, indoors = false }) {
     const mountain = mountainName ?? nearest?.run.mountain ?? mountainAt(player.pos.x, player.pos.z);
     const nearUnload = trailName == null && Math.hypot(player.pos.x - ROUNDHOUSE_START.x, player.pos.z - ROUNDHOUSE_START.z) < 43;
     const trail = trailName ?? (nearUnload ? 'Roundhouse' : nearest?.run.named ? nearest.run.name : '');
@@ -324,7 +324,7 @@ export class UI {
     this.setText(this.el.altitude, 'altitude', `${formatNumber(player.pos.y)} m`);
     this.setText(this.el.trailName, 'trail', trail);
     this.setText(this.el.statVertical, 'vertical', `${formatNumber(Math.max(0, player.stats.vertical))} m`);
-    $('gear-mode').hidden = player.riding;
+    $('gear-mode').hidden = !player.canChangeFootMode() || (player.footMode && (indoors || player.surfaceType === 'ground'));
     this.setText($('gear-mode-label'), 'gearMode', player.footMode ? 'Put on skis' : 'Walk');
     this.setText($('snow-surface'), 'surface', player.vehicleLabel ? ` · ${player.vehicleLabel}` : player.footMode ? ' · On foot' :
       player.surfaceType === 'ice' ? ' · Ice' : player.surfaceType === 'powder' ? ' · Powder' : '');

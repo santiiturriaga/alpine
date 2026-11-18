@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { buildingData } from '../data/osm-whistler.js';
 import { heightAt } from './terrain.js';
-import { part, box, beam, mergeParts, mergedMesh } from './scenery.js';
+import { part, box, beam, cacheStaticTransforms, mergeParts, mergedMesh } from './scenery.js';
 import { detailedMaterial, timberMesh } from './plaza-materials.js';
 import { climateUniforms } from './climate-state.js';
 import { createRoofSnow, createIcicles } from './roof-weather.js';
@@ -827,6 +827,7 @@ export function buildSkiersPlaza(scene, { grid }) {
   });
   const deciduous = planters.getObjectByName('foliage');
   let roofsVisible;
+  cacheStaticTransforms(group);
   return {
     group,
     socialSlots: [[-44.3, -86.6, .5], [-45.3, -86.1, 1.8], [-43.9, -85.1, -2.5],

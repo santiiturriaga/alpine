@@ -62,6 +62,34 @@ export function mergedMesh(parts, { roughness = 0.82, metalness = 0.02, emissive
   return mesh;
 }
 
+// Call after attaching a completed subtree whose descendants have fixed local transforms.
+// Materials, geometry, instance matrices and visibility can still change independently.
+export function cacheStaticTransforms(group) {
+  group.updateWorldMatrix(true, true);
+  for (const child of group.children) {
+    child.traverse(object => {
+      object.matrixAutoUpdate = false;
+      object.matrixWorldNeedsUpdate = false;
+    });
+  }
+  let previousParent = group.parent;
+  const lastParentWorld = previousParent?.matrixWorld.clone() ?? new THREE.Matrix4();
+  const lastLocal = group.matrix.clone();
+  const update = group.updateMatrixWorld;
+  group.updateMatrixWorld = function () {
+    if (this.matrixAutoUpdate) this.updateMatrix();
+    const parent = this.parent;
+    if (parent === previousParent && (!parent || lastParentWorld.equals(parent.matrixWorld)) && lastLocal.equals(this.matrix)) {
+      this.matrixWorldNeedsUpdate = false;
+      return;
+    }
+    previousParent = parent;
+    if (parent) lastParentWorld.copy(parent.matrixWorld);
+    lastLocal.copy(this.matrix);
+    update.call(this, true);
+  };
+}
+
 export function beam(a, b, width, depth, color) {
   const from = new THREE.Vector3(...a), to = new THREE.Vector3(...b);
   const span = to.clone().sub(from);

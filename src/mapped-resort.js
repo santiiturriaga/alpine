@@ -1,4 +1,5 @@
 import { updatePassGates } from './pass-gates.js';
+import { updateChaseFoliage } from './chase-foliage.js';
 import { setForestQuality } from './forest-lod.js';
 import { createMultiplayer } from './multiplayer.js';
 import {
@@ -770,6 +771,7 @@ export async function startMappedResort(mountain) {
       stride: player.footMode ? player.walkAmount : player.strideAmount, stridePhase: player.stridePhase,
       gustKmh: climate.state.gust, hiking: player.footMode, paused: frozen || !playing,
     });
+    updateChaseFoliage(camera, playing && !ride && !vehicle ? player : null);
     renderer.render(scene, camera);
   }
 

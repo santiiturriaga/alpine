@@ -11,6 +11,14 @@ const ridges = ['Cedar','Raven','Hemlock','Boulder','Marmot','Alder','Glacier','
 const callsign = id => ridges[parseInt(id.slice(0,2),16) % ridges.length] + ' ' + id.slice(-4).toUpperCase();
 const colors = ['#ad4939','#3b7190','#3d6e54','#ce933e','#404348'];
 const decimals = (v, scale) => Math.round(v * scale) / scale;
+// Field 16 stays a strictly increasing integer for older clients. The prefix
+// distinguishes millisecond timestamps from their packet counters.
+const timePrefix = 1_000_000_000_000;
+const movingInterval = 135;
+const playbackDelay = 270;
+const predictionLimit = 92;
+const historyLimit = 12;
+const lerp = THREE.MathUtils.lerp;
 
 function validPose(s) {
   return Array.isArray(s) && s.length === 17 &&
@@ -19,6 +27,45 @@ function validPose(s) {
     Number.isInteger(s[10]) && bounded(s[10],31) && bounded(s[11],7) &&
     s.slice(12,15).every(v => Number.isInteger(v) && v >= 0 && v <= 100000000) &&
     /^#[0-9a-f]{6}$/i.test(s[15]) && Number.isSafeInteger(s[16]) && s[16] >= 0;
+}
+
+function discontinuous(before, after, elapsed) {
+  const seconds = Math.max(0, elapsed) / 1000;
+  const speed = Math.max(Math.abs(before[7]), Math.abs(after[7]));
+  return ((before[10] ^ after[10]) & 8) !== 0 ||
+    Math.hypot(after[0] - before[0], after[2] - before[2]) > Math.max(3.1, speed * seconds * 1.42 + 1.6) ||
+    Math.abs(after[1] - before[1]) > Math.max(3.6, 80 * seconds);
+}
+
+function recordSnapshot(remote, pose, heard) {
+  const clocked = pose[16] >= timePrefix;
+  const at = clocked ? pose[16] - timePrefix : heard;
+  const last = remote.history?.at(-1);
+  const elapsed = last ? at - last.at : 0;
+  const silence = heard - remote.heard;
+  if (!last || clocked !== remote.clocked || elapsed > 2100 || silence > 2600 ||
+      discontinuous(last.pose, pose, elapsed)) {
+    remote.history = [];
+    remote.segment = (remote.segment ?? 0) + 1;
+    remote.cursor = -Infinity;
+  }
+  const offset = heard - at;
+  // Favor the least delayed packets, allowing for gradual clock drift. Neither
+  // clock depends on local wall time or synchronization with the other skier.
+  remote.clockOffset = !remote.history.length ? offset : Math.min(offset,
+    remote.clockOffset + Math.max(0, silence) * .003);
+  if (clocked && remote.history.length && last.pose[7] >= .3 && pose[7] >= .3 &&
+      elapsed >= movingInterval && elapsed <= movingInterval * 1.7) {
+    // Measure actual send cadence without folding a dropped update into it.
+    const interval = lerp(remote.motionInterval ?? elapsed, elapsed, .12);
+    remote.motionInterval = interval;
+    remote.playbackDelay = clamp(2 * interval + 60 - predictionLimit, 235, 320);
+  }
+  remote.clocked = clocked;
+  remote.pose = pose;
+  remote.heard = heard;
+  remote.history.push({ at, pose });
+  if (remote.history.length > historyLimit) remote.history.shift();
 }
 
 export function createMultiplayer(scene, resort, getPlayer) {
@@ -34,7 +81,8 @@ export function createMultiplayer(scene, resort, getPlayer) {
   let sentAt = -Infinity, lastTable = 0, sequence = 0, recentPose, fastest = 0;
   try { enabled = localStorage.getItem('alpine.multiplayer') !== 'off'; } catch {}
   const local = getPlayer();
-  const target = new THREE.Vector3(), orientation = new THREE.Quaternion();
+  const target = new THREE.Vector3(), nextTarget = new THREE.Vector3();
+  const orientation = new THREE.Quaternion(), nextOrientation = new THREE.Quaternion();
   const remoteForward = new THREE.Vector3();
   let contactCooldown=0;
   const rows = document.createElement('tbody');
@@ -73,6 +121,7 @@ export function createMultiplayer(scene, resort, getPlayer) {
       member.patrol=stage;member.assist=helper||'';
       return;
     }
+    if (!path.startsWith(channel + '/')) return;
     const key = path.slice(channel.length + 1);
     if (key === id || !/^[a-f0-9]{16}$/.test(key) || bytes.length > 560) return;
     if (!bytes.length) { remove(key); return; }
@@ -83,7 +132,9 @@ export function createMultiplayer(scene, resort, getPlayer) {
     if (prev && prev.pose[16] >= pose[16]) return;
     if (!prev && peers.size >= 256) return;
     if (!prev) sentAt = -Infinity;
-    peers.set(key, Object.assign(prev || {}, {pose, heard:now()}));
+    const remote = prev ?? {};
+    recordSnapshot(remote, pose, now());
+    if (!prev) peers.set(key, remote);
   }
   async function connect() {
     if (!enabled || client || loading) return;
@@ -100,10 +151,10 @@ export function createMultiplayer(scene, resort, getPlayer) {
       c.on('connect', () => {
         c.subscribe([channel + '/+',radioPrefix+'+'], {qos:0}, err => {
           if (c !== client) return;
-          connected = !err; sentAt = -Infinity; updateTable();
+          connected = !err; sentAt = -Infinity; lastRadio = ''; updateTable();
         });
       });
-      c.on('message', onMessage);
+      c.on('message', (path, bytes) => { if (client === c) onMessage(path, bytes); });
       c.on('close', () => {
         if (c !== client) return;
         connected = false; for (const key of peers.keys()) remove(key); updateTable();
@@ -147,41 +198,67 @@ export function createMultiplayer(scene, resort, getPlayer) {
     if(connected && (radio!==lastRadio || radio!=='idle/' && time-radioAt>1900)){
       client.publish(radioPrefix+id,radio);lastRadio=radio;radioAt=time;
     }
-    const interval = !peers.size ? 1900 : p.speed < .3 ? 420 : 135;
+    const speed = interactive ? p.speed : 0;
+    const moving = speed >= .3;
+    const flags = Number(!!p.footMode) | Number(!!p.airborne)<<1 | Number(!!p.crash)<<2 |
+      Number(!!p.riding)<<3 | Number(!!p.switchStance)<<4;
+    const score = Math.round(trickScore || 0), jacket = outfit.jacket || colors[0];
+    const changed = recentPose && ((recentPose[7] >= .3) !== moving || recentPose[10] !== flags ||
+      recentPose[12] !== score || recentPose[15] !== jacket);
+    const interval = changed ? movingInterval : !peers.size ? 1900 : moving ? movingInterval : 420;
     if (time - sentAt >= interval) {
       sentAt = time;
       const pos = p.riding ? p.pos : p.model.position, q = vehicle?.quaternion ?? p.model.quaternion;
       fastest = Math.max(fastest,Math.round(p.speedKmh || 0));
-      const flags = Number(!!p.footMode) | Number(!!p.airborne)<<1 | Number(!!p.crash)<<2 |
-        Number(!!p.riding)<<3 | Number(!!p.switchStance)<<4;
+      sequence = Math.max(sequence + 1, timePrefix + Math.round(time));
       recentPose = [...pos.toArray().map(v=>decimals(v,100)), ...q.toArray().map(v=>decimals(v,1000)),
-        decimals(p.speed,10),decimals(p.steer||0,100),decimals(p.tuckAmount||0,100),flags,
-        decimals((p.stridePhase||0) % (2*Math.PI),100),Math.round(trickScore||0),
-        Math.round(p.stats.vertical||0),fastest,outfit.jacket || colors[0],++sequence];
+        decimals(speed,10),decimals(interactive ? p.steer || 0 : 0,100),decimals(p.tuckAmount||0,100),flags,
+        decimals((p.stridePhase||0) % (2*Math.PI),100),score,
+        Math.round(p.stats.vertical||0),fastest,jacket,sequence];
       if (connected) client.publish(topic, JSON.stringify(recentPose), {qos:0,retain:false});
     }
     let visible = 0;
     for (const [key, remote] of peers) {
       if (time-remote.heard > 14000) { remove(key); continue; }
-      if(!interactive)continue;
-      const s = remote.pose;
-      target.fromArray(s);
+      if (!interactive) { remote.dx = undefined; continue; }
+      const { history } = remote;
+      const latest = history.at(-1);
+      const bufferedAt = time - remote.clockOffset - (remote.playbackDelay ?? playbackDelay);
+      const at = Math.min(latest.at + predictionLimit, Math.max(remote.cursor, bufferedAt));
+      remote.cursor = at;
+      while (history.length > 2 && history[1].at <= at) history.shift();
+      const a = history[0], b = history[1] ?? a;
+      const gap = b.at - a.at;
+      const mix = gap > 0 ? clamp((at - a.at) / gap, 0, 1) : 1;
+      const s = (mix === 1 ? b : a).pose, next = b.pose;
+      target.fromArray(a.pose).lerp(nextTarget.fromArray(next), mix);
+      const ahead = at - b.at;
+      const predicting = ahead > 0 && gap >= 30 && gap <= 450 && a.pose[7] >= .3 && next[7] >= .3;
+      if (predicting) {
+        // Bridge one lost packet using confirmed motion. An extended gap
+        // holds the last predicted position and cannot cause a collision.
+        nextTarget.fromArray(a.pose).sub(target);
+        const maxTravel = ahead * Math.max(a.pose[7], next[7]) * .00135;
+        target.addScaledVector(nextTarget, -Math.min(ahead / gap, maxTravel / Math.max(.001, nextTarget.length())));
+      }
       const near = target.distanceToSquared(p.pos) < 340**2 && visible < 14;
       if (!near || (s[10]&8)) {
         if (remote.actor) { remote.actor.frame.visible=false; pool.push(remote.actor); remote.actor=null; }
+        remote.dx = undefined;
         continue;
       }
       visible++;
       const fresh = !remote.actor;
       const {frame,rig} = remote.actor ||= actorFor();
       frame.visible = true; frame.name = callsign(key);
-      orientation.fromArray(s,3).normalize();
-      const snap = fresh || target.distanceToSquared(frame.position) > 28**2;
-      const blend = snap ? 1 : 1-Math.exp(-dt*14);
-      frame.position.lerp(target,blend); frame.quaternion.slerp(orientation,blend); frame.updateMatrix();
+      orientation.fromArray(s,3).normalize().slerp(nextOrientation.fromArray(next,3).normalize(),mix);
+      const snap = fresh || remote.actorSegment !== remote.segment || target.distanceToSquared(frame.position) > 28**2;
+      remote.actorSegment = remote.segment;
+      frame.position.copy(target); frame.quaternion.copy(orientation); frame.updateMatrix();
+      const remoteSpeed = lerp(s[7],next[7],mix);
       const dx=p.pos.x-frame.position.x, dz=p.pos.z-frame.position.z;
       const closeHeight=Math.abs(p.pos.y-frame.position.y)<1.12;
-      if(!snap && !p.crash && !p.riding && !p.footMode && p.speed>6 && closeHeight &&
+      if(!snap && !predicting && !p.crash && !p.riding && !p.footMode && p.speed>6 && closeHeight &&
           time-remote.heard<650 && time>=contactCooldown && !(s[10]&4) && remote.dx!==undefined){
         const stepX=dx-remote.dx, stepZ=dz-remote.dz, squared=stepX*stepX+stepZ*stepZ;
         // Swept body contact between rendered poses. A respawn or stale peer
@@ -189,17 +266,18 @@ export function createMultiplayer(scene, resort, getPlayer) {
         if(squared>1e-8 && squared<4.5**2){
           const t=clamp(-(remote.dx*stepX+remote.dz*stepZ)/squared,0,1);
           remoteForward.set(0,0,s[10]&16?-1:1).applyQuaternion(frame.quaternion);
-          const relativeSpeed=Math.hypot(p.vel.x-s[7]*remoteForward.x,p.vel.z-s[7]*remoteForward.z);
+          const relativeSpeed=Math.hypot(p.vel.x-remoteSpeed*remoteForward.x,p.vel.z-remoteSpeed*remoteForward.z);
           if(relativeSpeed>7 && Math.hypot(remote.dx+t*stepX,remote.dz+t*stepZ)<.48){
             contactCooldown=time+2200;p.startCrash('collision with another skier');
           }
         }
       }
-      remote.dx=dx;remote.dz=dz;
+      remote.dx=predicting?undefined:dx;remote.dz=dz;
       if (fresh || remote.color !== s[15]) { remote.color=s[15]; rig.setAppearance({jacket:s[15]}); }
-      rig.animate(dt,{speed:s[7],steer:s[8],tuck:s[9],brake:0,grab:0,crash:!!(s[10]&4),crashTime:0,
+      const phase = Math.atan2(Math.sin(next[11] - s[11]), Math.cos(next[11] - s[11]));
+      rig.animate(dt,{speed:remoteSpeed,steer:lerp(s[8],next[8],mix),tuck:lerp(s[9],next[9],mix),brake:0,grab:0,crash:!!(s[10]&4),crashTime:0,
         airborne:!!(s[10]&2),footMode:!!(s[10]&1),switchStance:!!(s[10]&16),
-        walk:Math.min(1,s[7]),stridePhase:s[11]},null);
+        walk:Math.min(1,remoteSpeed),stridePhase:s[11]+phase*mix},null);
     }
     if (time-lastTable > 600 && table.closest('dialog')?.open) { lastTable=time; updateTable(); }
   }

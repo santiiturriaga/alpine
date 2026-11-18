@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { heightAt } from './terrain.js';
-import { box, beam, part, mergeParts, mergedMesh } from './scenery.js';
+import { box, beam, part, cacheStaticTransforms, mergeParts, mergedMesh } from './scenery.js';
 import { timberMesh, detailedMaterial } from './plaza-materials.js';
 import { climateUniforms } from './climate-state.js';
 import { createRoofSnow, createIcicles } from './roof-weather.js';
@@ -553,6 +553,7 @@ export function buildCreeksideVillage(scene, { grid } = {}) {
   const flags = [], lights = [], dustys = buildDustys(root, grid, flags, lights), lodges = buildLodges(root, grid);
   const glowMaterials = [dustys, ...lodges].map(v => v.b.glowMaterial).filter(Boolean);
   const lampPosition = new THREE.Vector3(); let time = 0;
+  cacheStaticTransforms(root);
   return {
     group: root, dustys: dustys.group,
     walkSurfaceAt(x, z, currentY) {

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { attachChaseFoliage } from './chase-foliage.js';
 import { mulberry32 } from './util.js';
 import { terrain } from './terrain.js';
 import { climateUniforms } from './climate-state.js';
@@ -169,6 +170,7 @@ export function buildNeedleShoots(group, trees, species, templates) {
   const updateRootSnow = makeRootSnow(group);
   const material = new THREE.MeshStandardMaterial({ vertexColors:true, side:THREE.DoubleSide, roughness:.91 });
   material.onBeforeCompile = (shader) => {
+    attachChaseFoliage(shader);
     shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 needleRoot;')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         vec3 attachment = (modelMatrix * instanceMatrix * vec4(needleRoot, 1.)).xyz;

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { attachChaseFoliage } from './chase-foliage.js';
 import { mulberry32 } from './util.js';
 import { climateUniforms } from './climate-state.js';
 import { coniferBarkMap } from './conifer-bark.js';
@@ -89,36 +90,33 @@ function getNeedleAtlas() {
     }
     function branch(ax, ay, bx, by, depth, width) {
       const dx = bx - ax, dy = by - ay, length = Math.hypot(dx, dy), ux = dx / length, uy = dy / length;
-      const needleCount = Math.ceil(length / 1.3);
+      const needleCount = Math.ceil(length / 1.05);
       for (let i = 1; i < needleCount; i++) {
         const t = (i + rand() * .65) / needleCount;
         for (const side of [-1, 1]) {
-          const reach = (3 + rand() * 4.5) * (depth === 0 ? 1 : .85);
+          const reach = (4 + rand() * 6) * (depth === 0 ? 1 : .88) * (1 - .44 * t ** 4);
           const forward = .20 + rand() * .34, spread = .73 + rand() * .24;
           const x = ax + dx * t, y = ay + dy * t;
-          const frosted = tile >= 2 && rand() < .28 * (1 - t * .80);
-          const variation = rand() * 22;
+          const variation = rand() * 20 + Math.sin(t * 21 + tile * 5) * 7;
           line(x, y, x + (ux * forward - uy * side * spread) * reach,
-            y + (uy * forward + ux * side * spread) * reach, .75 + rand() * .52,
-            frosted ? [77, 101, 86] : [29 + variation, 53 + variation, 39 + variation], 1,
-            frosted ? [218, 233, 225] : [76 + variation, 113 + variation, 96 + variation]);
+            y + (uy * forward + ux * side * spread) * reach, 1.20 + rand() * .64,
+            [27 + variation, 49 + variation, 38 + variation], 1,
+            [46 + variation, 76 + variation, 58 + variation]);
         }
       }
-      const count = depth === 2 ? 10 : 3;
+      const count = depth === 2 ? 13 : 5;
       if (depth > 0) for (let i = 0; i < count; i++) {
-        const t = .12 + i / count * .80 + rand() * .025;
         for (const side of [-1, 1]) {
+          const t = .10 + i / count * .82 + rand() * (.35 / count);
           if (rand() < (depth === 2 ? .11 : .20)) continue;
-          const reach = length * (depth === 2 ? .46 : .35) * Math.pow(1 - t, .52) * (.84 + rand() * .26);
+          const reach = length * (depth === 2 ? .51 : .41) * Math.pow(1 - t, .65) * (.75 + rand() * .44);
           const forward = .47 + rand() * .20, spread = .73 + rand() * .15;
           const x = ax + dx * t, y = ay + dy * t;
           branch(x, y, x + (ux * forward - uy * side * spread) * reach,
             y + (uy * forward + ux * side * spread) * reach, depth - 1, width * .54);
         }
       }
-      // The rachis stays legible above the needles, with cream new wood at
-      // its tip. Skipped forks create hierarchical spaces between sprays.
-      line(ax, ay, bx, by, width, [133, 107, 74], 1, [181, 162, 122]);
+      line(ax, ay, bx, by, width, [82, 69, 49], 1, [76, 88, 58]);
       closeSpray(ax, ay, bx, by, depth, width);
     }
     branch(ox + TILE * .50, oy + TILE * .94, ox + TILE * (.46 + rand() * .07), oy + TILE * .075, 2, 3.2);
@@ -298,17 +296,18 @@ export function coniferGeometry(kind, detail = 0, variant = 0) {
       const t = row / rows, line = [];
       for (let col = 0; col <= cols; col++) {
         const s = col / cols * 2 - 1;
-        const lateral = width * s * (.83 + t * .15);
-        const sag = -drop * t * t + length * .055 * Math.sin(t * Math.PI);
-        const fold = Math.abs(s) * width * .17;
+        const bow = Math.sin(t * Math.PI), rollSin = Math.sin(roll), rollCos = Math.cos(roll);
+        const lateral = width * s * (.80 + .22 * bow - .32 * t * t);
+        const sag = -drop * t * t + length * (.098 * bow + .039 * t ** 6);
+        const fold = s * s * width * .21;
         const p = [root[0] + ux * length * t + vx * lateral * Math.cos(roll),
           root[1] + sag + lateral * Math.sin(roll) - fold,
           root[2] + uz * length * t + vz * lateral * Math.cos(roll)];
-        const n = normalize([vx * -Math.sin(roll) * .45 + ux * drop / Math.max(length, .001),
-          .90, vz * -Math.sin(roll) * .45 + uz * drop / Math.max(length, .001)]);
+        const pitch = 2 * drop / Math.max(length, .001) * t - .308 * Math.cos(t * Math.PI) - .234 * t ** 5;
+        const sideSlope = -rollSin + rollCos * s * .32;
+        const n = normalize([vx * sideSlope + ux * pitch, rollCos, vz * sideSlope + uz * pitch]);
         const uv = [(tile % 2 + .50 + s * .46) * .5, (Math.floor(tile / 2) + .94 - t * .87) * .5];
-        const frost = tile >= 2 ? Math.max(0, Math.cos(roll)) * Math.sin(t * Math.PI) * .32 : 0;
-        const color = green.clone().multiplyScalar(.76 + .18 * t + Math.sin(phase) * .055).lerp(snow, frost);
+        const color = green.clone().multiplyScalar(.64 + .27 * t + Math.sin(phase) * .09);
         line.push({ p, n, uv, color });
       }
       grid.push(line);
@@ -331,28 +330,32 @@ export function coniferGeometry(kind, detail = 0, variant = 0) {
     const ux=Math.cos(yaw),uz=Math.sin(yaw),vx=-uz,vz=ux;
     // A deposit follows the loaded bough: a long narrow cap, with a compact
     // hanging lip rather than a round white block over the fine twig work.
-    length*=1.08; width*=.82;
-    const sides=coarse?6:10,segments=coarse?4:6;
+    length*=1.02; width*=.62;
+    const near = detail === -.5 || detail === 0;
+    const sides = near ? 9 : coarse ? 5 : 7;
+    const segments = near ? 7 : coarse ? 3 : 4;
     anchor=anchor||center;
     snowCenter=center;
     const rings=[];
     // Rounded hanging capsules follow the bough. Several unequal lobes and a
     // rolled lip keep their silhouette soft even against a bright snowfield.
     for(let k=0;k<=segments;k++) {
-      const t=k/segments*2-1,profile=Math.sqrt(Math.max(0,1-t*t));
-      const bulge=.88+.18*Math.sin(t*7.3+phase)+.12*Math.sin(t*13.7-phase);
-      const sweep = width * .29 * Math.sin(t*2.8+phase);
+      const t=k/segments*2-1,profile=Math.sqrt(Math.max(0,1-t*t))*(1-.21*t);
+      const bulge=.91+.16*Math.sin(t*4.3+phase)+.12*Math.sin(t*9.7-phase);
+      const sweep = width * .22 * Math.sin(t*3.3+phase);
       const ring=[];
       for(let i=0;i<sides;i++) {
         const a=i/sides*TAU,side=Math.cos(a),up=Math.sin(a);
-        const height=width*(up>0?.65:.43),lateral=side*width*profile*bulge+sweep;
-        const lift=up*height*profile*bulge;
+        const scallop = .91 + .09*Math.cos(a*3 + t*3.4+phase);
+        const height = width * (up>0 ? .66 : .26);
+        const lateral = side*width*profile*bulge*scallop + sweep;
+        const lift = profile * (up*height*bulge*scallop + side*width*.12*Math.sin(t*4.7+phase));
         const p=[center[0]+ux*t*length+vx*lateral,
-          center[1]-t*length*.22+lift+width*.16*Math.sin(t*6+phase),
+          center[1]-t*length*.22+lift+width*.14*Math.sin(t*5.5+phase),
           center[2]+uz*t*length+vz*lateral];
         const n=normalize([ux*t*width/Math.max(length,.0001)+vx*side,
           up*(up>0?1.20:1.8),uz*t*width/Math.max(length,.0001)+vz*side]);
-        const c=snow.clone().lerp(snowShade,Math.max(0,-up)*.76+.06*(1-side));
+        const c=snow.clone().lerp(snowShade,.06 + Math.max(0,-up)*.85+.04*(1-side));
         ring.push({p,n,c});
       }
       rings.push(ring);
@@ -383,33 +386,38 @@ export function coniferGeometry(kind, detail = 0, variant = 0) {
   // A narrow irregular heart keeps a distant stand legible between boughs.
   // The far tier is 112 triangles, retaining the full mapped population.
   if (detail === -2 || detail === -1 || detail === 0) {
-    const levels = detail === -2 ? 4 : 12, radial = detail === -2 ? 2 : 4;
-    const coreGreen = green.clone().multiplyScalar(.21);
-    const solid = [.978,.004];
+    const levels = detail === -2 ? 4 : 14, radial = detail === -2 ? 2 : 3;
+    const coreGreen = green.clone().multiplyScalar(.17);
+    const solid = [.971,.004];
     for (let k=0;k<levels;k++) for(let j=0;j<radial;j++) {
       const phase = k*2.39996+j*2.17+variant*3.7;
       const t=(k+.22+.19*Math.sin(phase*1.7))/levels;
       const y=spec.skirt+(1-Math.pow(1-t,1.15))*(.995-spec.skirt);
       const root=trunk(y), yaw=j/radial*TAU+k*2.39996+Math.sin(phase)*.31;
       const ux=Math.cos(yaw),uz=Math.sin(yaw),vx=-uz,vz=ux;
-      const length=spec.spread*Math.pow(1-y,spec.taper)*((detail===-2?.96:.83)+.17*Math.sin(phase*2.1));
-      const width=length*(.39+.07*Math.cos(phase*1.4));
+      const length=spec.spread*Math.pow(1-y,spec.taper)*(.89+.14*Math.sin(phase*2.1));
+      const width=length*(.36+.10*Math.cos(phase*1.4));
       const drop=length*(.22+spec.pendant*.49+.08*Math.sin(phase*1.3));
       const point=(along,across,lift)=>[root[0]+ux*length*along+vx*width*across,
         root[1]+length*lift,root[2]+uz*length*along+vz*width*across];
-      const p=[point(-.09,0,.06),point(.43,-1,-.10),point(1,0,-drop/length),point(.48,1,-.08),
-        point(.40,0,.13),point(.53,0,-.34)];
+      const p=[point(-.09,0,.04),point(.46,-1,-.12),point(1,0,-drop/length),point(.51,1,-.07),
+        point(.40,0,.095),point(.51,0,-.22)];
       const n=[normalize([-ux*.5,.3,-uz*.5]),normalize([-vx,.24,-vz]),
         normalize([ux,-.24,uz]),normalize([vx,.26,vz]),[0,1,0],[0,-1,0]];
       const c=p.map((_,i)=>coreGreen.clone().multiplyScalar([.72,.87,.67,1.05,1.12,.55][i]
         +Math.sin(phase)*.13));
+      // Keep the volume's projected needle coordinates in the canopy UV band.
+      // Its narrow, jagged sprays break up the outline of the supporting mesh.
+      const patchUV = detail === -2 ? p.map(() => solid) :
+        [[0,0],[.46,-1],[1,0],[.51,1],[.36,0],[.49,0]].map(([along,across]) =>
+          [.979 + .005 * across, .47 - .435 * along]);
       // Eight outward faces make an asymmetric, rounded-looking hanging bough
       // under smooth normals, rather than another transverse canopy slice.
       const center=p[0].map((_,i)=>p.reduce((s,v)=>s+v[i],0)/p.length);
       for(let [a,b,d] of [[0,1,4],[0,4,3],[0,3,5],[0,5,1],[2,4,1],[2,3,4],[2,5,3],[2,1,5]]) {
         const faceNormal=cross(p[b].map((v,i)=>v-p[a][i]),p[d].map((v,i)=>v-p[a][i]));
         if(faceNormal.reduce((s,v,i)=>s+v*(p[a][i]-center[i]),0)<0)[b,d]=[d,b];
-        tri(p[a],p[b],p[d],n[a],n[b],n[d],c[a],c[b],c[d],solid,solid,solid);
+        tri(p[a],p[b],p[d],n[a],n[b],n[d],c[a],c[b],c[d],patchUV[a],patchUV[b],patchUV[d]);
       }
     }
     const rings=[];
@@ -483,8 +491,8 @@ export function coniferGeometry(kind, detail = 0, variant = 0) {
       foliage(at(.24), yaw + Math.sin(phase) * .28, length * .71, length * .24,
         length * spec.pendant, 1.12 + Math.sin(phase + 1) * .24, phase + 1.7, anchor);
       if ((tier + radial) % 3 === 0 || Math.sin(phase*1.7)>.77) {
-        const p = at(.51);
-        p[1] += length * .032;
+        const p = at(.45 + .11 * Math.sin(phase));
+        p[1] += length * .037;
         pillow(p, yaw, length * (.29 + Math.sin(phase) * .065), length * (.16 + Math.cos(phase * 1.7) * .045), phase, anchor, detail===-.5);
         if (tier>8 && radial%2===0) {
           const q=at(.21); q[1]+=length*.05;
@@ -501,10 +509,6 @@ export function coniferGeometry(kind, detail = 0, variant = 0) {
       tube(origin, tip, length * .0035, origin, 3);
       foliage(origin, bearing, reach, reach * .34, pendant,
         side * (.42 + Math.sin(phase) * .27), phase + j * 2.9, origin);
-      if ((tier + radial + j) % 4 === 0) {
-        const p = mix(origin, tip, .43); p[1] += reach * .055;
-        pillow(p, bearing, reach * .31, reach * .15, phase + j, origin);
-      }
     }
     if (detail === 2) for (let j = 0; j < 4; j++) {
       const f = .22 + j * .17, side = (radial + j) % 2 ? -1 : 1;
@@ -539,10 +543,6 @@ export function coniferGeometry(kind, detail = 0, variant = 0) {
       foliage(origin, bearing, reach, reach * .30, pendant, side * .71, phase + j * 2.1, origin);
       foliage(mix(origin, tip, .34), bearing + side * .36, reach * .71, reach * .20,
         reach * .33, -side * .64, phase + j * 2.1 + 1.4, origin);
-      if ((tier + radial + j) % 7 === 0) {
-        const p = mix(origin, tip, .44); p[1] += reach * .04;
-        pillow(p, bearing, reach * .27, reach * .13, phase + j, origin);
-      }
     }
   }
   return finish();
@@ -562,16 +562,29 @@ export function coniferMaterial(level = 0, region = null) {
       shader.uniforms.barkRelief = { value: coniferBarkMap() };
       shader.uniforms.closeNeedles = { value: closeNeedleAtlas };
       shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `
-        vec4 foliage = texture2D(map,vMapUv);
         float patchDistance = length(vViewPosition);
-        float closeCoverage = 1.0 - smoothstep(2.9,8.0,patchDistance);
         vec2 du = dFdx(vMapUv), dv = dFdy(vMapUv);
-        if (closeCoverage > 0.0 && vMapUv.x < .970 && abs(vMapUv.x-.5) > .017) {
-          vec4 individualNeedles = textureGrad(closeNeedles,vMapUv,du,dv);
-          float coverage = mix(foliage.a,individualNeedles.a,closeCoverage);
-          foliage.rgb = mix(foliage.rgb*foliage.a,individualNeedles.rgb*individualNeedles.a,closeCoverage)
-            / max(coverage,.001);
-          foliage.a = coverage;
+        float closeCoverage = 0.0;
+        vec4 foliage = vec4(1.);
+        if (vMapUv.x > .972 && vMapUv.x < .988) {
+          float needleRelief = 1.0 - smoothstep(52.0,127.0,patchDistance);
+          if (needleRelief > 0.0) {
+            vec2 reliefUV = vec2(.25 + (vMapUv.x-.979)*41., vMapUv.y);
+            const vec2 reliefScale = vec2(41.,1.);
+            vec4 spray = textureGrad(map,reliefUV,du*reliefScale,dv*reliefScale);
+            foliage.a = mix(1.0,smoothstep(.46,.73,spray.a),needleRelief);
+            foliage.rgb *= mix(vec3(1.),.60+spray.rgb*3.3,needleRelief);
+          }
+        } else if (vMapUv.x < .970) {
+          foliage = textureGrad(map,vMapUv,du,dv);
+          closeCoverage = 1.0 - smoothstep(1.8,6.0,patchDistance);
+          if (closeCoverage > 0.0 && abs(vMapUv.x-.5) > .017) {
+            vec4 individualNeedles = textureGrad(closeNeedles,vMapUv,du,dv);
+            float coverage = mix(foliage.a,individualNeedles.a,closeCoverage);
+            foliage.rgb = mix(foliage.rgb*foliage.a,individualNeedles.rgb*individualNeedles.a,closeCoverage)
+              / max(coverage,.001);
+            foliage.a = coverage;
+          }
         }
         diffuseColor *= foliage;
       `);
@@ -632,22 +645,22 @@ export function coniferMaterial(level = 0, region = null) {
       float snowPad = step(.988, vMapUv.x);
       float solidCrown = step(.970,vMapUv.x)*(1.0-snowPad);
       float needleSurface = canopyTint * (1.0 - snowPad) * (1.0 - solidCrown);
-      ${level === -2 ? '' : 'diffuseColor.a *= mix(1.0,smoothstep(.48,1.53,patchDistance),needleSurface);'}
-      float upperBough = clamp(dot(normalize(vNormal),mat3(viewMatrix)*vec3(0,1,0)),0.0,1.0);
-      float rime = crownSnow * upperBough * upperBough * canopyTint * (1.0-snowPad);
-      // Broad hanging sprays survive the minification of the needle atlas.
-      // Shade pockets and a few frosted upper lips belong to each tree's own
-      // coordinates, so neither the pattern nor the rime swims with the eye.
+      ${level === -2 ? '' : `
+      diffuseColor.a *= mix(1.0,smoothstep(.48,1.53,patchDistance),needleSurface);
+      // When a skier passes through a bough, leave the textured sprays and
+      // needle shoots exposed instead of the volume used to fill its core.
+      diffuseColor.a *= mix(1.0,smoothstep(6.0,15.0,patchDistance),solidCrown);
+      `}
+      float upperBough = max(0.0,dot(normalize(vNormal),mat3(viewMatrix)*vec3(0,1,0)));
+      upperBough *= gl_FrontFacing ? 1.0 : 0.0;
+      float frostPocket = sin(crownShape.y*68.0 + crownShape.x*18.0 - crownShape.z*24.0
+        + sin(crownShape.z*35.0+crownShape.w) + crownShape.w);
+      float rime = crownSnow * smoothstep(.42,.95,upperBough)
+        * smoothstep(.16,.92,frostPocket) * canopyTint * (1.0-snowPad);
       if (solidCrown > .5) {
-        float boughBand = .5+.5*sin(crownShape.x*53.0
-          +2.5*sin(crownShape.y*83.0+crownShape.z*31.0)+crownShape.w)
-          *sin(crownShape.y*31.0-crownShape.z*47.0+crownShape.w*.7);
-        float spray = .5+.5*sin(crownShape.x*97.0-crownShape.z*81.0+crownShape.y*19.0);
-        diffuseColor.rgb *= .61+.52*smoothstep(.16,.86,boughBand)+spray*.14;
-        float frostedLip = smoothstep(.65,.92,boughBand)*(.25+.75*upperBough);
-        rime = crownSnow*frostedLip*.62;
+        diffuseColor.rgb *= .95 + .16 * frostPocket;
       }
-      diffuseColor.rgb=mix(diffuseColor.rgb,vec3(.66,.75,.79),rime*.76);
+      diffuseColor.rgb=mix(diffuseColor.rgb,vec3(.47,.56,.60),rime*.37);
       float distantCanopy = smoothstep(210.0, 1000.0, crownDistance) * .34 * (1.0-snowPad);
       diffuseColor.rgb *= 1.0 - distantCanopy * canopyTint;
     `).replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
@@ -693,20 +706,23 @@ export function coniferMaterial(level = 0, region = null) {
       float crownPhase = forestOrigin.x*.037 + forestOrigin.z*.021;
       crownShape = vec4(position,crownPhase);
       transformed.xz *= 1.0 + innerCrown*.14*sin(position.y*26.0+crownPhase);
-      float crownFill = smoothstep(95.0,255.0,forestDistance);
+      float crownFill = .36 + .64*smoothstep(7.0,50.0,forestDistance);
       transformed.xz *= mix(1.0,crownFill,innerCrown);
+      ${level === -2 ? '' : `float crownHeart = (1.0 - step(.972,uv.x)) * innerCrown;
+      transformed.xz *= mix(1.0,.57 + .43*smoothstep(46.0,130.0,forestDistance),crownHeart);`}
       float snowVertex = step(.988, uv.x);
       float deposition = smoothstep(snowline-180.0, snowline+410.0, forestOrigin.y)
         * snowpack * (.78+.22*sin(forestOrigin.x*.037+forestOrigin.z*.021));
       crownSnow=deposition*smoothstep(1370.0,1820.0,forestOrigin.y);
       float stormTree = smoothstep(.31,.94,.5+.5*sin(forestOrigin.x*.057 + forestOrigin.z*.033));
-      float snowLoad = deposition * mix(.34,.90 + .23*stormTree,crownSnow);
+      float snowLoad = deposition * mix(.44,.83 + .16*stormTree,crownSnow);
       transformed = mix(transformed, snowCenter + (transformed-snowCenter)*snowLoad, snowVertex);
       ${level === 0 || level === -1 || level === -2 ? '' : `float branchGrowth = 1.0 - smoothstep(${level === -.5 ? '165.0 * forestDetail, 250.0' : level === 1 ? '70.0 * forestDetail, 112.0' : '20.0 * forestDetail, 47.0'} * forestDetail, forestDistance);
       transformed = mix(branchAnchor, transformed, branchGrowth);`}
     `);
     if (region) attachForestFade(shader,region,level !== -2);
+    if (level !== -2) attachChaseFoliage(shader);
   };
-  material.customProgramCacheKey = () => `conifer-needle-branches-${level}-${region}-v17`;
+  material.customProgramCacheKey = () => `conifer-needle-branches-${level}-${region}-v22`;
   return material;
 }

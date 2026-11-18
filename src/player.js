@@ -15,6 +15,7 @@ import { pointInBox } from './environment.js';
    ═══════════════════════════════════════════════════════════════ */
 
 const GRAVITY = 9.81;
+const MIN_RIDER_IMPACT_SPEED = 6; // m/s, measured before obstacle push-out
 const P2 = Math.PI * 2;
 const whistlerGround = {heightAt,normalAt,surfaceAt,bounds:WORLD,startPose};
 
@@ -31,6 +32,7 @@ const _pivot = new THREE.Vector3();
 const _tourLook = new THREE.Vector3();
 const _cameraAnchor = new THREE.Vector3();
 const _cameraArm = new THREE.Vector3();
+const _cameraBranches = { fraction: 1 };
 const _stanceUp = new THREE.Vector3();
 const _axisY = new THREE.Vector3(0, 1, 0);
 const _axisX = new THREE.Vector3(1, 0, 0);
@@ -284,10 +286,7 @@ export class Player {
     this.pos.z += this.vel.z * dt;
     this.clampToWorld();
     this.resolveCollisions(dt);
-    if (!this.crash && this.env?.people?.hitPlayer?.(this.beforeStep, this.pos, dt)) {
-      this.startCrash('collision with another rider');
-      return;
-    }
+    if (this.crash) return;
     const dx = this.pos.x - this.beforeStep.x, dz = this.pos.z - this.beforeStep.z;
     const travelled = Math.min(Math.hypot(dx, dz), this.vel.length() * dt);
     this.walkAmount = damp(this.walkAmount, smoothstep(.12, .85, travelled / dt), 9, dt);
@@ -541,7 +540,6 @@ export class Player {
       this.pos.z += this.vel.z * dt;
       this.clampToWorld();
       this.resolveCollisions(dt);
-      if(!this.crash && this.env?.people?.hitPlayer?.(this.beforeStep,this.pos,dt))this.startCrash('collision with another rider');
       if (this.crash) return;
 
       const gy = this.groundHeight(this.pos.x, this.pos.z);
@@ -604,7 +602,6 @@ export class Player {
       this.pos.y += this.vy * dt;
       this.clampToWorld();
       this.resolveCollisions(dt, true);
-      if(!this.crash && this.env?.people?.hitPlayer?.(this.beforeStep,this.pos,dt))this.startCrash('collision with another rider');
       if (this.crash) return;
 
       // style
@@ -748,8 +745,7 @@ export class Player {
     if (!this.env) return;
     const speed = Math.hypot(this.vel.x, this.vel.z);
     const cols = this.env.queryColliders(this.pos.x, this.pos.z, 5.2);
-    if (!cols.length) return;
-    const gy = this.groundHeight(this.pos.x, this.pos.z);
+    const gy = cols.length ? this.groundHeight(this.pos.x, this.pos.z) : 0;
     const playerR = this.footMode ? .32 : .46;
 
     for (const c of cols) {
@@ -799,6 +795,13 @@ export class Player {
         }
         this.vel.multiplyScalar(0.35);
       }
+    }
+
+    // A guest crossing the lift queue can pass a pedestrian or a slow skier.
+    // At speed, the crowd simulation tests the swept path and relative velocity.
+    if (!this.footMode && speed > MIN_RIDER_IMPACT_SPEED &&
+        this.env.people?.hitPlayer?.(this.beforeStep, this.pos, dt)) {
+      this.startCrash('collision with another rider');
     }
   }
 
@@ -992,10 +995,17 @@ export class Player {
     _cameraAnchor.set(this.pos.x, this.pos.y + 1.25, this.pos.z);
     this.camera.position.copy(_cameraArm);
     const length = _cameraAnchor.distanceTo(_cameraArm);
-    const allowed = this.env?.clipCameraArm?.(_cameraAnchor.x, _cameraAnchor.y, _cameraAnchor.z, this.camera.position) ?? length;
+    _cameraBranches.fraction = 1;
+    const allowed = this.env?.clipCameraArm?.(_cameraAnchor.x, _cameraAnchor.y, _cameraAnchor.z, this.camera.position, _cameraBranches) ?? length;
     const fraction = clamp(allowed / Math.max(.001, length), 0, 1);
-    // Contract immediately for solid geometry and ease back out once the arm clears it.
-    this.cameraArmFraction = snap ? fraction : Math.min(fraction, damp(this.cameraArmFraction, fraction, 2.7, dt));
+    const target = Math.min(fraction, _cameraBranches.fraction);
+    // Walls stop the boom immediately. Trees slide the camera over the
+    // shoulder at a bounded speed so gaps between branches cannot whip it.
+    const movingIn = target < this.cameraArmFraction;
+    const next = damp(this.cameraArmFraction, target, movingIn ? 8 : 2.7, dt);
+    const maxStep = (movingIn ? 16 : 8) * dt / Math.max(.001, length);
+    this.cameraArmFraction = snap ? target : Math.min(fraction,
+      this.cameraArmFraction + clamp(next - this.cameraArmFraction, -maxStep, maxStep));
     this.camera.position.copy(_cameraAnchor).lerp(_cameraArm, this.cameraArmFraction);
     this.camLook.lerp(_tourLook, follow);
     this.camera.up.copy(_up);

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { buildingData } from '../data/osm-whistler.js';
 import { heightAt } from './terrain.js';
-import { box, beam, part, mergeParts } from './scenery.js';
+import { box, beam, part, cacheStaticTransforms, mergeParts } from './scenery.js';
 import { mulberry32, makeCanvas, canvasTexture, makeRadialTexture } from './util.js';
 import { climateUniforms } from './climate-state.js';
 import { createRoofSnow, createIcicles } from './roof-weather.js';
@@ -503,5 +503,6 @@ export function buildFairmont(scene, { grid } = {}) {
   }
   update();
   root.userData={footprint:'50903854',windowOpenings:roomCount,height:49.46,surveyedPeak:[505.38,734.75,-420.87],origin:{...ORIGIN},ground};
+  cacheStaticTransforms(root);
   return {group:root,update,setClimate(){update();},start:FAIRMONT_START,view:FAIRMONT_VIEW};
 }

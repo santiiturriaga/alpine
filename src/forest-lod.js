@@ -23,10 +23,16 @@ export function setForestQuality(name) {
 }
 setForestQuality('HIGH');
 
-const fade = `smoothstep(forestRange.x, forestRange.y, crownDistance)`;
 const declarations = `
   varying float forestFade;
   uniform vec2 forestRange;
+  float crownFade(float distanceFromEye, vec2 root) {
+    // Each tree changes tiers over part of the total band. The threshold
+    // varies with its fixed root and is shared by both representations.
+    float stagger = fract(sin(dot(root, vec2(.1271, .2293))) * 3375.73);
+    float start = mix(forestRange.x, forestRange.y, .57 * stagger);
+    return smoothstep(start, start + .43 * (forestRange.y - forestRange.x), distanceFromEye);
+  }
 `;
 const coverage = `
   // Complementary coverage keeps the same tree rooted through the transition.
@@ -38,7 +44,7 @@ export function attachForestFade(shader, region, near) {
   shader.uniforms.forestRange = transitions[region];
   shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>${declarations}`)
     .replace('#include <project_vertex>', `
-      forestFade = ${fade};
+      forestFade = crownFade(crownDistance, forestOrigin.xz);
       if (${near ? 'forestFade >= 1.0' : 'forestFade <= 0.0'}) transformed = vec3(0.);
       #include <project_vertex>
     `);
@@ -90,7 +96,7 @@ function crownMaterial(region) {
       crownRow = crownSpecies;
       float rise = max(0., max(origin.y-cameraPosition.y, cameraPosition.y-origin.y-height));
       crownDistance = length(vec3(horizontal,rise));
-      forestFade = ${fade};
+      forestFade = crownFade(crownDistance, origin.xz);
       float distantCrown = smoothstep(700.,2450.,crownDistance);
       float snow = smoothstep(snowline-180.,snowline+410.,origin.y) * snowpack;
       crownSnow = snow * ${region === 'regional' ? 'smoothstep(1110.,1580.,origin.y)' : 'smoothstep(1370.,1820.,origin.y)'};
@@ -110,10 +116,10 @@ function crownMaterial(region) {
       vec2 frameUV = vec2((vMapUv.x + crownDirection)*.25, (vMapUv.y + 5.0 - crownRow) / 6.0);
       vec4 sampleCrown = texture2D(map,frameUV);
       vec3 crown = sampleCrown.rgb;
-      float shade = smoothstep(.015,.16,crown.g);
-      const vec3 dimmer = vec3(.78,.91,1.02);
-      crown *= mix(dimmer,vec3(.86,.92,1.04),smoothstep(700.,2450.,crownDistance));
-      crown = mix(crown,vec3(.29,.36,.41), crownSnow * (.14 + shade*.48));
+      float exposedNeedles = smoothstep(.032,.22,crown.g);
+      const vec3 dimmer = vec3(.65,.76,.84);
+      crown *= mix(dimmer,vec3(.84,.91,1.0),smoothstep(700.,2450.,crownDistance));
+      crown = mix(crown,vec3(.34,.41,.46), crownSnow * exposedNeedles * .23);
       diffuseColor *= vec4(crown * mix(vec3(1.),vec3(.18,.25,.36),night),sampleCrown.a);
     `).replace('#include <alphatest_fragment>', `
       #include <alphatest_fragment>
@@ -121,7 +127,7 @@ function crownMaterial(region) {
       if (forestFade < 1.0 && forestFade <= forestThreshold) discard;
     `);
   };
-  material.customProgramCacheKey = () => `forest-crown-atlas-${region}`;
+  material.customProgramCacheKey = () => `forest-crown-atlas-${region}-v2`;
   proxyMaterials.set(region,material);
   return material;
 }

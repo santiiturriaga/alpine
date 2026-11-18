@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { cameraClipper } from './camera-obstacles.js';
 import { buildMappedForest } from './mapped-resort-forest.js';
 import { loadMappedGround, pointInPolygon, runStyle } from './mapped-resort-ground.js';
 import { buildMappedLodges } from './stevens-pass-buildings.js';
@@ -37,28 +38,11 @@ function createEnvironment() {
     const s = Math.sin(c.rot), cos = Math.cos(c.rot);
     return Math.abs(dx * cos + dz * s) < c.hw + pad && Math.abs(dz * cos - dx * s) < c.hd + pad;
   }
-  function clipCameraArm(x, y, z, position) {
-    const dx = position.x - x, dy = position.y - y, dz = position.z - z;
-    const distance = Math.hypot(dx, dy, dz);
-    if (distance < .42) return distance;
-    const solids = queryColliders(x + dx / 2, z + dz / 2, Math.hypot(dx, dz) * .5 + .4)
-      .filter(c => !intersects(c, x, y, z, .17));
-    if (!solids.length) return distance;
-    const steps = Math.ceil(distance / .24);
-    for (let i = 1; i <= steps; i++) {
-      const t = i / steps;
-      if (!solids.some(c => intersects(c, x + dx * t, y + dy * t, z + dz * t, .17))) continue;
-      const safe = Math.max(.17 / distance, t - .34 / distance);
-      position.set(x + dx * safe, y + dy * safe, z + dz * safe);
-      return safe * distance;
-    }
-    return distance;
-  }
   return {
     addCircle(x, z, r, type, extra = {}) { return add({ x, z, r, type, ...extra }, r); },
     addBox(x, z, hw, hd, rot, type, extra = {}) { return add({ x, z, hw, hd, rot, type, ...extra }, Math.hypot(hw, hd)); },
     isOpen(x, y, z, pad = .65) { return !queryColliders(x, z, pad).some(c => intersects(c, x, y, z, pad)); },
-    queryColliders, clipCameraArm,
+    queryColliders, clipCameraArm: cameraClipper(queryColliders),
   };
 }
 

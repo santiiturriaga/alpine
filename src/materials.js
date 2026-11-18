@@ -46,9 +46,9 @@ const surfaces = {
         roomPoint.x*roomYaw.y+roomPoint.y*roomYaw.x);
       if (all(lessThan(abs(roomLocal),roomCutout.zw))) discard;
       float distanceToEye = length(vViewPosition);
-      vec4 snowMix = texture2D(pisteCoverage, (p.xz - pisteLimits.xy) / pisteLimits.zw);
-      float sunFromTerrain = mix(.24, 1.0, texture2D(mountainShade,
-        (p.xz - pisteLimits.xy) / pisteLimits.zw).r);
+      vec2 pisteUv = (p.xz - pisteLimits.xy) / pisteLimits.zw;
+      vec4 snowMix = texture2D(pisteCoverage, pisteUv);
+      float sunFromTerrain = mix(.24, 1.0, texture2D(mountainShade,pisteUv).r);
       float groomed = smoothstep(.21,.63,snowMix.r);
       float ice = smoothstep(.22,.53,snowMix.b);
       float loose = smoothstep(.23,.77,snowMix.g)*(1.0-ice);
@@ -65,22 +65,23 @@ const surfaces = {
         marks=max(marks,texture2D(villageSnow,vec2(villageUv.x,1.-villageUv.y)).r);
       }
       float vicinity = 1.0 - smoothstep(125.0, 920.0, distanceToEye);
-      float drift = filteredSurfaceNoise(p * vec3(.23,.13,.54));
-      float scoured = filteredSurfaceNoise(p * vec3(.044, .095, .037) + drift * .27);
-      float forestExtent = smoothstep(.29,.84,snowMix.a);
-      float forestDistance = smoothstep(130.0,430.0,distanceToEye);
-      float canopy = smoothstep(.19,.81,filteredSurfaceNoise(p*vec3(.29,.12,.29))*.52 + .48*scoured);
-      // At kilometre range the land-cover mask represents the crowns,
-      // including winter rime, rather than only the dark ground below.
-      // Sheltered low valley woods stay dark; broken higher stands carry
-      // uneven pale upper boughs. Piste coverage still cuts through them.
-      float forestWeather = surfaceNoise(p*vec3(.0037,.0015,.0043));
-      float forestRime = smoothstep(1020.0,1780.0,p.y) * climateSnowpack
-        * (.28 + .72*smoothstep(.19,.79,canopy*.72+forestWeather*.28));
-      vec3 forestFloor = mix(vec3(.023,.039,.037),vec3(.091,.136,.143),canopy);
-      vec3 rimedCrowns = mix(vec3(.19,.259,.309),vec3(.43,.51,.57),canopy);
-      forestFloor=mix(forestFloor,rimedCrowns,forestRime*.77);
-      diffuseColor.rgb = mix(diffuseColor.rgb, forestFloor, forestExtent * forestDistance * .94);
+      vec2 wind = mat2(.82,-.57,.57,.82) * p.xz;
+      float drift = filteredSurfaceNoise(vec3(wind.x*.115,p.y*.11,wind.y*.48));
+      float scoured = filteredSurfaceNoise(vec3(wind.x*.032,p.y*.077,wind.y*.095) + drift * .27);
+      float offPiste = 1.0 - smoothstep(.08,.44,snowMix.r);
+      float canopy = smoothstep(.22,.78,filteredSurfaceNoise(p*vec3(.29,.12,.29))*.58 + scoured*.42);
+      float forestEdge = smoothstep(.02,.32,snowMix.a);
+      float forestExtent = smoothstep(.06,.88,snowMix.a + (canopy-.5)*.23*forestEdge) * offPiste;
+      // Mapped trees stand above the snow. Ground tint remains slight beneath
+      // sparse alpine stands and strengthens in dense woods at panorama range.
+      float forestRime = smoothstep(1060.0,1790.0,p.y) * climateSnowpack;
+      float understory = smoothstep(.34,.89,snowMix.a) * (1.0-smoothstep(1220.0,1690.0,p.y));
+      float distantWoods = smoothstep(1050.0,3350.0,distanceToEye)
+        * (1.0-smoothstep(1440.0,1830.0,p.y));
+      diffuseColor.rgb *= 1.0 - forestExtent * (.095 + .10*(1.0-canopy)) * mix(1.0,.48,forestRime)
+        - .19*offPiste*understory;
+      vec3 distantGround = mix(vec3(.052,.071,.076),vec3(.20,.26,.29),canopy);
+      diffuseColor.rgb = mix(diffuseColor.rgb,distantGround,forestExtent*distantWoods*.63);
       float crust = detail > .001 ? surfaceNoise(p * 2.35) : .5;
       float grain = detail > .001 ? surfaceNoise(p * 23.0) : .5;
       float microCoverage = 1.0 - smoothstep(.38, 1.20, length(fwidth(p * 23.0)));
@@ -94,14 +95,16 @@ const surfaces = {
       float apron = (1.-smoothstep(62.,117.,abs(cirque.x)))
         * smoothstep(-132.,-70.,cirque.y) * (1.-smoothstep(14.,46.,cirque.y))
         * smoothstep(.39,.94,climateSnowpack);
-      float exposed = (1.0 - groomed) * (1.-apron*.96) * smoothstep(1330.0, 1820.0, p.y)
-        * smoothstep(.23, .52, 1.0 - up + .27 * (scoured - .41) + .14 * (drift - .5));
-      float fineFracture = filteredSurfaceNoise(p * vec3(1.05,4.80,1.12) + scoured);
-      float coarseFracture = filteredSurfaceNoise(p * vec3(.12,.31,.15));
-      float fracture = mix(fineFracture,coarseFracture,smoothstep(90.,650.,distanceToEye));
-      vec3 shale = mix(vec3(.021,.026,.032),vec3(.133,.122,.107),smoothstep(.20,.88,.62*fracture+.38*scoured));
-      float rimed = smoothstep(.67,.83,drift+.12*scoured);
-      diffuseColor.rgb = mix(diffuseColor.rgb, mix(shale,diffuseColor.rgb,rimed*.33), exposed * .92);
+      // Steep, exposed faces shed the snow between tilted rock beds.
+      vec3 strata = vec3(wind.x*.056,p.y*.292 + wind.y*.052,wind.y*.063);
+      float coarseFracture = filteredSurfaceNoise(strata + .56*scoured);
+      float fineFracture = filteredSurfaceNoise(strata*vec3(10.5,8.0,13.0) + scoured);
+      float fracture = smoothstep(.34,.67,coarseFracture + (fineFracture-.5)*(.25+.37*vicinity));
+      float ledge = 1.0 - up + .15*(scoured-.5) + .09*(coarseFracture-.5);
+      float exposed = offPiste * (1.0-apron*.96) * (1.0-.82*forestExtent) * smoothstep(1250.0,1840.0,p.y)
+        * smoothstep(.225,.43,ledge);
+      vec3 shale = mix(vec3(.025,.029,.033),vec3(.183,.168,.148),fracture);
+      float rimed = smoothstep(.42,.77,.57*scoured+.43*drift + .16*(1.0-fracture));
       float dune = (.096 + .144 * loose) * drift * (1.0 - .66 * groomed);
       // Elongated, irregular ripples model wind slabs and compressed snow.
       vec3 ripplePosition = vec3(p.x*.69 + p.z*.28, p.y*.29, p.z*2.04 - p.x*.8);
@@ -115,8 +118,7 @@ const surfaces = {
         ? smoothstep(.29,.79,surfaceNoise(clumpPoint+scoured*.9)) : .5;
       float churn=useZone * detail * (1.0-smoothstep(.34,.95,length(fwidth(clumpPoint))))
         * (.32 + .68*smoothstep(.06,.36,marks)) * (1.0-.7*polished);
-      float relief = mix(dune * vicinity + detailNormals * detail, .016 * drift, polished)
-        + exposed * (.11*fracture+.09*drift) - .023*marks
+      float relief = mix(dune * vicinity + detailNormals * detail, .016 * drift, polished) - .023*marks
         + .045 * ripple * detail * rippleWeight * (1.0 - groomed*.66)
         + .049 * churn * clump;
       // Small settled pillows overlap the longer wind ripples. Keep this
@@ -129,8 +131,8 @@ const surfaces = {
         diffuseColor.rgb *= 1.0 - visiblePillows * (.039 * (1.0 - pillows) + .023 * (1.0 - grain));
       }
       diffuseColor.rgb *= 1.0 - marks * .14;
-      diffuseColor.rgb *= 1.0 - max(0.0, .68 - drift) * .21
-        - max(0.0, .77 - crust) * .095 * detail + (scoured - .5) * .10;
+      diffuseColor.rgb *= 1.0 - (1.0-.72*groomed) * (max(0.0, .68 - drift) * .17
+        + max(0.0, .77 - crust) * .095 * detail - (scoured - .5) * .08);
       diffuseColor.rgb *= mix(vec3(.93,.966,1.0),vec3(1.0),groomed);
       diffuseColor.rgb *= mix(vec3(1.0),vec3(.68,.84,.96), polished * .55);
       // Melt follows elevation and broken patches instead of globally tinting
@@ -140,14 +142,31 @@ const surfaces = {
       float oldSnow = max(climateSnowpack,alpineSnow);
       float pisteSnow = groomed * mix(.90,.95,climateSpring) * smoothstep(.02,.35,climateSnowpack);
       float cover = max(pisteSnow, smoothstep(.25,.79,oldSnow+scoured*.28-.12));
+      // Nine-centimetre groomer grooves follow the mapped trail centreline.
+      // Fade before the grooves approach the pixel footprint at a grazing angle.
+      float groomerPass = smoothstep(.39,.77,snowMix.r) * (1.0-smoothstep(5.0,23.0,distanceToEye))
+        * smoothstep(.02,.45,cover);
+      float groovePhase = 0.0;
+      if (groomerPass > .0) {
+        float across = textureLod(pisteGrooming,pisteUv,0.0).r;
+        groovePhase = across / .094 + .28*(drift-.5) + .13*(crust-.5);
+      }
+      float visibleGrooves = groomerPass * (1.0-smoothstep(.12,.32,fwidth(groovePhase)))
+        * (1.0-.84*ice) * (1.0-.64*loose) * (1.0-.68*smoothstep(.03,.35,marks))
+        * (.48+.52*scoured);
+      float groove = visibleGrooves > .001 ? .5+.5*cos(groovePhase*6.28318531) : .5;
+      diffuseColor.rgb *= 1.0 - .091*visibleGrooves*groove;
       vec3 summerFloor = mix(vec3(.075,.112,.035),vec3(.18,.225,.075),scoured);
       vec3 fallFloor = mix(vec3(.14,.079,.024),vec3(.29,.19,.062),scoured);
       vec3 meadow = mix(summerFloor,fallFloor,climateAutumn);
       meadow = mix(meadow,vec3(.075,.077,.072),smoothstep(1580.0,2000.0,p.y)*.69);
-      meadow = mix(meadow,vec3(.026,.056,.026),forestExtent*.76);
+      vec3 woodlandFloor = vec3(.064,.102,.047) * (.74+.35*canopy);
+      meadow = mix(meadow,woodlandFloor,forestExtent*(.29+.29*understory));
       meadow *= 1.0 - climateWetness*.15;
       diffuseColor.rgb = mix(meadow,diffuseColor.rgb,cover);
-      relief = mix(.022*crust+.009*grain*microCoverage,relief,cover);
+      diffuseColor.rgb = mix(diffuseColor.rgb,shale,exposed*(1.0-.58*rimed*cover));
+      relief = mix(.022*crust+.009*grain*microCoverage,relief-.0012*visibleGrooves*groove,cover)
+        + exposed * (.11*fracture+.07*drift);
     `,
     normal: 'normal = surfaceNormal(-vViewPosition, normal, relief * smoothstep(.055,.27,abs(dot(normal, normalize(vViewPosition)))));',
     roughness: 'roughnessFactor = mix(mix(.94,.68,groomed*.80 + crust*.16*detail), .21, polished*.88);',
@@ -272,7 +291,7 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
     shader.uniforms.climateAutumn = climateUniforms.autumn;
     shader.uniforms.climateSpring = climateUniforms.spring;
     shader.uniforms.climateWetness = climateUniforms.wetness;
-    const pisteUniforms = kind === 'snow' ? 'uniform sampler2D pisteCoverage; uniform sampler2D mountainShade; uniform vec4 pisteLimits; uniform sampler2D plazaSnow; uniform vec3 plazaLimits; uniform sampler2D bowlSnow; uniform vec3 bowlLimits; uniform sampler2D villageSnow; uniform vec3 villageLimits; uniform vec4 roomCutout; uniform vec2 roomYaw;\n' : '';
+    const pisteUniforms = kind === 'snow' ? 'uniform sampler2D pisteCoverage; uniform sampler2D mountainShade; uniform sampler2D pisteGrooming; uniform vec4 pisteLimits; uniform sampler2D plazaSnow; uniform vec3 plazaLimits; uniform sampler2D bowlSnow; uniform vec3 bowlLimits; uniform sampler2D villageSnow; uniform vec3 villageLimits; uniform vec4 roomCutout; uniform vec2 roomYaw;\n' : '';
     // Only the few terrain tiles under the skier compile this cutout. The rest
     // of the mountain keeps its original shader and does no ski-footprint work.
     const skiUniforms = skiSnow ? /* glsl */ `
@@ -290,6 +309,7 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
     if (kind === 'snow') {
       shader.uniforms.pisteCoverage = { value: snowMaps.pisteMap };
       shader.uniforms.mountainShade = { value: snowMaps.mountainShade };
+      shader.uniforms.pisteGrooming = { value: snowMaps.groomingMap };
       shader.uniforms.roomCutout = { value: snowMaps.roomCutout };
       shader.uniforms.roomYaw = { value: snowMaps.roomYaw };
       for (const [place, layer] of Object.entries(snowMaps.tracks)) {

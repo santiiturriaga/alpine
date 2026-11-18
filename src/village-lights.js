@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { heightAt } from './terrain.js';
 import { coniferGeometry, coniferMaterial } from './conifers.js';
-import { box, beam, part, mergeParts, mergedMesh } from './scenery.js';
+import { box, beam, part, cacheStaticTransforms, mergeParts, mergedMesh } from './scenery.js';
 import { surfaceMaterial } from './materials.js';
 import { mulberry32, noise } from './util.js';
 import { buildingData } from '../data/osm-whistler.js';
@@ -363,6 +363,7 @@ export function buildVillageLighting(scene, { grid } = {}) {
     };
     mat.customProgramCacheKey=()=> 'mapped-village-warm-windows-v2';mat.needsUpdate=true;
   }
+  cacheStaticTransforms(root);
   return {
     root, coordinates:OLYMPIC_PLAZA,
     setClimate(state) { holiday=state.season==='winter'||state.season==='autumn'; },

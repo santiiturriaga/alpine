@@ -1,4 +1,5 @@
 import { updatePassGates } from './pass-gates.js';
+import { updateChaseFoliage } from './chase-foliage.js';
 import { createMountainQuests } from './mountain-quests.js';
 import { createMultiplayer } from './multiplayer.js';
 import {
@@ -1637,6 +1638,7 @@ function frame(now) {
 
   ui.update({
     player,
+    indoors,
     elapsed,
     score,
     streak,
@@ -1681,6 +1683,7 @@ function frame(now) {
     paused,
   });
 
+  updateChaseFoliage(camera, ride || expeditions.active || scenicPose || indoors ? null : player);
   renderer.render(scene, camera);
   quests.capture(renderer.domElement);
   scheduleFrame();
