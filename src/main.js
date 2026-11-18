@@ -1,8 +1,11 @@
+import { updatePassGates } from './pass-gates.js';
+import { createMountainQuests } from './mountain-quests.js';
 import { createMultiplayer } from './multiplayer.js';
 import { graphicsProfiles, graphicsIndex, bindGraphics, applyShadowResolution } from './graphics.js';
 import * as THREE from 'three';
-import { buildTerrain, heightAt, treeCoverAt } from './terrain.js';
+import { buildTerrain, heightAt, normalAt, surfaceAt, treeCoverAt } from './terrain.js';
 import { buildEnvironment } from './environment.js';
+import { buildForestLines } from './forest-lines.js';
 import { setForestQuality } from './forest-lod.js';
 import {
   createSky, createLighting, createWinterEnvironment, Snowstorm,
@@ -30,11 +33,12 @@ import { Player } from './player.js';
 import { Collectibles } from './coins.js';
 import { AudioEngine } from './audio.js';
 import { UI } from './ui.js';
-import { whistlerAtlasSettings } from './whistler-atlas.js';
+import { inRoundhouseBuilding, whistlerAtlasSettings } from './whistler-atlas.js';
+import { createSkiPatrol } from './ski-patrol.js';
 import { GondolaInterior,prewarmGondolaInterior } from './gondola-interior.js';
 import { PEAK_TO_PEAK_BERTH_TIME, peakToPeakBerthOpening } from './gondola-shell.js';
 import {
-  FITZSIMMONS, PEAK_TO_PEAK, VILLAGE_GONDOLA_UPPER, PEAK_EXPRESS, RUNS, VILLAGE_START, COME_ALONG_START, startPose, runFromSource, runPointAt,
+  FITZSIMMONS, PEAK_TO_PEAK, VILLAGE_GONDOLA_UPPER, PEAK_EXPRESS, RUNS, VILLAGE_START, COME_ALONG_START, startPose, runFromSource, runPointAt, FINISHES, WORLD,
 } from './worlddata.js';
 import { clamp, formatNumber, wrapAngle } from './util.js';
 import { stationPoint, stationSite } from './station-sites.js';
@@ -57,7 +61,8 @@ let renderer, scene, camera;
 let terrain, env, sky, lighting, fx, tracks, storm, tuckWind, skiContact;
 let valley;
 let outfitter,fieldNotes,shopReturn=null;
-let wildlife,expeditions,multiplayer;
+let wildlife,expeditions,multiplayer,quests;
+let skiPatrol;
 let player, collectibles, audio, ui, climate, challenges;
 const capturingIntro = query.get('intro') === 'capture';
 const conditions = { season: destination === 'bike' ? 'summer' : query.get('season') || 'winter',
@@ -71,7 +76,6 @@ let introTime = 0;
 let displayTime = 0;
 let elapsed = 0;
 let lastFrame = 0;
-let lastBigmap = 0;
 let playing = false;
 let paused = false;
 let finished = false;
@@ -169,19 +173,31 @@ async function boot() {
   env = await buildEnvironment(scene, {
     onProgress: (p, text) => setLoad(0.5 + p * 0.42, text),
   });
-  ui.configureMap(scene, whistlerAtlasSettings((def, direction) =>
-    liftExit({ lift: { def }, direction, destination: liftDestination({ def }, direction) }),
-  (x, y, z) => !env.queryColliders(x, z, 1.5).some(c =>
-    y + 1.4 >= (c.minY ?? -Infinity) && y <= (c.maxY ?? Infinity) &&
-    (c.r ? Math.hypot(c.x - x, c.z - z) < c.r + .65 : env.pointInBox(x, z, c, .6, .6)))));
+  skiPatrol = createSkiPatrol(scene, env);
+  const atlasSettings = whistlerAtlasSettings((def, direction) =>
+    liftExit({ lift: { def }, direction, destination: liftDestination({ def }, direction) }));
+  const atlasClear = (x, y, z) => {
+    if (inRoundhouseBuilding(x, z) || env.grid.buildingsAt(x, z).length) return false;
+    const obstacles = env.queryColliders(x, z, 1.5);
+    if (!obstacles.length) return true;
+    const floor = env.walkSurfaceAt?.(x, z, Infinity) ?? y;
+    return !obstacles.some(c =>
+      Math.max(y, floor) + 1.4 >= (c.minY ?? -Infinity) && Math.min(y, floor) <= (c.maxY ?? Infinity) &&
+      (c.r ? Math.hypot(c.x - x, c.z - z) < c.r + .65 : env.pointInBox(x, z, c, .6, .6)));
+  };
+  ui.configureMap(scene, atlasSettings, atlasClear);
   terrain.setInteriorCutout(env.interiors?.rooms.find(({ id }) => id === 'roundhouse'));
 
   setLoad(0.93, 'Brushing in the last light…');
   await nextFrame();
 
-  tracks = new SkiTracks(scene);
-  skiContact = new SkiContact(scene);
-  fx = new ParticleFX(scene);
+  const forestLines = buildForestLines(scene,
+    { ...terrain, normalAt, surfaceAt, forestAt: treeCoverAt, bounds: WORLD, startPose }, env, RUNS);
+  env.forestLines = forestLines;
+  const ground = forestLines.ground;
+  tracks = new SkiTracks(scene, 8000, ground);
+  skiContact = new SkiContact(scene, ground);
+  fx = new ParticleFX(scene, ground.heightAt, ground);
   storm = new Snowstorm(scene);
   tuckWind = new TuckWind($('app'));
   tuckWind.resize($('webgl').clientWidth, $('webgl').clientHeight);
@@ -191,15 +207,17 @@ async function boot() {
   valley = await buildValleyScenery(scene);
   climate=createClimate({scene,renderer,lighting,sky,storm,villageLights,terrain});
   climate.set(conditions,{instant:true});
+  forestLines.update();
   challenges=new MountainChallenges(scene,$('course-hud'));
-  player = new Player(scene, camera, { env, fx, tracks, audio: null });
+  player = new Player(scene, camera, { env, ground, fx, tracks, audio: null });
   outfitter=new Outfitter(player,closeShop);
   multiplayer=createMultiplayer(scene,'whistler-blackcomb',()=>player);
   challenges.onWin=id=>{const coins=id==='avalanche'?12:id==='race'?8:5;outfitter.credit(coins);
     ui.toast('FINISH BONUS',coins+' mountain coins','green','check');};
   fieldNotes=buildFieldNotes(scene,env.grid,outfitter,ui.toast.bind(ui));
   player.model.visible = false;
-  collectibles = new Collectibles(scene, fx);
+  collectibles = new Collectibles(scene, fx, { finishes: FINISHES, heightAt: ground.heightAt,
+    forestCoins: forestLines.coins });
   ui.collectibles = collectibles;
 
   audio = new AudioEngine();
@@ -207,9 +225,10 @@ async function boot() {
   const bikeRun = RUNS.find(({ name }) => name === 'Ego Bowl');
   const bikeStart = runPointAt(bikeRun, Math.min(.5,60/bikeRun.length));
   expeditions = new Expeditions(scene,env.grid,{
-    env,fx,season:() => climate.state.season,
+    ground,env,fx,season:() => climate.state.season,
     bikes:[{id:'bike',pose:{x:bikeStart.x,z:bikeStart.z,heading:Math.atan2(bikeStart.tx,bikeStart.tz)}}],
   });
+  quests=createMountainQuests({scene,env,ui,wildlife,expeditions,shop:outfitter,player,camera,multiplayer});
   player.audio = audio;
   ui.setAudio(true);
   ui.setMarkers(true);
@@ -302,6 +321,8 @@ async function boot() {
     get ui() { return ui; },
     get audio() { return audio; },
     get wildlife() {return wildlife;},
+    get skiPatrol() {return skiPatrol;},
+    get quests() {return quests;},
     get multiplayer() {return multiplayer;},
     get expeditions() {return expeditions;},
     get outfitter() {return outfitter;},
@@ -479,15 +500,15 @@ function closeGuide() {
 }
 
 function openMap(returnTo = null) {
-  if (!playing || transitioning || ui.isOpen('map')) return;
+  if (transitioning || ui.isOpen('map')) return;
   releaseMouseLook();
   mapReturn = returnTo
-    || (ui.isOpen('pause') ? 'pause' : (ui.isOpen('summary') ? 'summary' : 'game'));
+    || (!playing ? 'title' : ui.isOpen('pause') ? 'pause' : ui.isOpen('summary') ? 'summary' : 'game');
+  if (mapReturn === 'title') ui.el.start.inert = true;
   ui.hideModals();
   ui.showModal('map');
   paused = true;
-  lastBigmap = 0;
-  ui.drawBigMap(player, displayTime);
+  ui.drawBigMap(playing ? player : null, displayTime);
   audio.ui();
 }
 
@@ -505,6 +526,10 @@ function closeMap() {
     ui.hideModals();
     paused = false;
     lastFrame = performance.now();
+    if (returnTo === 'title') {
+      ui.el.start.inert = false;
+      $('drop-in').focus({ preventScroll: true });
+    }
   }
   audio.ui();
 }
@@ -853,7 +878,7 @@ async function boardLift(choice = selectedBoard(nearbyLifts())) {
   player.setRiding(true);
   player.model.visible = false;
   ui.cinematic(true, { title: lift.def.name, sub: destination.label });
-  ui.setRideView(ride.view);
+  ui.setRideView(ride.view,ride.lift.def.type === 'chair');
   updateRideControls();
   updateRide(0);
   ui.fade(false, true);
@@ -942,7 +967,7 @@ function changeRideView() {
   else ride.view = 'valley';
   ride.lookOffset = 0;
   ride.lookPitch = 0;
-  ui.setRideView(ride.view);
+  ui.setRideView(ride.view,ride.lift.def.type === 'chair');
   updateRideControls();
 }
 
@@ -966,7 +991,7 @@ function updateRideControls() {
       : 'Drag or A / D to look · C change view';
   }
   if (inside && $('ride-view-label')) $('ride-view-label').textContent = 'Valley view';
-  else if (ride) ui.setRideView(ride.view);
+  else if (ride) ui.setRideView(ride.view,ride.lift.def.type === 'chair');
 }
 
 function updateRide(dt) {
@@ -1099,12 +1124,13 @@ function titleCase(text) {
 
 function nearbyDiningCounter() {
   const { x, y, z } = player.pos;
-  return player.footMode ? env.interiors?.serviceAt(x,z,y) : null;
+  return player.footMode ? env.interiors?.serviceAt?.(x,z,y) : null;
 }
 
 function interact() {
   if (!playing || paused || transitioning || finished || scenicPose) return;
   if(ride){arriveFromRide();return;}
+  if(quests.act(quests.nearby()))return;
   if(expeditions.active){
     if(!expeditions.leave(player))ui.toast('Land first','Left Shift to descend','blue','lift');
     updatePrompt();return;
@@ -1134,6 +1160,8 @@ function interact() {
 }
 
 function updatePrompt() {
+  const assignment=quests.nearby();
+  if(assignment){ui.prompt(assignment.title,assignment.detail,false);return;}
   const machine=player.grounded && player.speed < 3 && expeditions.nearest(player.pos);
   if(machine){ui.prompt(machine.label,'Enter · W/S travel · A/D steer',false);return;}
   const counter=nearbyDiningCounter();
@@ -1184,7 +1212,7 @@ function bindKeys() {
     }
     if(event.code==='KeyL'&&!event.repeat&&!finished&&!ui.isOpen('map')){openShop();return;}
     if ($('mountain-panel').open) return;
-    if(scenicPose){
+    if(scenicPose && !ui.isOpen('map') && event.code!=='KeyM'){
       if(event.target.closest?.('.photo-tools') && event.code!=='Escape' && event.code!=='KeyG')return;
       if(event.code==='KeyG'){leaveScenicView();openMountainPanel();}
       else if (['Escape','Enter','Space','KeyW','KeyA','KeyS','KeyD','KeyC'].includes(event.code))leaveScenicView();
@@ -1203,7 +1231,7 @@ function bindKeys() {
     }
     keys[event.code] = true;
 
-    if (event.code === 'Enter' && !playing && !event.target.closest?.('button')) {
+    if (event.code === 'Enter' && !playing && !ui.isOpen('map') && !event.target.closest?.('button')) {
       startGame();
       return;
     }
@@ -1217,11 +1245,10 @@ function bindKeys() {
     }
 
     if (event.code === 'KeyM') {
-      if (!playing) return;
       if (ui.isOpen('map')) closeMap();
       else if (ui.isOpen('pause')) openMap('pause');
       else if (ui.isOpen('summary')) openMap('summary');
-      else openMap('game');
+      else openMap();
       return;
     }
 
@@ -1515,7 +1542,15 @@ function updateSun() {
   if (displayTime - lastShadowTime < interval && change < 4) return;
   lastShadowTime = displayTime;
   lastShadowAnchor.copy(anchor);
-  const texel = 146 / lighting.sun.shadow.mapSize.x;
+  const shadowCamera = lighting.sun.shadow.camera;
+  const flightHeight = expeditions.active?.id === 'helicopter' ? expeditions.active.clearance : 0;
+  const radius = Math.round(73 + 126 * clamp((flightHeight - 20) / 105, 0, 1));
+  if (shadowCamera.right !== radius) {
+    shadowCamera.left = shadowCamera.bottom = -radius;
+    shadowCamera.right = shadowCamera.top = radius;
+    shadowCamera.updateProjectionMatrix();
+  }
+  const texel = 2 * radius / lighting.sun.shadow.mapSize.x;
   lightRight.set(0,1,0).cross(SUN_DIR).normalize();
   lightUp.crossVectors(SUN_DIR,lightRight).normalize();
   const right = anchor.dot(lightRight), up = anchor.dot(lightUp);
@@ -1553,12 +1588,20 @@ function frame(now) {
   const raw = (now - lastFrame) / 1000;
   lastFrame = now;
   const dt = clamp(Number.isFinite(raw) ? raw : 0.016, 0.001, 0.12);
+  if (ui.isOpen('map')) {
+    if(playing)multiplayer.update(0,trickScore,outfitter.state.outfit,expeditions.active?.model,false);
+    scheduleFrame();
+    return;
+  }
   climate?.update(dt,camera);
+  env?.forestLines?.update();
   valley?.update(dt,camera);
   displayTime = now / 1000;
 
   if (!playing) {
+    skiPatrol?.update(0, null, camera, climate.state.season);
     updateIntroCamera(dt);
+    updatePassGates(dt,null,camera);
     env?.update(dt, displayTime, camera);
     terrain.updateDetail(camera.position);
     updateSun();
@@ -1569,13 +1612,17 @@ function frame(now) {
     return;
   }
 
-  multiplayer.update(dt,trickScore,outfitter.state.outfit);
+  multiplayer.update(dt,trickScore,outfitter.state.outfit,expeditions.active?.model,!paused&&!transitioning);
+  if(!paused&&!transitioning)quests.update(dt);
   terrain.updateDetail(player.pos, camera.position);
   expeditions.drawNear(camera.position);
   if(expeditions.active&&!paused&&!transitioning){
     expeditions.update(dt,keys,player,camera,displayTime);
     const v=expeditions.active;
-    if(v)ui.prompt(v.label,expeditions.controls(v),false);
+    if(v){
+      const assignment=quests.nearby();
+      ui.prompt(assignment?.title??v.label,assignment?.detail??expeditions.controls(v),false);
+    }
   } else if (!paused && !finished && !ride && !transitioning && !scenicPose) {
     buildInput();
     player.update(dt, input, displayTime);
@@ -1597,6 +1644,7 @@ function frame(now) {
     ui.hidePrompt();
   }
 
+  updatePassGates(paused?0:dt,playing&&!paused?player:null,camera,() => audio.tone(910,{dur:.065,gain:.025,type:'sine'}));
   env.people?.setListener({position:player.pos,audioEnabled:audio.enabled,audioReady:audio.ready,paused:paused || !!ride});
   const indoors = !!env.interiorAt?.(player.pos.x, player.pos.z, player.pos.y);
   const enclosed = !!ride?.inside || indoors || scenicPose?.name === 'glacier-cave-interior';
@@ -1609,6 +1657,7 @@ function frame(now) {
     storm.update(dt, enclosed);
   }
   env.update(dt, displayTime, camera);
+  skiPatrol.update(paused ? 0 : dt, scenicPose ? null : player, camera, climate.state.season);
   if(!paused)wildlife.update(dt,displayTime,climate.state.season,player.pos);
   sky.update(dt, camera);
   tracks.update(displayTime, player, skiingOnSnow);
@@ -1628,11 +1677,6 @@ function frame(now) {
     time: displayTime,
     nearest: ui.findNearest(player, false, displayTime),
   });
-
-  if (ui.isOpen('map') && displayTime - lastBigmap > 0.2) {
-    lastBigmap = displayTime;
-    ui.drawBigMap(player, displayTime);
-  }
 
   tuckWind.update(dt, player, !paused && !ride && !finished && !player.footMode);
   const listener = player.pos;
@@ -1669,6 +1713,7 @@ function frame(now) {
   });
 
   renderer.render(scene, camera);
+  quests.capture(renderer.domElement);
   scheduleFrame();
 }
 

@@ -111,8 +111,8 @@ function crownMaterial(region) {
       vec4 sampleCrown = texture2D(map,frameUV);
       vec3 crown = sampleCrown.rgb;
       float shade = smoothstep(.015,.16,crown.g);
-      crown *= 1.16 - .29 * smoothstep(235.,1000.,crownDistance);
-      crown *= mix(vec3(1.),vec3(.94,.89,1.18),smoothstep(700.,2450.,crownDistance));
+      const vec3 dimmer = vec3(.78,.91,1.02);
+      crown *= mix(dimmer,vec3(.86,.92,1.04),smoothstep(700.,2450.,crownDistance));
       crown = mix(crown,vec3(.29,.36,.41), crownSnow * (.14 + shade*.48));
       diffuseColor *= vec4(crown * mix(vec3(1.),vec3(.18,.25,.36),night),sampleCrown.a);
     `).replace('#include <alphatest_fragment>', `

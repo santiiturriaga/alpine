@@ -120,6 +120,7 @@
       </div>
       <button type="button" id="map-open" aria-label="Open full trail map">Trail map <kbd>M</kbd></button>
     </div>
+    <aside id="assignment-hud" hidden aria-label="Current assignment"><b></b><span id="assignment-next"></span></aside>
     <div class="floater-layer" id="floater-layer" aria-hidden="true"></div>
 
     <div class="interaction-prompt hidden" id="interaction-prompt">
@@ -180,6 +181,12 @@
       <select id="resort-choose" aria-label="Choose ski resort"></select>
       <button id="resort-travel" type="button">Travel</button>
     </div></fieldset>
+    <fieldset id="assignments" hidden><legend>Field assignments</legend>
+      <div class="arrival-links" id="assignment-list"></div>
+      <div class="arrival-links" id="assignment-actions"><button type="button" id="assignment-route">Guide to objective</button><button type="button" id="assignment-abandon">Abandon assignment</button></div>
+      <button type="button" id="patrol-dispatch" hidden>Guide to the ground team callout</button>
+      <div id="assignment-photos"></div>
+    </fieldset>
     <fieldset id="mountain-lobby"><legend>Multiplayer</legend>
       <div class="lobby-actions"><output id="lobby-status">Join when you drop in</output><button id="lobby-invite" type="button">Copy mountain link</button><button id="lobby-toggle" type="button">Ski solo</button></div>
       <table id="lobby-scores" aria-label="Live mountain leaderboard"><thead><tr><th>Skier</th><th>Trick streak</th><th>Descent</th><th>Top speed</th></tr></thead></table>
@@ -307,10 +314,12 @@
             <p id="map-route-message" role="status"></p>
           </div>
           <ul class="trail-key" aria-label="Map symbols">
-            <li><i data-symbol="circle"></i>Easiest</li>
-            <li><i data-symbol="square"></i>Intermediate</li>
-            <li><i data-symbol="diamond"></i>Most difficult</li>
-            <li><i data-symbol="double"></i>Expert only</li>
+            <li class="trail-key-grade"><i data-symbol="circle"></i>Easiest</li>
+            <li class="trail-key-grade"><i data-symbol="square"></i>Intermediate</li>
+            <li class="trail-key-grade"><i data-symbol="diamond"></i>Most difficult</li>
+            <li class="trail-key-grade"><i data-symbol="double"></i>Expert only</li>
+            <li class="trail-key-hike"><i data-symbol="hike"></i>Hike</li>
+            <li class="trail-key-bike"><i data-symbol="bike"></i>Bike trail</li>
             <li><i data-symbol="lift"></i>Lift</li>
             <li><i data-symbol="route"></i>Route</li>
           </ul>

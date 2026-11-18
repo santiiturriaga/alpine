@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { clamp, makeCanvas, mulberry32, makeRadialTexture } from './util.js';
-import { heightAt, terrain } from './terrain.js';
+import { heightAt, normalAt, terrain } from './terrain.js';
 import { WORLD } from './worlddata.js';
 
 export const SUN_DIR = new THREE.Vector3(-0.56, 0.415, 0.715).normalize();
@@ -748,7 +748,8 @@ class TerrainImprints {
 
   add(x, z, heading, bare) {
     const y = this.ground.heightAt(x, z);
-    this.ground.normalAt(x, z, this.normal);
+    if (this.ground.normalAt) this.ground.normalAt(x,z,this.normal);
+    else normalAt(x,z,this.normal);
     this.forward.set(Math.sin(heading), 0, Math.cos(heading))
       .addScaledVector(this.normal, -this.normal.dot(this.forward)).normalize();
     this.right.crossVectors(this.normal, this.forward).normalize();
@@ -776,7 +777,17 @@ export class WingTrails {
     this.color = new THREE.BufferAttribute(colors, 4).setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute('position', this.position);
     this.geometry.setAttribute('color', this.color);
+    const edge = new Float32Array(this.length*12);
+    for (let i = 0; i < edge.length; i += 6) edge.set([0,0,1,0,1,1],i);
+    this.geometry.setAttribute('ribbonEdge',new THREE.BufferAttribute(edge,1));
     const material = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+    material.onBeforeCompile = shader => {
+      shader.vertexShader = 'attribute float ribbonEdge; varying float ribbonAcross;\n' + shader.vertexShader
+        .replace('#include <begin_vertex>','#include <begin_vertex>\nribbonAcross = ribbonEdge;');
+      shader.fragmentShader = 'varying float ribbonAcross;\n' + shader.fragmentShader.replace('#include <color_fragment>',
+        '#include <color_fragment>\ndiffuseColor.a *= smoothstep(.02, .44, min(ribbonAcross, 1.0 - ribbonAcross));');
+    };
+    material.customProgramCacheKey = () => 'wingtip-airflow';
     this.mesh = new THREE.Mesh(this.geometry, material);
     this.mesh.name = 'Wingsuit wingtip airflow';
     this.mesh.frustumCulled = false;

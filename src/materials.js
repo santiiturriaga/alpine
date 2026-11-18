@@ -21,6 +21,11 @@ const noise = /* glsl */ `
           mix(surfaceHash(i+vec3(0,1,1)),surfaceHash(i+vec3(1,1,1)),t.x),t.y),t.z);
   }
 
+  float filteredSurfaceNoise(vec3 p) {
+    float coverage = 1.0 - smoothstep(.37,1.12,max(length(dFdx(p)),length(dFdy(p))));
+    return mix(.5,surfaceNoise(p),coverage);
+  }
+
   vec3 surfaceNormal(vec3 surfPos, vec3 norm, float height) {
     vec3 dx = dFdx(surfPos);
     vec3 dy = dFdy(surfPos);
@@ -60,11 +65,11 @@ const surfaces = {
         marks=max(marks,texture2D(villageSnow,vec2(villageUv.x,1.-villageUv.y)).r);
       }
       float vicinity = 1.0 - smoothstep(125.0, 920.0, distanceToEye);
-      float drift = surfaceNoise(vec3(p.x * .29, p.y * .14, p.z * .84));
-      float scoured = surfaceNoise(p * vec3(.044, .095, .037) + drift * .27);
+      float drift = filteredSurfaceNoise(p * vec3(.23,.13,.54));
+      float scoured = filteredSurfaceNoise(p * vec3(.044, .095, .037) + drift * .27);
       float forestExtent = smoothstep(.29,.84,snowMix.a);
       float forestDistance = smoothstep(130.0,430.0,distanceToEye);
-      float canopy = smoothstep(.19,.81,surfaceNoise(p*vec3(.29,.12,.29))*.52 + .48*scoured);
+      float canopy = smoothstep(.19,.81,filteredSurfaceNoise(p*vec3(.29,.12,.29))*.52 + .48*scoured);
       // At kilometre range the land-cover mask represents the crowns,
       // including winter rime, rather than only the dark ground below.
       // Sheltered low valley woods stay dark; broken higher stands carry
@@ -91,7 +96,9 @@ const surfaces = {
         * smoothstep(.39,.94,climateSnowpack);
       float exposed = (1.0 - groomed) * (1.-apron*.96) * smoothstep(1330.0, 1820.0, p.y)
         * smoothstep(.23, .52, 1.0 - up + .27 * (scoured - .41) + .14 * (drift - .5));
-      float fracture = surfaceNoise(p * vec3(1.05,5.85,1.12) + scoured);
+      float fineFracture = filteredSurfaceNoise(p * vec3(1.05,4.80,1.12) + scoured);
+      float coarseFracture = filteredSurfaceNoise(p * vec3(.12,.31,.15));
+      float fracture = mix(fineFracture,coarseFracture,smoothstep(90.,650.,distanceToEye));
       vec3 shale = mix(vec3(.021,.026,.032),vec3(.133,.122,.107),smoothstep(.20,.88,.62*fracture+.38*scoured));
       float rimed = smoothstep(.67,.83,drift+.12*scoured);
       diffuseColor.rgb = mix(diffuseColor.rgb, mix(shale,diffuseColor.rgb,rimed*.33), exposed * .92);
@@ -127,11 +134,11 @@ const surfaces = {
       diffuseColor.rgb *= mix(vec3(.93,.966,1.0),vec3(1.0),groomed);
       diffuseColor.rgb *= mix(vec3(1.0),vec3(.68,.84,.96), polished * .55);
       // Melt follows elevation and broken patches instead of globally tinting
-      // white snow green. Existing piste coverage preserves a skiable ribbon.
+      // white snow green. Groomed pistes retain a ribbon into the spring thaw.
       float seasonalLine = climateSnowline + (scoured-.5)*160.0 + (drift-.5)*74.0;
       float alpineSnow = smoothstep(seasonalLine-145.0,seasonalLine+115.0,p.y);
       float oldSnow = max(climateSnowpack,alpineSnow);
-      float pisteSnow = groomed * mix(.90,.95,climateSpring);
+      float pisteSnow = groomed * mix(.90,.95,climateSpring) * smoothstep(.02,.35,climateSnowpack);
       float cover = max(pisteSnow, smoothstep(.25,.79,oldSnow+scoured*.28-.12));
       vec3 summerFloor = mix(vec3(.075,.112,.035),vec3(.18,.225,.075),scoured);
       vec3 fallFloor = mix(vec3(.14,.079,.024),vec3(.29,.19,.062),scoured);
@@ -149,14 +156,14 @@ const surfaces = {
     color: /* glsl */ `
       vec3 p = surfacePoint;
       float strata = surfaceNoise(p * vec3(.014,.029,.017));
-      float crown = surfaceNoise(p * vec3(.096,.18,.092));
+      float crown = filteredSurfaceNoise(p * vec3(.096,.18,.092));
       #ifdef USE_COLOR
         float treeCover = smoothstep(.012,.041, vColor.g-vColor.r)
           * (1.0-smoothstep(1730.0,1920.0,p.y));
       #else
         float treeCover = 0.0;
       #endif
-      float forestGrain = surfaceNoise(p*vec3(.5,.17,.41));
+      float forestGrain = filteredSurfaceNoise(p*vec3(.5,.17,.41));
       float canopy = smoothstep(.08,.88,crown*.63+forestGrain*.37);
       float ridgeRime = smoothstep(1100.0,1800.0,p.y)*climateSnowpack
         * (.27+.73*smoothstep(.19,.78,canopy*.68+strata*.32));
@@ -315,6 +322,12 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
       .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' + surface.normal)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n' + surface.roughness);
     if (kind === 'snow') {
+      // The sun shadow follows the rider. Fade before its finite rectangular
+      // extent so an aerial view does not see the edge across a hillside.
+      const shadowChunk = THREE.ShaderChunk.shadowmap_pars_fragment.replace('return shadow;', `
+        float shadowInset = min(min(shadowCoord.x, 1.0-shadowCoord.x), min(shadowCoord.y, 1.0-shadowCoord.y));
+        return mix(1.0,shadow,smoothstep(0.002,0.205,shadowInset));`);
+      shader.fragmentShader = shader.fragmentShader.replace('#include <shadowmap_pars_fragment>', shadowChunk);
       shader.fragmentShader = shader.fragmentShader.replace('#include <lights_fragment_end>', `
         #include <lights_fragment_end>
         reflectedLight.directDiffuse *= sunFromTerrain;

@@ -371,7 +371,7 @@ export function buildMappedResortLifts(scene, config, ground) {
       const allowed = clipViewArm(cameraBoom,cameraPosition,player.env);
       const fraction = clamp(allowed / Math.max(.001,cameraBoom.distanceTo(chaseDesired)),0,1);
       ride.arm = dt <= 0 ? fraction : Math.min(fraction,damp(ride.arm,fraction,2.8,dt));
-      cameraPosition.copy(cameraBoom).lerp(chaseDesired,ride.arm);
+      cameraPosition.lerp(cameraBoom,1 - ride.arm / Math.max(.001,fraction));
       cameraTarget.set(player.pos.x-Math.sin(heading)*1.4,bodyY+(lift.surface?.8:1.42),player.pos.z-Math.cos(heading)*1.4);
     } else {
       cameraPosition.copy(cameraBoom);

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { box, mergeParts, part } from './scenery.js';
-import { makeCanvas, makeTextTexture, mulberry32 } from './util.js';
+import { lerp, makeCanvas, makeTextTexture, mulberry32 } from './util.js';
 import { GEMINI_TRAVERSE, STEVENS_CREEKS } from './stevens-pass-terrain.js';
 
 const steel = '#697878';
@@ -218,16 +218,21 @@ function basecamp(group, ground, env) {
   map.wrapS = map.wrapT = THREE.RepeatWrapping;
   map.anisotropy = 6;
   const vertices = [], uv = [], index = [];
-  const w = 22, d = 15, div = 16;
-  for (let j = 0; j <= div; j++) for (let i = 0; i <= div; i++) {
-    const u = x - w/2 + w*i/div, v = z - d/2 + d*j/div;
+  const w = 44, d = 30, cols = 36, rows = 25;
+  const connectsTickets = (u,v) => {
+    const t = (185 - u) / 17;
+    return t > -.26 && t < 1 && Math.abs(v - lerp(-26,-35,t)) < 2.5 + (1-t)*1.1;
+  };
+  for (let j = 0; j <= rows; j++) for (let i = 0; i <= cols; i++) {
+    const u = x - w/2 + w*i/cols, v = z - d/2 + d*j/rows;
     vertices.push(u, ground.heightAt(u,v)+.040, v);
     uv.push(u/2.1,v/2.1);
-    if (i === div || j === div) continue;
-    const offsetX = (u - x + w*.5/div) / (w*.5), offsetZ = (v - z + d*.5/div) / (d*.5);
-    if (Math.abs(offsetX)**3 + Math.abs(offsetZ)**3 > 1.04 + .070*Math.sin(u*1.31 + v*.83)) continue;
-    const k = j*(div+1)+i;
-    index.push(k,k+div+1,k+1,k+1,k+div+1,k+div+2);
+    if (i === cols || j === rows) continue;
+    const midX = u + w*.5/cols, midZ = v + d*.5/rows;
+    const court = (Math.abs(midX-x)/10.9)**3 + (Math.abs(midZ-z)/7.3)**3;
+    if (court > 1.04 + .070*Math.sin(u*1.31 + v*.83) && !connectsTickets(midX,midZ)) continue;
+    const k = j*(cols+1)+i;
+    index.push(k,k+cols+1,k+1,k+1,k+cols+1,k+cols+2);
   }
   const pavers = new THREE.BufferGeometry();
   pavers.setAttribute('position', new THREE.Float32BufferAttribute(vertices,3));
@@ -246,18 +251,33 @@ function geminiRockCut(group, ground) {
   const dx = end[0] - start[0], dz = end[1] - start[1], span = Math.hypot(dx,dz);
   const yaw = Math.atan2(-dz, dx);
   const random = mulberry32(7381), parts = [];
-  for (let i = 0; i < 12; i++) {
-    const t = .17 + .057 * i;
-    const setback = 7.3 + random() * 1.5;
-    const x = start[0] + dx*t + dz/span*setback;
-    const z = start[1] + dz*t - dx/span*setback;
-    const y = ground.heightAt(x,z);
-    const color = ['#525a59','#626a68','#747975','#4a5254'][i % 4];
-    const rise = 1.2 + random() * 1.05;
-    parts.push(part(new THREE.DodecahedronGeometry(1,0), color, [x,y+.19,z],
-      [-.14,yaw+(random()-.5)*.15,-.18], [3.3,rise,1.8]));
-    parts.push(part(new THREE.DodecahedronGeometry(1,0), snow, [x-.3,y+rise*.77,z-.31],
-      [-.14,yaw,-.18],[3.15,.42,1.50]));
+  for (const [begin, end] of [[.13,.34],[.44,.52],[.65,.79]]) {
+    for (let t = begin; t < end; t += .021 + random()*.033) {
+      const setback = 7.18 + random() * 2.1;
+      const x = start[0] + dx*t + dz/span*setback;
+      const z = start[1] + dz*t - dx/span*setback;
+      const y = ground.heightAt(x,z);
+      const color = ['#525a59','#626a68','#747975','#4a5254'][Math.floor(random()*4)];
+      const rise = .48 + random()**1.5 * 1.34;
+      const r = 1.04 + random() * 2.68;
+      const geometry = new THREE.IcosahedronGeometry(1,1);
+      const vertices = geometry.attributes.position;
+      const phase = random()*8;
+      for (let i = 0; i < vertices.count; i++) {
+        const wx=vertices.getX(i), wy=vertices.getY(i), wz=vertices.getZ(i);
+        const split = .83+.24*Math.sin(wx*7.11+wy*3.1+wz*4.53+phase);
+        vertices.setXYZ(i,wx*split,wy*split,wz*split);
+      }
+      geometry.scale(r,rise,1.1+random()*1.0);
+      geometry.rotateY(yaw+(random()-.5)*.4);
+      for (let i = 0; i < vertices.count; i++) {
+        const ox=vertices.getX(i), oy=vertices.getY(i), oz=vertices.getZ(i);
+        const surface = ground.heightAt(x+ox,z+oz) - y;
+        vertices.setY(i, surface + oy - rise*.48);
+      }
+      geometry.computeVertexNormals();
+      parts.push(part(geometry,color,[x,y,z]));
+    }
   }
   buildParts(group,parts,'Gemini · exposed rock cut');
 }

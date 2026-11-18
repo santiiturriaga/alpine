@@ -70,6 +70,10 @@ export function valleyLakeAt(x,z) {
   return lakes.find(lake=>contains(lake,x,z))||null;
 }
 
+export function mappedLakes() {
+  return lakes.map(({ ring, holes }) => ({ ring, holes }));
+}
+
 function lakeMaterial() {
   const material=new THREE.MeshStandardMaterial({color:0xffffff,roughness:.85,
     metalness:0,envMapIntensity:.45,polygonOffset:true,

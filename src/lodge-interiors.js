@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import { heightAt } from './terrain.js';
 import { MOUNTAIN } from './worlddata.js';
 import { buildingData } from '../data/osm-whistler.js';
-import { box, beam, mergedMesh, mergeParts } from './scenery.js';
-import { makeCanvas, canvasTexture, lerp } from './util.js';
+import { box, beam, part, mergedMesh, mergeParts } from './scenery.js';
+import { makeCanvas, canvasTexture, lerp, mulberry32 } from './util.js';
 import { surfaceMaterial } from './materials.js';
 import { makePeak2PeakBadge } from './lift-stations.js';
 import { LODGE_FRAME, LODGE_CAFE, LODGE_TERRACE } from './roundhouse-site.js';
@@ -118,15 +118,27 @@ function furnish(room, group, grid) {
       }
     }
   }
+  if(room.id==='village-cafe')lodgeGuest(room, .30, Math.min(1.4,hd*.4), -.7, 'customer');
   // Service counter at the back with hand-built cups and a menu board.
   const counterW = Math.min(5.7, room.w * .4);
   const cappBar = room.id === 'roundhouse', counterZ = -hd + (cappBar ? 2.05 : 1.0);
   timber.push(box(counterW, .98, 1.0, '#78573d', [-1.2, .49, counterZ]));
   stone.push(box(counterW + .16, .09, 1.12, '#c2b7a1', [-1.2, 1.03, counterZ]));
   collider(grid, room, -1.2, counterZ, counterW + .2, 1.2, 'furniture');
-  for (let i = 0; i < 4; i++) details.push(box(.12, .16, .12, '#eee3ca', [-2.3 + i * .3, 1.16, counterZ]));
+  const cup = new THREE.CylinderGeometry(.049,.039,.105,12), lid = new THREE.CylinderGeometry(.053,.053,.022,12);
+  for (let i = 0; i < 4; i++) {
+    const x = -2.3 + i * .27;
+    details.push(part(cup,'#d7cbb4',[x,1.132,counterZ+.22]),part(lid,'#edeadf',[x,1.190,counterZ+.22]));
+  }
   if (cappBar) {
     label(group, 'ROUNDHOUSE CAPP BAR', 'HOT CHOCOLATE  ·  2 COINS', -1.2, 2.14, -hd + .19, 4.5);
+    details.push(box(.94,.35,.45,'#464d50',[-3.42,1.26,counterZ-.11]));
+    details.push(box(.96,.075,.48,'#676d6e',[-3.42,1.474,counterZ-.1]));
+    details.push(box(.79,.19,.035,'#a4aba9',[-3.42,1.25,counterZ+.13]));
+    details.push(box(.47,.037,.22,'#373d40',[-3.42,1.11,counterZ+.238]));
+    for(let i=0;i<3;i++)details.push(part(cup,'#e5dfd1',[-3.72+i*.26,1.579,counterZ-.1]));
+    timber.push(box(1.6,.092,.29,'#715439',[1.3,1.46,-hd+.26]));
+    for(let i=0;i<5;i++)details.push(part(cup,i%2?'#b3b8a7':'#c4af8a',[.82+i*.23,1.56,-hd+.31]));
     diningCounter(room,-1.2,counterZ+.9,'Roundhouse Capp Bar','Hot chocolate',2);
     lodgeGuest(room,-1.2,counterZ-1.05,0,'server',{shift:1.3});
     lodgeGuest(room,1.15,counterZ+1.78,Math.PI,'customer');
@@ -283,12 +295,24 @@ function buildRoom(scene, grid, room, shell = true) {
     label(group, room.name.toUpperCase(), 'OPEN • WALK INSIDE', room.doorX, 3.35, hd + .22, Math.min(room.w - .5, 6.7));
   } else if(room.frontWindows) {
     const clearTop=Math.min(3.13,room.h-.15),clearH=clearTop-.62;
+    const random=mulberry32(room.kind==='dining'?46141:372);
     for(const [l,r] of [[-hw,doorL],[doorR,hw]]){
       const width=r-l,center=(l+r)/2;
       wall(center,hd,width,.17,.62);
       walls.push(box(width,room.h-clearTop,.17,'#72543e',[center,(room.h+clearTop)/2,hd]));
-      panes.push(box(width,clearH,.035,'#92bbc7',[center,.62+clearH/2,hd]));
-      for(let x=l;x<r;x+=2.35)frame.push(box(.08,clearH,.09,'#675944',[x,.62+clearH/2,hd+.06]));
+      frame.push(box(width,.10,.23,'#635b51',[center,.615,hd+.064]));
+      frame.push(box(width,.081,.16,'#69675e',[center,clearTop,hd+.068]));
+      const bays=Math.ceil(width/2.08),bayW=width/bays;
+      for(let i=0;i<bays;i++){
+        const end=l+(i+1)*bayW,x=end-bayW/2;
+        const glaze=['#6d8994','#799599','#7896a0','#6f8a9b'][Math.floor(random()*4)];
+        panes.push(box(bayW-.085,clearH-.092,.037,glaze,[x,.62+clearH/2,hd-.008]));
+        frame.push(box(.113,clearH-.04,.21,'#554c42',[end,.62+clearH/2,hd+.058]));
+        frame.push(box(.045,clearH-.11,.041,'#85847a',[end,.62+clearH/2,hd+.171]));
+        frame.push(box(bayW-.019,.49,.109,i%3===1?'#898277':'#817d73',[x,.31,hd+.131]));
+        frame.push(box(bayW-.022,.094,.146,'#73716a',[x,.104,hd+.146]));
+      }
+      frame.push(box(.105,clearH+.051,.188,'#665649',[l,.62+clearH/2,hd+.058]));
     }
     const head=room.doorHead??2.75, lintel=room.h-head;
     if(lintel>0)walls.push(box(room.doorWidth,lintel,.18,'#72543e',[room.doorX,head+lintel/2,hd]));
@@ -308,12 +332,28 @@ function buildRoom(scene, grid, room, shell = true) {
   // A fixed warm fill avoids altering the renderer's light count at a doorway.
   mesh(group, walls, surfaceMaterial('timber', { vertexColors: true, emissive:0xa97955, emissiveIntensity:.20 }));
   mesh(group, frame);
-  mesh(group, panes, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .24, metalness: .1, transparent: true, opacity: .34, depthWrite: false }));
+  const glassOptions = { vertexColors:true, roughness:.30, metalness:.11, transparent:true, opacity:.36, depthWrite:false };
+  const glass = room.frontWindows
+    ? surfaceMaterial('glass', { ...glassOptions, opacity:.46 })
+    : new THREE.MeshStandardMaterial(glassOptions);
+  mesh(group, panes, glass);
   // Entrance mat and twin jambs make the opening legible from outside.
   const doorHead=room.doorHead??2.75;
   mesh(group, [box(room.doorWidth, .025, 1.1, '#33494b', [room.doorX, .014, hd - .58]),
     ...[doorL, doorR].map(x => box(.12, doorHead, .27, '#60442f', [x, doorHead/2, hd])),
     box(room.doorWidth+.15,.095,.22,'#60442f',[room.doorX,doorHead,hd])]);
+  if(room.entrySteps){
+    const frames=[],glass=[],leaf=.79;
+    for(const side of [-1,1]){
+      const x=room.doorX+side*(room.doorWidth/2-.04),z=hd-leaf/2;
+      glass.push(box(.035,doorHead-.18,leaf-.13,'#88a8a9',[x,doorHead/2,z]));
+      for (const edge of [-1,1]) frames.push(box(.068,doorHead,.067,'#63564c',[x,doorHead/2,z+edge*leaf/2]));
+      for (const y of [.065,doorHead/2,doorHead-.06]) frames.push(box(.068,.074,leaf,'#5c5345',[x,y,z]));
+      frames.push(box(.097,.073,.25,'#a4a5a1',[x,1.02,hd-.62]));
+    }
+    mesh(group,frames);
+    mesh(group,glass,new THREE.MeshStandardMaterial({vertexColors:true,transparent:true,opacity:.24,depthWrite:false,roughness:.30}));
+  }
   if (room.rampLength) ramp(room, group);
   furnish(room, group, grid);
   room.group = group;
@@ -365,7 +405,7 @@ export function buildLodgeInteriors(scene, grid) {
     serviceAt(x,z,y) {
       const room=this.interiorAt(x,z,y);
       if(!room)return null;
-      let closest=null,distance=2.0;
+      let closest=null,distance=2.55;
       for(const counter of diningCounters){
         const d=Math.hypot(x-counter.x,z-counter.z);
         if(counter.room===room.id&&d<distance){closest=counter;distance=d;}

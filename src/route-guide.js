@@ -85,12 +85,13 @@ export class RouteGuide {
     this.ride = false;
     this.root.visible = false;
     this.lastPlan = performance.now();
+    this.planOrigin = start ? { x: start.x, z: start.z } : null;
     if (!feature) {
       this.setGuidance('');
       return false;
     }
     if (!start) {
-      this.setGuidance('Start skiing to begin guidance.');
+      this.setGuidance('Start exploring to begin guidance.');
       return true;
     }
     this.router ??= new TrailRouter(this.summer
@@ -140,7 +141,8 @@ export class RouteGuide {
       this.root.visible = false;
       return;
     }
-    if (this.ride || this.message === 'Start skiing to begin guidance.') {
+    if (this.ride || !this.planOrigin || (this.message === 'No connected route from here.'
+        && flatDistance(p, this.planOrigin) > 95 && performance.now() - this.lastPlan > 4500)) {
       this.setDestination(this.destination, p);
     }
     if (!this.active) return;
@@ -157,7 +159,8 @@ export class RouteGuide {
       return;
     }
     const points = leg.points, last = points.at(-1), boarding = this.legs[this.legIndex + 1]?.lift;
-    if (!last || (flatDistance(p, last) < (boarding ? 12 : 6) && (leg.length < 80 || leg.length - this.progress < 45))) {
+    const arrivalRange = boarding ? 12 : this.destination.kind === 'landmark' && this.destination.approachRadius <= 6 ? 2.2 : 6;
+    if (!last || (flatDistance(p, last) < arrivalRange && (leg.length < 80 || leg.length - this.progress < 45))) {
       this.nextLeg();
       return;
     }

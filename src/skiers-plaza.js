@@ -13,6 +13,8 @@ import { makeCanvas, canvasTexture, lerp, mulberry32 } from './util.js';
 // stepped roof volumes and terrace fitouts are interpreted from photographs.
 export const SKIERS_PLAZA_BUILDING_IDS = new Set(['50677441', '147438099', '147438097']);
 export const SKIERS_PLAZA_START = { x: -39, z: -74, heading: -2.78, holdAtUnload: true };
+// Pan Pacific's 18.2 m plaza-facing wall runs from [-16.8,-89.1] to [1.2,-92].
+const salomonSite = { x: -8.2, z: -90.486, yaw: Math.atan2(2.9,18) };
 // Inferred by resection against Sundial's corner and the Salomon shop front.
 // The supplied map camera coordinates resolve uphill of these two landmarks.
 export const SKIERS_PLAZA_VIEW = {
@@ -367,7 +369,8 @@ function building(parent, grid, spec) {
       const grade = Math.min(spec.podium - 2.56, Math.max(-.1, heightAt(sx, sz) - datum));
       const display = spec.style === 'sundial' && ((i === 5 || i === 10) && j === 0 || i === 0 && j >= 2 && j % 3 === 2)
         ? 'cafe' : spec.style === 'panPacific' && i === 10 && j % 3 === 0 ? 'boots' : null;
-      storefront(layers, face, center, Math.min(cell * .91, 3.5), grade, spec.style, front, display);
+      const salomonBays = spec.style === 'panPacific' && Math.abs(sx - salomonSite.x) < 3.7 && Math.abs(sz - salomonSite.z) < .8;
+      if (!salomonBays) storefront(layers, face, center, Math.min(cell * .91, 3.5), grade, spec.style, front, display);
       for (let floor = 0; floor < spec.floors; floor++) {
         const y = spec.podium + (floor + .52) * spec.storey;
         if (edgeTop - y < 1.02) continue;
@@ -455,6 +458,8 @@ function paving(parent) {
   const tex = canvasTexture(canvas, { repeat: [1, 1] }); tex.anisotropy = 8;
   const indices = THREE.ShapeUtils.triangulateShape(perimeter.map(([x, z]) => new THREE.Vector2(x, z)), []);
   const coords = [], uv = [], tints = [], randTone = new THREE.Color(), c = Math.cos(.19), s = Math.sin(.19);
+  const surfaceCells = new Map(), cellSize = 3.5;
+  const key = (x, z) => `${x}:${z}`;
   function add(a, b, d) {
     const longest = Math.max(Math.hypot(a[0] - b[0], a[1] - b[1]), Math.hypot(b[0] - d[0], b[1] - d[1]), Math.hypot(d[0] - a[0], d[1] - a[1]));
     if (longest > 3.4) {
@@ -463,8 +468,16 @@ function paving(parent) {
       add(a, ab, da); add(ab, b, bd); add(da, bd, d); add(da, ab, bd);
       return;
     }
-    for (const [x, z] of [a, d, b]) {
-      coords.push(x, heightAt(x, z) + .083, z);
+    const triangle = [a,d,b].map(([x,z]) => [x,heightAt(x,z)+.083,z]);
+    const minX = Math.floor(Math.min(a[0],b[0],d[0])/cellSize), maxX = Math.floor(Math.max(a[0],b[0],d[0])/cellSize);
+    const minZ = Math.floor(Math.min(a[1],b[1],d[1])/cellSize), maxZ = Math.floor(Math.max(a[1],b[1],d[1])/cellSize);
+    for (let cz=minZ;cz<=maxZ;cz++) for (let cx=minX;cx<=maxX;cx++) {
+      const id=key(cx,cz);
+      if (!surfaceCells.has(id)) surfaceCells.set(id,[]);
+      surfaceCells.get(id).push(triangle);
+    }
+    for (const [x, y, z] of triangle) {
+      coords.push(x, y, z);
       uv.push((x * c + z * s) / 3.05, (z * c - x * s) / 3.05);
       const wash = .5 + .5 * Math.sin(x * .16 + Math.sin(z * .15) * .76);
       randTone.setRGB(.80 + .17 * wash, .81 + .14 * wash, .82 + .09 * wash);
@@ -481,6 +494,18 @@ function paving(parent) {
   applyPaverWeather(mat);
   const mesh = new THREE.Mesh(geo, mat); mesh.receiveShadow = true;
   mesh.name = 'Skiers Plaza · cleared clay and granite block pavers'; parent.add(mesh);
+  return (x, z) => {
+    const cell = surfaceCells.get(key(Math.floor(x/cellSize), Math.floor(z/cellSize)));
+    if (!cell) return null;
+    for (const [a,b,d] of cell) {
+      const ux=b[0]-a[0], uz=b[2]-a[2], vx=d[0]-a[0], vz=d[2]-a[2];
+      const px=x-a[0], pz=z-a[2], det=ux*vz-uz*vx;
+      if (Math.abs(det) < 1e-8) continue;
+      const u=(px*vz-pz*vx)/det, v=(ux*pz-uz*px)/det;
+      if (u >= -1e-7 && v >= -1e-7 && u+v <= 1+1e-7) return a[1]+u*(b[1]-a[1])+v*(d[1]-a[1]);
+    }
+    return null;
+  };
 }
 
 function umbrella(layers, frame, x, z, y, radius, tint) {
@@ -640,9 +665,11 @@ function patioFrontage(parent, grid, walkways) {
     greenery(layers, x, z, scale, 147 + i * 91);
     grid.addCircle(x, z, r, 'plaza-planter', { maxY: y + .55 });
   }
-  // The Salomon portal is approximately aligned with its mapped shop pin.
-  const salomon = frameAt(-25.3, -90.7, .48);
-  stoneWall(layers, salomon, -5.1, 5.1, -.16, 3.35, -.18, '#9d9c91', true);
+  // Recess the shop into the actual Pan Pacific podium wall instead of
+  // building a second free-standing stone frontage in the walking lane.
+  const salomon = frameAt(salomonSite.x, salomonSite.z, salomonSite.yaw);
+  for (const side of [-1,1]) façadeBox(layers,'granite',salomon,-.67+side*2.53,1.38,.20,.285,2.94,.47,'#a19e92');
+  façadeBox(layers,'granite',salomon,-.67,2.96,.20,5.34,.30,.47,'#a19e92');
   storefront(layers, salomon, -.71, 1.78, .01, 'panPacific', true);
   displayWindow(layers, salomon, -2.26, 1.31, .01, 'boots');
   displayWindow(layers, salomon, .856, 1.37, .01, 'skis');
@@ -662,13 +689,8 @@ function patioFrontage(parent, grid, walkways) {
   }
   const [rackX, rackY, rackZ] = salomon.point(-3.76, 0, .29);
   grid.addBox(rackX, rackZ, .85, .31, -salomon.yaw, 'plaza-building-wall', { maxY: rackY + 1.70 });
-  panel(group, salomon, -.67, 2.85, .32, 4.45, .58, 'SALOMON  ▰', { border: false, bg: '#172629', ink: '#f0eeeb' });
-  façadeBox(layers, 'granite', salomon, 0, 3.48, -.13, 10.39, .23, 1.05, '#a09c8e');
-  for (let j = 0; j < 13; j++) {
-    const [x, y, z] = salomon.point(-4.85 + j * .82, 3.77, -.22);
-    leafCluster(layers, [x, y, z], .59, mulberry32(224 + j));
-  }
-  grid.addBox(-25.3, -90.7, 5.16, .155, -.48, 'plaza-building-wall', { maxY: salomon.y + 3.6 });
+  façadeBox(layers, 'metal', salomon, -.67, 2.84, .456, 4.61, .60, .11, '#172629');
+  panel(group, salomon, -.67, 2.84, .515, 4.45, .52, 'SALOMON  ▰', { border: false, bg: '#172629', ink: '#f0eeeb' });
   for (const [x, z, a] of [[-23.3, -86.4, .6], [-81.8, -84.7, 2.2], [-48.1, -37.2, -.9], [-97.3, -14.2, 1.45]]) lamppost(layers, x, z, a);
   finish(group, layers);
   return group;
@@ -791,7 +813,7 @@ function summerSign(parent) {
 export function buildSkiersPlaza(scene, { grid }) {
   const group = new THREE.Group(); group.name = 'Whistler Village · Skiers Plaza'; scene.add(group);
   const walks = [];
-  paving(group);
+  const pavedHeightAt = paving(group);
   const snowBanks = makeShoveledBanks();
   group.add(snowBanks);
   for (const spec of specs) building(group, grid, spec);
@@ -809,11 +831,11 @@ export function buildSkiersPlaza(scene, { grid }) {
     group,
     socialSlots: [[-44.3, -86.6, .5], [-45.3, -86.1, 1.8], [-43.9, -85.1, -2.5],
       [-33, -88.2, -.8], [-32, -87.4, 2.3], [-27.0, -83.1, -.3], [-27.8, -82.7, .9],
-      [-25.1, -89.2, -2.75], [-24.88, -88.03, -2.88], [-24.48, -86.87, -2.97],
+      [-9.6, -88.1, -2.97], [-9.7, -86.91, -2.97], [-9.8, -85.72, -2.97],
       [-55.76, -83.55, -2.92], [-56.92, -83.04, 2.93],
       [-44.3, -33.1, .4], [-43.6, -32.3, -2.7]]
       .filter(([x, z]) => guestClear(x, z, .44, grid.query(x, z, 1.5), heightAt(x, z)))
-      .map(([x, z, heading]) => ({ x, z, heading, y: heightAt(x, z) + .082, lodge: 'skiers-plaza' })),
+      .map(([x, z, heading]) => ({ x, z, heading, y: pavedHeightAt(x,z) ?? heightAt(x,z), lodge: 'skiers-plaza' })),
     update(_dt, _time, camera) {
       const close = !camera || Math.hypot(camera.position.x + 46, camera.position.z + 60) < 900;
       const snow = climateUniforms.snowpack.value;
@@ -831,7 +853,7 @@ export function buildSkiersPlaza(scene, { grid }) {
     walkSurfaceAt(x, z, y) {
       if (x < -125 || x > 40 || z < -122 || z > 25) return null;
       const ground = heightAt(x, z);
-      let surface = null;
+      let surface = pavedHeightAt(x,z);
       for (const { frame, minX, maxX, minZ, maxZ, target } of walks) {
         if (target < ground - .03 || (y !== undefined && target > y + .52)) continue;
         const [u, v] = frame.inverse(x, z);

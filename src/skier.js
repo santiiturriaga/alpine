@@ -814,7 +814,7 @@ export function createSkier({
       pole.quaternion.copy(armRotation).multiply(poleTarget);
     }
     for (const [i, { side, ski, equipment, trousers, cuff }] of legs.entries()) {
-      equipment.visible = !footMode && !mount;
+      equipment.visible = !footMode && (!mount || mount.skis);
       const cycle = stridePhase + (side < 0 ? Math.PI : 0);
       const walkPhase = ((cycle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) / Math.PI;
       const step = footMode ? (walkPhase < 1 ? 1 - 2 * walkPhase : -Math.cos((walkPhase - 1) * Math.PI)) : Math.sin(cycle);
@@ -922,5 +922,5 @@ export function createSkier({
     }
   }
   setAppearance({ sticker: 'none' });
-  return { group, animate, contactPoints, skiAxes, skiRights, skiSink, skiPlanted, showHelmetGear, setAppearance };
+  return { group, torso, animate, contactPoints, skiAxes, skiRights, skiSink, skiPlanted, showHelmetGear, setAppearance };
 }

@@ -244,8 +244,9 @@ export class UI {
     }
   }
 
-  setRideView(view) {
-    this.el.rideView.textContent = view === 'valley' ? 'Forward view' : view === 'chase' ? 'Valley view' : 'Change view';
+  setRideView(view,hasChase=false) {
+    this.el.rideView.textContent = view === 'valley' ? 'Forward view'
+      : view === 'forward' && hasChase ? 'Chase view' : 'Valley view';
   }
 
   updateRide(progress, metres, seconds) {
@@ -323,8 +324,9 @@ export class UI {
     this.setText(this.el.altitude, 'altitude', `${formatNumber(player.pos.y)} m`);
     this.setText(this.el.trailName, 'trail', trail);
     this.setText(this.el.statVertical, 'vertical', `${formatNumber(Math.max(0, player.stats.vertical))} m`);
+    $('gear-mode').hidden = player.riding;
     this.setText($('gear-mode-label'), 'gearMode', player.footMode ? 'Put on skis' : 'Walk');
-    this.setText($('snow-surface'), 'surface', player.footMode ? ' · On foot' :
+    this.setText($('snow-surface'), 'surface', player.vehicleLabel ? ` · ${player.vehicleLabel}` : player.footMode ? ' · On foot' :
       player.surfaceType === 'ice' ? ' · Ice' : player.surfaceType === 'powder' ? ' · Powder' : '');
     this.setText(this.el.coins, 'coins', formatNumber(collectibles?.coinCount || 0));
     this.setText(this.el.crystals, 'crystals', String(collectibles?.crystalCount || 0));
@@ -451,7 +453,8 @@ export class UI {
 
   configureMap(scene, settings, isOpen) {
     this.routeGuide = new RouteGuide(scene, { ...settings, isOpen,
-      lifts: settings.lifts.filter(lift => lift.rideable !== false) });
+      lifts: settings.lifts.filter(lift => lift.rideable !== false),
+      summerLifts: settings.summerLifts?.filter(lift => lift.rideable !== false) });
     this.resortMap.configure(settings, this.routeGuide);
   }
 

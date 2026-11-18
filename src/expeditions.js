@@ -48,9 +48,26 @@ export class Expeditions {
       }
     }
     for (const { id, pose, label } of bikes) {
-      this.addVehicle(scene, { ...bikeSpec, destination:id, label:label ?? bikeSpec.label }, pose);
+      this.addVehicle(scene, { ...bikeSpec, destination:id, label:label ?? bikeSpec.label }, this.bikeParking(pose));
     }
     this.wings = winterVehicles ? new WingTrails(scene) : null;
+  }
+
+  bikeParking(pose) {
+    const heading = pose.heading ?? 0, fx = Math.sin(heading), fz = Math.cos(heading);
+    for (const advance of [0,3,6,9,13,18,24]) {
+      for (const across of [0,1.2,-1.2,2.4,-2.4,4,-4]) {
+        const x = pose.x+fx*advance+fz*across, z = pose.z+fz*advance-fx*across;
+        const startHeight = this.ground.heightAt(x,z);
+        if (this.ground.heightAt(x+fx*4,z+fz*4) > startHeight + .85) continue;
+        const open = [0,1,2.5,4,6].every(distance => {
+          const px = x+fx*distance, pz = z+fz*distance;
+          return !this.obstructed(px,pz,this.ground.heightAt(px,pz),bikeSpec.radius+.10);
+        });
+        if (open) return { ...pose,x,z };
+      }
+    }
+    return pose;
   }
 
   addVehicle(scene, spec, pose) {
@@ -58,7 +75,7 @@ export class Expeditions {
     model.name = spec.label;
     model.position.set(pose.x,this.ground.heightAt(pose.x,pose.z),pose.z);
     scene.add(model);
-    const v = { ...spec, model, home:model.position.clone(), homeYaw:pose.heading ?? 0,
+    const v = { ...spec, model, homeX:pose.x, homeZ:pose.z, homeYaw:pose.heading ?? 0,
       asset:null, yaw:pose.heading ?? 0, speed:0, clearance:0, cockpit:false };
     this.pose(v,false);
     this.park(v);
@@ -120,7 +137,7 @@ export class Expeditions {
     const v = this.fleet.find(entry => (entry.destination ?? entry.id) === id);
     if (!v) return null;
     if (reset && v !== this.active) {
-      v.model.position.copy(v.home);
+      v.model.position.set(v.homeX,this.ground.heightAt(v.homeX,v.homeZ),v.homeZ);
       v.yaw = v.homeYaw;
       this.pose(v,false);
     }
@@ -156,6 +173,7 @@ export class Expeditions {
     v.snapView = true;
     v.asset.setOccupied?.(true);
     player.setRiding(true);
+    player.vehicleLabel = v.label;
     player.pos.copy(v.model.position);
     player.model.visible = !!v.asset.mount;
     if (v.asset.mount) {
@@ -215,10 +233,10 @@ export class Expeditions {
   }
 
   controls(v = this.active) {
-    if (v?.id === 'wingsuit') return 'Space spread · Shift tuck · A/D bank · E exit';
-    if (v?.id === 'bike') return 'W pedal · S brake · A/D steer · Space hop · E exit';
-    if (v?.id === 'helicopter') return 'Space / Shift altitude · W/S travel · E exit';
-    return 'W/S travel · A/D steer · E exit';
+    if (v?.id === 'wingsuit') return 'A/D bank · Space spread · Shift tuck · C view · E exit';
+    if (v?.id === 'bike') return 'W pedal · S brake · A/D steer · Space hop · C view · E exit';
+    if (v?.id === 'helicopter') return 'Space / Shift altitude · W/S travel · C view · E exit';
+    return 'W/S travel · A/D steer · C view · E exit';
   }
 
   update(dt,keys,player,camera,clock) {
@@ -243,7 +261,7 @@ export class Expeditions {
       const drive = Math.max(0,throttle) * (1-clamp(v.speed/v.top,0,1)) * 5.7;
       const loss = .38 + v.speed*.055 + Math.max(0,-throttle)*(6.4+v.speed*.31);
       if (v.clearance < .1) v.speed = clamp(v.speed + (downhill*8.8 + drive - loss)*dt,0,v.top);
-      v.yaw -= steering * dt * clamp(v.speed*.39,0,1) * (1.88 - v.speed*.043);
+      v.yaw -= steering * dt * clamp(.27+v.speed*.39,.27,1) * (1.88 - v.speed*.043);
       if (spread && !v.jumpHeld && v.clearance < .1 && v.speed > 1.8) v.verticalSpeed = 3.75;
       v.jumpHeld = spread;
     } else {
@@ -287,6 +305,9 @@ export class Expeditions {
         this.fx?.vehicleTrack(v.id,trackPoint,v.yaw,this.season() === 'summer');
       } else this.fx?.breakVehicleTrack();
     }
+    player.stats.distance += Math.hypot(p.x-player.pos.x,p.z-player.pos.z);
+    player.stats.topSpeed = Math.max(player.stats.topSpeed,Math.abs(v.speed));
+    if (!heli) player.stats.vertical += Math.max(0,player.pos.y-p.y);
     player.pos.copy(p);
     player.speed = Math.abs(v.speed);
     player.heading = v.yaw;
@@ -308,7 +329,7 @@ export class Expeditions {
       v.model.updateMatrixWorld(true);
       view.copy(v.asset.eye || vertical).applyMatrix4(v.model.matrixWorld);
       view.y += Math.sin(clock*33)*shake;
-      const pitch = v.lookPitch - (glide ? .11 + v.posture*.07 : 0);
+      const pitch = v.lookPitch - (glide ? .11 + v.posture*.07 + Math.sin(clock*31)*shake*.24 : 0);
       target.copy(view).addScaledVector(forward.set(Math.sin(angle)*Math.cos(pitch),Math.sin(pitch),Math.cos(angle)*Math.cos(pitch)),15);
       camera.position.copy(view);
     } else {

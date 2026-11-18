@@ -1,5 +1,6 @@
+import { addPassGate } from './pass-gates.js';
 import * as THREE from 'three';
-import { LIFTS, PEAK_TO_PEAK } from './worlddata.js';
+import { LIFTS, RUNS, PEAK_TO_PEAK } from './worlddata.js';
 import { heightAt } from './terrain.js';
 import { box, beam, part, mergedMesh, mergeParts } from './scenery.js';
 import { makeCanvas, canvasTexture } from './util.js';
@@ -8,6 +9,31 @@ import { createRoofSnow, createIcicles } from './roof-weather.js';
 import { ropeOffset, stationPoint, stationSite } from './station-sites.js';
 
 const white = '#d8dedc', steel = '#9ba9ad';
+function creeksideTrailBoard(frame) {
+  const {canvas,ctx}=makeCanvas(1600,776);
+  const center={x:-1410,z:3610},scale=.13;
+  const x=v=>661+(v-center.x)*scale, y=v=>412+(v-center.z)*scale;
+  ctx.fillStyle='#e6eade';ctx.fillRect(0,0,1600,776);
+  const ink={green:'#36734b',blue:'#307199',black:'#273b3b',double:'#192925'};
+  const trace=(points,color,width)=>{
+    ctx.beginPath();
+    points.forEach(([east,south],i)=>i?ctx.lineTo(x(east),y(south)):ctx.moveTo(x(east),y(south)));
+    ctx.strokeStyle=color;ctx.lineWidth=width;ctx.stroke();
+  };
+  ctx.save();ctx.beginPath();ctx.rect(0,88,1185,688);ctx.clip();ctx.lineJoin=ctx.lineCap='round';
+  for(const run of RUNS) trace(run.points,ink[run.difficulty]||'#607774',run.named?3:1.6);
+  ctx.setLineDash([9,4]);
+  for(const lift of LIFTS)trace(lift.points,'#a13b35',3);
+  ctx.setLineDash([]);ctx.fillStyle='#b12d2b';ctx.beginPath();ctx.arc(x(frame.x),y(frame.z),8,0,Math.PI*2);ctx.fill();
+  ctx.font='bold 20px Barlow, sans-serif';ctx.fillStyle='#172e30';ctx.fillText('YOU ARE HERE',x(frame.x)+14,y(frame.z)-6);ctx.restore();
+  ctx.fillStyle='#17373b';ctx.fillRect(0,0,1600,90);ctx.fillRect(1185,86,415,690);
+  ctx.fillStyle='#fff';ctx.font='bold 52px Barlow, sans-serif';ctx.fillText('WHISTLER MOUNTAIN',31,62);
+  ctx.font='bold 32px Barlow, sans-serif';ctx.fillText('CREEKSIDE',1211,156);
+  ctx.font='23px Barlow, sans-serif';
+  ['Creekside Gondola','Big Red Express','Peak to Creek','Dave Murray Downhill'].forEach((name,i)=>ctx.fillText(name,1211,230+i*56));
+  ctx.fillStyle='#d7e1d2';ctx.font='20px Barlow, sans-serif';ctx.fillText('TRAILS & LIFTS',1211,610);ctx.fillText('NORTH ↑',1211,683);
+  const texture=canvasTexture(canvas);texture.anisotropy=4;return texture;
+}
 const queueSlots = [];
 // The old Creekside terminal has an OSM building footprint. Its roof and
 // loading hall are reconstructed below; the generic village extruder must
@@ -371,8 +397,7 @@ export function buildMappedTerminal(scene, grid, def, index) {
     for(const x of [hutX-2.85,hutX,hutX+2.85])parts.push(box(.065,1.34,.09,'#c6c9be',[x,1.59,-5.46]));
     for(const y of [.96,2.22])parts.push(box(5.78,.065,.09,'#d0cec1',[hutX,y,-5.46]));
     parts.push(box(7.3,3.72,.19,'#293b3b',[hutX,4.96,-5.44]));
-    const atlas=new THREE.TextureLoader().load(new URL('../assets/maps/panorama-preview.webp',import.meta.url).href);
-    atlas.colorSpace=THREE.SRGBColorSpace;atlas.anisotropy=4;
+    const atlas=creeksideTrailBoard(frame);
     const mapPanel=new THREE.Mesh(new THREE.PlaneGeometry(6.96,3.38),new THREE.MeshStandardMaterial({map:atlas,roughness:.82,emissive:0xffffff,emissiveIntensity:.035}));
     mapPanel.position.set(hutX,4.96,-5.55);mapPanel.rotation.y=Math.PI;mapPanel.name='Creekside trail map · original resort panorama';group.add(mapPanel);
     const mapHeader=board(group,'WHISTLER · BLACKCOMB','',hutX,7.06,-5.5,5.3,Math.PI,'#293b3b','#e9ecdf');
@@ -471,8 +496,7 @@ export function buildStationOperations(scene, grid) {
       const x=originX-(lane+.5)*pitch,y=localFloor(frame,x,railStart+1.5),z=railStart+1.5;
       parts.push(box(.22,1.12,.22,'#697d83',[x-.78,y+.55,z]));
       parts.push(box(.27,.32,.24,'#344f5b',[x-.78,y+1.25,z]));
-      parts.push(box(.12,.08,.04,'#69bcb1',[x-.78,y+1.27,z-.14]));
-      parts.push(beam([x-.7,y+.81,z],[x+.72,y+.81,z],.045,.055,'#8d9fa3'));
+      addPassGate(group,x-.78,y,z,1.48,-1);
     }
     groundBoard(group,parts,frame,chair?'SKIS STRAIGHT · POLES FREE':'REMOVE SKIS · BOARD HERE',chair?'WAIT FOR THE GATE':'GONDOLA ENTRANCE',originX-1.1,railStart-2,3);
     addParts(group,parts,{roughness:.52,metalness:.38});

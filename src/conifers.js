@@ -429,14 +429,17 @@ export function coniferGeometry(kind, detail = 0, variant = 0) {
       tri(a.p,c.p,b.p,a.n,c.n,b.n,heart,heart,heart,solid,solid,solid);
       tri(b.p,c.p,d.p,b.n,c.n,d.n,heart,heart,heart,solid,solid,solid);
     }
-    if (detail === -2) return finish();
+    if (detail === -2) {
+      tube([0,-.095,0], trunk(spec.skirt+.085), .0087, null, 4, bark, .0046);
+      return finish();
+    }
   }
 
   if (detail === -1 || detail === 0) {
     const segments = 3;
     for (let i = 0; i < segments; i++) {
       const y = i / segments;
-      tube(trunk(y), trunk((i + 1) / segments), .008 * (1 - y) + .0004, null, 3,
+      tube(i === 0 ? [0,-.095,0] : trunk(y), trunk((i + 1) / segments), .008 * (1 - y) + .0004, null, 3,
         bark.clone().multiplyScalar(.65 + y * .33), .008 * (1 - (i + 1) / segments) + .0004);
     }
   }
@@ -681,6 +684,7 @@ export function coniferMaterial(level = 0, region = null) {
       #endif
       forestOrigin = modelMatrix * forestOrigin;
       forestTop = modelMatrix * forestTop;
+      if (position.y < -.07) transformed.y -= 1.55 / max(.2, distance(forestOrigin.xyz,forestTop.xyz));
       ${level === -2 ? '' : 'crownBaseAltitude = forestOrigin.y;'}
       float crownAltitude = max(0.0, max(forestOrigin.y - cameraPosition.y, cameraPosition.y - forestTop.y));
       float forestDistance = length(vec3(cameraPosition.xz - forestOrigin.xz, crownAltitude));

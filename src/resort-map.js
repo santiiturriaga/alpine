@@ -44,10 +44,11 @@ function intersects(a, b) {
   return a.minX < b.maxX && a.maxX > b.minX && a.minZ < b.maxZ && a.maxZ > b.minZ;
 }
 
-function linePath(points) {
+function linePath(points, closed = false) {
   const path = new Path2D();
   path.moveTo(...points[0]);
   for (const point of points.slice(1)) path.lineTo(...point);
+  if (closed) path.closePath();
   return path;
 }
 
@@ -120,7 +121,7 @@ export function mappedAtlasSettings({ mountain, config, runs, ground, lifts }) {
   const summerLifts = config.summerLifts ?? (config.id === 'crystal-mountain' ? ['mt-rainier-gondola']
     : config.id === 'snoqualmie' ? ['silver-fir-express', 'pacific-crest'] : []);
   return { name: mountain.label, bounds: ground.bounds, heightAt: ground.heightAt,
-    landmarks, views, runs, lifts: mappedLifts, roads: config.roads ?? [],
+    landmarks, views, runs, lifts: mappedLifts, roads: config.roads ?? [], buildings: config.buildings ?? [],
     summerRoutes: config.summerRoutes ?? [], summerLifts: mappedLifts.filter(lift => summerLifts.includes(lift.id)), summerSource: summerHref,
     source: href ?? (pdf && root ? new URL(pdf, root).href : null) };
 }
@@ -152,6 +153,8 @@ export class ResortMap {
     this.addLandmarks(settings.landmarks ?? []);
     this.roads = (settings.roads ?? []).filter(road => road.points?.length > 1)
       .map(road => ({ path: linePath(road.points), bounds: extent(road.points, 1) }));
+    this.buildings = (settings.buildings ?? []).filter(building => building.points?.length > 2)
+      .map(building => ({ path: linePath(building.points, true), bounds: extent(building.points, 1) }));
     $('map-resort-name').textContent = settings.name;
     this.configureLayers(false);
     if (route) route.change = () => {
@@ -330,7 +333,10 @@ export class ResortMap {
 
   localPointer(event) {
     const rect = this.canvas.getBoundingClientRect();
-    return { x: event.clientX - rect.left, z: event.clientY - rect.top };
+    return {
+      x: (event.clientX - rect.left) * this.viewport.clientWidth / Math.max(1, rect.width),
+      z: (event.clientY - rect.top) * this.viewport.clientHeight / Math.max(1, rect.height),
+    };
   }
 
   update(player) {
@@ -386,9 +392,6 @@ export class ResortMap {
   hit(p, tolerance = 9) {
     const t = this.transform();
     if (!t) return null;
-    for (const label of this.labels ?? []) {
-      if (p.x >= label.minX && p.x <= label.maxX && p.z >= label.minZ && p.z <= label.maxZ) return label.feature;
-    }
     const x = (p.x - t.x) / t.scale, z = (p.z - t.z) / t.scale;
     const radius = tolerance / t.scale;
     const bounds = { minX: x - radius, minZ: z - radius, maxX: x + radius, maxZ: z + radius };
@@ -396,6 +399,10 @@ export class ResortMap {
     for (const feature of this.landmarks) {
       const d = Math.hypot(feature.x - x, feature.z - z);
       if (d < closest) { best = feature; closest = d; }
+    }
+    if (best && closest * t.scale < tolerance * .65) return best;
+    for (const label of this.labels ?? []) {
+      if (p.x >= label.minX && p.x <= label.maxX && p.z >= label.minZ && p.z <= label.maxZ) return label.feature;
     }
     if (best) return best;
     for (const feature of this.lines) {
@@ -477,7 +484,7 @@ export class ResortMap {
 
   drawBase(t, dpr) {
     this.base ??= document.createElement('canvas');
-    const values = [t.width, t.height, t.scale, t.x, t.z, dpr];
+    const values = [t.width, t.height, t.scale, t.x, t.z, dpr, this.player?.pos.x, this.player?.pos.z];
     if (values.every((value, i) => value === this.baseValues?.[i])) return;
     this.baseValues = values;
     this.base.width = this.canvas.width;
@@ -493,6 +500,15 @@ export class ResortMap {
     ctx.lineWidth = 1.3 / t.scale;
     if (t.scale > .20) for (const road of this.roads) {
       if (intersects(road.bounds, t.visible)) ctx.stroke(road.path);
+    }
+    if (t.scale > .23) {
+      ctx.fillStyle = '#a5aba4';
+      ctx.strokeStyle = '#586f715e';
+      ctx.lineWidth = .8 / t.scale;
+      for (const building of this.buildings) if (intersects(building.bounds, t.visible)) {
+        ctx.fill(building.path);
+        ctx.stroke(building.path);
+      }
     }
     for (const style of Object.keys(STYLES)) {
       const palette = STYLES[style];
@@ -536,6 +552,8 @@ export class ResortMap {
 
   paintLabels(ctx, t) {
     this.labels = [];
+    const overview = this.settings.curatedOverview && this.view.id === 'all' && this.zoom < 1.45;
+    const landmarkLabels = overview ? this.landmarks.filter(feature => feature.overview) : this.landmarks;
     const typed = this.lines.filter(feature => feature.named && intersects(feature.bounds, t.visible)
       && feature.length * t.scale > (feature.kind === 'lift' ? 55 : 93))
       .sort((a, b) => (b.kind === 'lift') - (a.kind === 'lift') || b.length - a.length);
@@ -545,7 +563,9 @@ export class ResortMap {
       const { x, z } = this.position(t, feature);
       this.dot(ctx, x, z, feature.style, false);
     }
-    for (const feature of [...this.landmarks, ...typed]) {
+    const limit = overview ? Math.floor(t.width / 83) + 6 : Infinity;
+    for (const feature of [...landmarkLabels, ...typed]) {
+      if (this.labels.length >= limit) break;
       if (seen.has(feature.name)) continue;
       const position = this.labelAnchor(feature, t);
       if (!position) continue;
@@ -572,10 +592,20 @@ export class ResortMap {
     ctx.font = `600 ${feature.kind === 'landmark' ? 14 : 13}px "Barlow", sans-serif`;
     const icon = feature.badge.symbol === 'double' ? 16 : feature.badge.symbol ? 12 : 0;
     const width = ctx.measureText(feature.name).width + icon;
-    if (vivid) { x = clamp(x, 15, t.width - width - 12); z = clamp(z, 20, t.height - 18); }
+    const player = this.player && this.position(t, this.player.pos);
+    const playerBox = player && { minX: player.x - 17, maxX: player.x + 17, minZ: player.z - 17, maxZ: player.z + 17 };
+    if (vivid) {
+      x = clamp(x, 15, t.width - width - 12);
+      z = clamp(z, 20, t.height - 18);
+      if (x + width > t.width - 45 && z < 64) z = 70;
+      if (playerBox && x < playerBox.maxX && x + width > playerBox.minX && Math.abs(z - player.z) < 26) {
+        z = player.z >= 47 ? player.z - 27 : player.z + 27;
+      }
+    }
     const rect = { minX: x - 4, maxX: x + width + 4, minZ: z - 9, maxZ: z + 9, feature };
     if (!vivid && (rect.minX < 8 || rect.maxX > t.width - 18 || rect.minZ < 14 || rect.maxZ > t.height - 33 ||
       (rect.maxX > t.width - 42 && rect.minZ < 60) ||
+      (playerBox && intersects(playerBox, rect)) ||
       this.labels.some(existing => intersects(existing, rect)))) return null;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';

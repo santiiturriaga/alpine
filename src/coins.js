@@ -38,6 +38,7 @@ export class Collectibles {
     this.stashes=pack?.crystals??CRYSTALS;
     this.coinStep=Math.max(1,Math.round(pack?.coinStep??26));
     this.finishes=pack?.finishes??(pack?[]:FINISHES);
+    this.forestCoins = pack?.forestCoins ?? [];
     this.heightAt=pack?.heightAt??heightAt;
     this.rand = mulberry32(442291);
     this.coins = [];
@@ -97,6 +98,11 @@ export class Collectibles {
       }
     }
 
+    for (const { x, z, y, run, air } of this.forestCoins) {
+      const groundY = this.heightAt(x, z);
+      this.coins.push({ x, y: y ?? groundY + 1.02, z, groundY, run, air: !!air,
+        hidden: true, collected: false, phase: rand() * Math.PI * 2, value: 15 });
+    }
     this.totalCoins = this.coins.length;
   }
 

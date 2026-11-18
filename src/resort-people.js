@@ -165,6 +165,8 @@ export function buildResortPeople(scene,{grid,interiors,lifts,queueSlots=[],soci
   // Leave a clear path from the Village Gondola unload to the lodge.
   for(const [x,z,n] of [[466,4842,3],[481,4842,3],[493,4849,3],[507,4858,4],[537,4868,3],[455,4855,3],
     [485.5,4864,3],[491,4877,3],[447,4842,2],[505,4876,3],[468,4873,3]])socialGroup(x,z,n);
+  for(const [x,z,n] of [[459.3,4838.1,3],[467.2,4844.2,4],[472.5,4846.4,3],
+    [488.8,4842,3],[495.5,4837.7,3],[504,4846.2,4],[520,4848.6,3]])socialGroup(x,z,n);
   for(const [x,z] of [[8,-24],[-13,-28],[25,-16],[-24,-5],[31,17],[-8,24],
     [MOUNTAIN.rendezvous.x-22,MOUNTAIN.rendezvous.z+19],[MOUNTAIN.rendezvous.x+23,MOUNTAIN.rendezvous.z+18]])socialGroup(x,z,3);
   // Authored lodge slots already avoid chairs, railings and the door aisle.

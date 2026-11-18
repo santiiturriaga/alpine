@@ -20,14 +20,27 @@ function bedHeight(u,w) {
   return site.y + w*.14 + .08*Math.sin(w*.36) - .33*channel + banks;
 }
 
+const entranceGrade = (u,w) => smoothstep(-6.6,-.55,w)
+  * (1 - smoothstep(.72,1.025,Math.abs(u-centerAt(w)) / widthAt(w)));
+
 // Grade the terrain and collision surface together, leaving the original raster at
 // the edges of the interpretive ice lobe and below the downhill approach.
 export function gradeGlacierCave(x,z,ground) {
   const u=x-site.x, w=z-site.z;
-  if (Math.abs(u)>33 || w < -28 || w > 65) return ground;
+  if (Math.abs(u)>39 || w < -28 || w > 79) return ground;
   const axial = smoothstep(-28,-8,w) * (1 - smoothstep(47,64,w));
   const lateral = 1 - smoothstep(11,27,Math.abs(u-centerAt(w)));
-  return lerp(ground,bedHeight(u,w)-.46,axial*lateral);
+  const fromWall = Math.abs(u - centerAt(w)) - widthAt(w);
+  const tail = 1 - smoothstep(55,78,w);
+  const shoulder = smoothstep(.70,4.6,fromWall) * (1 - smoothstep(8.3,21.5,fromWall))
+    * smoothstep(-7,8,w) * tail;
+  const back = smoothstep(43,53,w) * tail * (1 - smoothstep(9,26,Math.abs(u-centerAt(w))));
+  const debris = .48 + .52 * noise2.fbm(u*.21,w*.15,3);
+  const bed = bedHeight(u,w);
+  const approach = entranceGrade(u,w) * (1 - smoothstep(-.36,.22,w));
+  return lerp(lerp(ground,bed-.46,axial*lateral),bed+.057,approach)
+    + shoulder * (1.6 + 2.1 * debris + .8 * Math.sin(w*.12)**2)
+    + back * (1.5 + 2.3 * debris);
 }
 
 function positionAt(u,y,w) { return [site.x+u,y,site.z+w]; }
@@ -87,7 +100,7 @@ function caveMaterial(kind,time) {
     color:0xffffff,side:THREE.DoubleSide,transparent:water,opacity:water?.80:1,depthWrite:!water,
     envMapIntensity:water?.9:kind==='interior'?.39:.38,
   });
-  m.name = {interior:'Stratified glacial ice',outside:'Snow over blue glacial ice',floor:'Moraine gravel and ice',water:'Flowing glacial meltwater',stone:'Wet stone and glacial till'}[kind];
+  m.name = {interior:'Stratified glacial ice',outside:'Snow over blue glacial ice',floor:'Moraine gravel and ice',water:'Flowing glacial meltwater',stone:'Wet stone and glacial till',moraine:'Glacial moraine and frost'}[kind];
   m.onBeforeCompile = (shader) => {
     shader.uniforms.iceSnow=climateUniforms.snowpack;
     shader.uniforms.iceMelt=climateUniforms.wetness;
@@ -107,12 +120,22 @@ function caveMaterial(kind,time) {
         float up = abs(dot(normalize(vNormal),mat3(viewMatrix)*vec3(0,1,0)));
         float strata=iceNoise(vec3(p.x*.30,(p.y+.022*p.x*p.x)*5.1,p.z*.44));
         float cornice=iceNoise(p*.68);
-        float granules=iceNoise(p*20.);
+        float grainCoverage=1.-smoothstep(.33,1.3,length(fwidth(p*20.)));
+        float granules=mix(.5,iceNoise(p*20.),grainCoverage);
         float snow=smoothstep(.13,.65,up+.53*iceSnow+cornice*.30-.44);
         vec3 blue=mix(vec3(.025,.13,.19),vec3(.22,.54,.66),.61*strata+.39*cornice);
-        float layer=cos((p.y + .32*sin(p.x*.42) + .16*cos(p.z*.82))*26. + .86*strata);
-        vec3 rime=mix(vec3(.49,.65,.75),vec3(.89,.94,.98),.27*strata+.33*granules+.20*cornice+.20*layer);
+        float iceBand = (p.y + .32*sin(p.x*.42) + .16*cos(p.z*.82))*10.5 + 1.8*strata;
+        float layer=.5+.5*cos(iceBand)*(1.-smoothstep(.5,2.3,fwidth(iceBand)));
+        vec3 rime=mix(vec3(.50,.65,.75),vec3(.90,.94,.98),.25*strata+.18*granules+.49*cornice+.08*layer);
         diffuseColor.rgb=mix(blue,rime,snow);`,
+      moraine: /* glsl */ `
+        vec3 p=glacierPoint;
+        float grit = iceNoise(p * vec3(3.1,2.0,3.8));
+        float bands = iceNoise(vec3(p.x*.53,(p.y+.19*p.z)*2.5,p.z*.40));
+        float top = clamp(dot(normalize(vNormal),mat3(viewMatrix)*vec3(0,1,0)),0.,1.);
+        float drift = smoothstep(.35,.91,top*.71+iceNoise(.97*p)*.36)*iceSnow;
+        vec3 schist = mix(vec3(.16,.166,.157),vec3(.32,.329,.31),.58*bands+.42*grit);
+        diffuseColor.rgb *= mix(schist,vec3(.69,.77,.82),drift);`,
       interior: /* glsl */ `
         vec3 p=glacierPoint;
         vec3 flow=vec3(p.x*.52+p.z*.15,(p.y+.015*p.x*p.x+.35*sin(p.z*.39))*3.6,p.z*.48);
@@ -264,19 +287,19 @@ export function buildGlacierCave(scene,grid,ground) {
     const [x,,z]=positionAt(span,0,lerp(lip,w,smoothstep(.025,.16,a)));
     const tuck=ground(x,z)-.69;
     const exterior=lerp(lerp(face,rest,smoothstep(.10,.38,a)),tuck,smoothstep(.61,.99,a));
-    const sideTuck=(1-smoothstep(.01,.16,Math.sin(theta)))*smoothstep(.04,.18,a);
+    const sideTuck=(1-smoothstep(.11,.49,Math.sin(theta)))*smoothstep(.025,.15,a);
     return [x,lerp(exterior,tuck,sideTuck),z];
   }),caveMaterial('outside',time));
   apron.castShadow=true;
 
   const floorAt=(x,z)=>bedHeight(x-site.x,z-site.z)+.015;
   mesh('Sediment banks and meltwater channel bed',surface(98,49,(a,b)=>{
-    const w=lerp(-5.0,end,a), u=centerAt(w)+(b*2-1)*(widthAt(w)+.18);
+    const w=lerp(-5.8,end,a), edge=1-Math.abs(2*b-1);
+    const width=widthAt(w)*lerp(.65,1.002,smoothstep(-5.8,1.1,w));
+    const u=centerAt(w)+(b*2-1)*width;
     const [x,,z]=positionAt(u,0,w);
-    const edge=(1-smoothstep(.79,1,Math.abs(2*b-1)));
-    const advance=smoothstep(-5.1,-.75,w+edge*1.4);
-    const merge=lerp(advance*(.60+.40*edge),advance,smoothstep(-.5,2.6,w));
-    const y=lerp(ground(x,z)-.16,floorAt(x,z),merge);
+    const feather=smoothstep(0,.18,edge) * smoothstep(-1.5,1.8,w+1.1*Math.sin(b*13.01));
+    const y=lerp(ground(x,z)-.20,floorAt(x,z),feather);
     return [x,y,z];
   }),caveMaterial('floor',time));
   mesh('Ice and silt back wall',surface(9,40,(a,b)=>{
@@ -286,7 +309,7 @@ export function buildGlacierCave(scene,grid,ground) {
   }),caveMaterial('interior',time));
 
   const water=mesh('Flowing meltwater',surface(121,12,(a,b)=>{
-    const w=lerp(-1.4,37.1,a), u=streamAt(w)+(b*2-1)*streamWidth(w)*.84;
+    const w=lerp(-.14,37.1,a), u=streamAt(w)+(b*2-1)*streamWidth(w)*.84*smoothstep(-.14,.95,w);
     const y=site.y+w*.14+.08*Math.sin(w*.36)-.19;
     return positionAt(u,y,w);
   }),caveMaterial('water',time));
@@ -340,6 +363,25 @@ export function buildGlacierCave(scene,grid,ground) {
   }
   stones.name='Broken schist and glacial till on the banks';
   cave.add(stones);
+  const moraine = new THREE.InstancedMesh(stoneGeo,caveMaterial('moraine',time),71);
+  const rubble = mulberry32(911071);
+  for(let i=0;i<moraine.count;i++) {
+    const behind = i >= 49;
+    const w = behind ? lerp(42.0,69.2,rubble()) : lerp(-3.8,56.5,rubble());
+    const side = i % 2 === 0 ? 1 : -1;
+    const u = centerAt(w) + side * (behind ? lerp(1.9,18.6,rubble()) : widthAt(w)+lerp(3.2,17.8,rubble()));
+    const radius = lerp(.18,1.74,rubble()**2.7);
+    const x = site.x+u, z = site.z+w, y = ground(x,z);
+    obj.position.set(x,y-radius*.18,z);
+    obj.rotation.set(rubble()*.58,rubble()*Math.PI*2,rubble()*.42);
+    obj.scale.set(radius*lerp(.86,1.55,rubble()),radius*lerp(.38,.87,rubble()),radius);
+    obj.updateMatrix();
+    moraine.setMatrixAt(i,obj.matrix);
+    if(radius>1.22)grid.addCircle(x,z,radius*.74,'rock',{minY:y-.3,maxY:y+radius*.67});
+  }
+  moraine.name='Moraine rubble seated into the glacial shoulders';
+  moraine.receiveShadow=true;
+  cave.add(moraine);
   for(let i=0;i<clasts.count;i++) {
     const w=lerp(2,31,rng()), side=i%2===0?1:-1;
     const u=centerAt(w)+side*widthAt(w)*lerp(.76,.97,rng());

@@ -4,8 +4,7 @@ const RAMP = [
   [2050, [239, 243, 242]], [2650, [250, 250, 247]],
 ];
 
-function terrainColor(height, dx, dz, water) {
-  if (water) return '#9fcad5';
+function terrainColor(height, dx, dz) {
   let i = 1;
   while (i < RAMP.length - 1 && height > RAMP[i][0]) i++;
   const [lo, a] = RAMP[i - 1], [hi, b] = RAMP[i];
@@ -33,7 +32,7 @@ function outline(contours, a, b, c) {
   }
 }
 
-export function createMapRelief({ bounds, heightAt, waterAt }) {
+export function createMapRelief({ bounds, heightAt, lakes = [] }) {
   const { minX, maxX, minZ, maxZ } = bounds;
   const stride = Math.max(24, Math.max(maxX - minX, maxZ - minZ) / 205);
   const cols = Math.ceil((maxX - minX) / stride), rows = Math.ceil((maxZ - minZ) / stride);
@@ -45,28 +44,36 @@ export function createMapRelief({ bounds, heightAt, waterAt }) {
     }));
   const fills = new Map();
   const contours = { minor: new Path2D(), major: new Path2D() };
-  function triangle(a, b, c, dx, dz, water) {
-    const color = terrainColor((a.y + b.y + c.y) / 3, dx, dz, water);
+  function triangle(a, b, c, dx, dz) {
+    const color = terrainColor((a.y + b.y + c.y) / 3, dx, dz);
     if (!fills.has(color)) fills.set(color, new Path2D());
     const path = fills.get(color);
     path.moveTo(a.x, a.z);
     path.lineTo(b.x, b.z);
     path.lineTo(c.x, c.z);
     path.closePath();
-    if (!water) outline(contours, a, b, c);
+    outline(contours, a, b, c);
   }
   for (let col = 0; col < cols; col++) for (let row = 0; row < rows; row++) {
     const a = nodes[col][row], b = nodes[col + 1][row], c = nodes[col][row + 1], d = nodes[col + 1][row + 1];
-    const water = waterAt?.((a.x + d.x) / 2, (a.z + d.z) / 2);
-    triangle(a, b, c, (b.y - a.y) / width, (c.y - a.y) / depth, water);
-    triangle(d, c, b, (d.y - c.y) / width, (d.y - b.y) / depth, water);
+    triangle(a, b, c, (b.y - a.y) / width, (c.y - a.y) / depth);
+    triangle(d, c, b, (d.y - c.y) / width, (d.y - b.y) / depth);
   }
-  return { bounds, fills, contours };
+  const water = lakes.map(({ ring, holes }) => {
+    const path = new Path2D();
+    for (const [first, ...coast] of [ring, ...holes]) {
+      path.moveTo(...first);
+      for (const point of coast) path.lineTo(...point);
+      path.closePath();
+    }
+    return path;
+  });
+  return { bounds, fills, contours, water };
 }
 
 export function drawMapRelief(ctx, relief, transform) {
   const { width, height, scale, x, z } = transform;
-  const { bounds, fills, contours } = relief;
+  const { bounds, fills, contours, water } = relief;
   ctx.fillStyle = PAPER;
   ctx.fillRect(0, 0, width, height);
   ctx.save();
@@ -83,6 +90,12 @@ export function drawMapRelief(ctx, relief, transform) {
   if (scale >= .09) ctx.stroke(contours.minor);
   ctx.lineWidth = .8 / scale;
   ctx.stroke(contours.major);
+  ctx.fillStyle = '#9fcad5';
+  ctx.strokeStyle = '#85b5c1';
+  for (const lake of water) {
+    ctx.fill(lake, 'evenodd');
+    ctx.stroke(lake);
+  }
   ctx.strokeStyle = '#a5bec2';
   ctx.lineWidth = 1 / scale;
   ctx.strokeRect(bounds.minX, bounds.minZ, bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ);

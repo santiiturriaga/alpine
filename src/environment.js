@@ -7,7 +7,7 @@ import {
   WORLD, RUNS, LIFTS, LODGES, FINISHES, MOUNTAIN, FITZSIMMONS, PEAK_TO_PEAK, VILLAGE_GONDOLA_UPPER, PEAK_EXPRESS, HARMONY_EXPRESS,
   runPointAt, runFromSource, startPose,
 } from './worlddata.js';
-import { heightAt, normalAt, slopeAt, pisteAt, landCoverAt } from './terrain.js';
+import { heightAt, normalAt, slopeAt, pisteAt, landCoverAt, treeAnchorHeightAt } from './terrain.js';
 import { createFlag } from './effects.js';
 import { surfaceMaterial } from './materials.js';
 import { coniferGeometry, coniferMaterial } from './conifers.js';
@@ -26,7 +26,7 @@ import { buildingData } from '../data/osm-whistler.js';
 import { buildLodgeInteriors, buildBlackcombTerminal, ENTERABLE_VILLAGE_IDS, lodgeSocialSlots } from './lodge-interiors.js';
 import { buildMappedTerminal, buildStationOperations, REPLACED_STATION_BUILDING_IDS } from './lift-stations.js';
 import { makeGondolaShell, addGondolaShell, attachCreeksideReflection, gondolaFleetGeometry,
-  gondolaDoorsAtDistance, PEAK_TO_PEAK_BERTH_TIME, peakToPeakBerthOpening } from './gondola-shell.js';
+  gondolaDoorsAtDistance } from './gondola-shell.js';
 import { ropeOffset, stationPoint, stationSite } from './station-sites.js';
 import { buildAlpineCliffs } from './alpine-cliffs.js';
 import { buildGlacierCave } from './glacier-cave.js';
@@ -204,6 +204,18 @@ function buildForest(scene, grid, rand) {
   const distantTemplates = variants.map((kind, i) => geometry(kind, i, -1));
   const silhouetteTemplate = geometry('hemlock',2,-2);
   const silhouetteMaterial = coniferMaterial(-2, 'mapped');
+  const shadowMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+  shadowMaterial.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+      float innerCrown = step(.970,uv.x)*(1.0-step(.988,uv.x));
+      vec3 base = (modelMatrix * instanceMatrix * vec4(0.,0.,0.,1.)).xyz;
+      float windPhase = base.x*.037 + base.z*.021;
+      transformed.xz *= 1.0 + innerCrown*.14*sin(position.y*26.0+windPhase);
+      float crownDistance = length(vec3(cameraPosition.xz-base.xz,
+        max(0.0,max(base.y-cameraPosition.y,cameraPosition.y-base.y-length(instanceMatrix[1].xyz)))));
+      transformed.xz *= mix(1.0,.70+.30*smoothstep(95.0,220.0,crownDistance),innerCrown);`);
+  };
+  shadowMaterial.customProgramCacheKey = () => 'whistler-conifer-depth';
   const setTree = (mesh, index, tree) => {
     dummy.position.set(tree.x, tree.y - 0.1, tree.z);
     dummy.scale.set(tree.apex * tree.stretch, tree.apex, tree.apex * tree.stretch);
@@ -241,7 +253,7 @@ function buildForest(scene, grid, rand) {
     const kind = family + (Math.sin(x * .051 + z * .023 + family * 2) > .1 ? species.length : 0);
     const cell = `${Math.floor(x / 420)},${Math.floor(z / 420)},${kind}`;
     if (!buckets.has(cell)) buckets.set(cell, { kind, trees: [] });
-    const tree = { x, y, z, apex, yaw, stretch, kind };
+    const tree = { x, y: treeAnchorHeightAt(x,z), z, apex, yaw, stretch, kind };
     buckets.get(cell).trees.push(tree);
     grid.addCircle(x, z, Math.min(.88, apex * .021), 'tree', { tree });
     count++;
@@ -299,6 +311,7 @@ function buildForest(scene, grid, rand) {
   const patchSizes = variants.map(() => []), stands = new Map();
   for (const [key,{ kind, trees }] of buckets) {
     const mesh = new THREE.InstancedMesh(distantTemplates[kind], needleMaterial, trees.length);
+    mesh.customDepthMaterial = shadowMaterial;
     for (const [i, tree] of trees.entries()) {
       setTree(mesh, i, tree);
       tree.batch = mesh;
@@ -1345,13 +1358,11 @@ function buildLifts(scene, grid) {
         doorOpen.needsUpdate=true;
         continue;
       }
-      const berth=doorOpen?PEAK_TO_PEAK_BERTH_TIME:0;
       for (let direction = 0; direction < 2; direction++) {
         const sampler = samplers[direction];
-        const travel=sampler.total/lift.def.speed,period=travel+berth*2;
+        const travel=sampler.total/lift.def.speed;
         for (let i = 0; i < perSide; i++) {
-          const phase = ((i / perSide + clock / period) % 1)*period;
-          const progress=clamp((phase-berth)/travel,0,1);
+          const progress=(i / perSide + clock / travel) % 1;
           const t = direction ? 1 - progress : progress;
           const overlap = occupied?.lift === lift && occupied.direction === direction
             && Math.abs(t - occupied.t) * sampler.total < 8;
@@ -1362,14 +1373,9 @@ function buildLifts(scene, grid) {
           dummy.updateMatrix();
           const index=direction*perSide+i;
           carriers.setMatrixAt(index,dummy.matrix);
-          if(doorOpen){
-            const opening=phase<berth?peakToPeakBerthOpening(phase,true):peakToPeakBerthOpening(phase-berth-travel,false);
-            doorOpen.setX(index,opening);
-          }
         }
       }
       carriers.instanceMatrix.needsUpdate = true;
-      if(doorOpen)doorOpen.needsUpdate=true;
     }
   }
 

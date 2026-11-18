@@ -1,3 +1,4 @@
+import { addPassGate } from './pass-gates.js';
 import * as THREE from 'three';
 import { beam, box, mergeParts, part } from './scenery.js';
 import { canvasTexture, makeCanvas } from './util.js';
@@ -471,7 +472,7 @@ export function buildLiftTerminal(group, lift, top, ground, colliders, sharedMid
       const q=frame.world(x,-2.30), y=ground.heightAt(q.x,q.z)-frame.y;
       parts.push(cylinder(.069,.92,paint,[x,y+.46,-2.30]));
       parts.push(box(.15,.124,.185,'#a94d38',[x,y+1,-2.30]));
-      parts.push(box(.132,.055,.013,'#a9d68f',[x,y+1,-2.408]));
+      addPassGate(root,x,y-.24,-2.30,x<gauge?.66:-.66,-1);
     }
   }
   const signX = top ? -gauge-1.15 : gauge+halfWidth+.83, signZ = top ? -3.65 : -9.0;

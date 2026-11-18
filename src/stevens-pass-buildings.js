@@ -4,7 +4,7 @@ import { makeTextTexture, mulberry32 } from './util.js';
 const profiles = {
   'granite-peaks-lodge': {
     walls: 0x65574a, trim: 0x594537, roof: 0x344347, eave: 7.25, pitch: .49,
-    title: 'GRANITE PEAKS LODGE', subtitle: 'T-BAR MARKET   •   BULL’S TOOTH', balcony: true, tickets: true,
+    title: 'GRANITE PEAKS LODGE', subtitle: 'T-BAR MARKET   •   BULL’S TOOTH', balcony: true, tickets: true, eaveOverhang: 1.45,
     front: [0, 1],
   },
   'tye-creek-lodge': {
@@ -13,7 +13,7 @@ const profiles = {
   },
   'pacific-crest-lodge': {
     walls: 0xb4ad97, trim: 0x463b33, roof: 0x433c31, eave: 7.3, pitch: .25,
-    title: 'PACIFIC CREST LODGE', subtitle: 'IRON GOAT PIZZERIA   •   FALL LINE SPORTS', awning: true,
+    title: 'PACIFIC CREST LODGE', subtitle: 'IRON GOAT PIZZERIA   •   FALL LINE SPORTS', awning: true, steps: true,
   },
   'school': {
     walls: 0x785a42, trim: 0x4d4036, roof: 0x454b42, eave: 4.8, pitch: .40,
@@ -196,10 +196,11 @@ function windowBays(add, trim, glasses, { x, y, z, width, height, yaw, seed }) {
   add(trim, x + nx * .14, y - height * .5 - .07, z + nz * .14, width + .24, .12, .28, yaw);
 }
 
-function facadeSign(group, x, y, z, yaw, width, profile, dark) {
+function facadeSign(group, x, y, z, yaw, width, profile, dark, palette) {
   const material = new THREE.MeshStandardMaterial({
     map: makeTextTexture(profile.title, { sub: profile.subtitle, bg: dark ? '#433129' : '#322c2b',
-      fg: '#fcf0d7', accent: '#f4a74e', width: 1024, height: 200, font: '800 64px "Barlow Condensed", Arial, sans-serif' }),
+      fg: '#fcf0d7', accent: '#f4a74e', width: 1024, height: 200,
+      font: '800 64px "Barlow Condensed", Arial, sans-serif', ...palette }),
     roughness: .83,
   });
   const sign = new THREE.Mesh(new THREE.PlaneGeometry(width, width * .195), material);
@@ -220,6 +221,8 @@ export function buildMappedLodges(scene, config, ground, env) {
     new THREE.MeshStandardMaterial({ color, roughness: .36, metalness: .14,
       emissive: i > 2 ? 0xdf9e58 : 0x829eb0, emissiveIntensity: i > 2 ? .19 : .07 }));
   const orange = new THREE.MeshStandardMaterial({ color: 0xa8471e, roughness: .76 });
+  const navy = new THREE.MeshStandardMaterial({ color: 0x1c4d9c, roughness: .79, side: THREE.DoubleSide });
+  const white = new THREE.MeshStandardMaterial({ color: 0xc9c6b8, roughness: .79, side: THREE.DoubleSide });
   const rand = mulberry32(841675);
   const clock = config.id === 'stevens-pass' && config.landmarks?.find(landmark => landmark.id === 'clock-tower');
   for (const building of config.buildings ?? []) {
@@ -241,7 +244,7 @@ export function buildMappedLodges(scene, config, ground, env) {
     const base = cy + .08;
     const eave = base + (building.height ? Math.min(16, building.height * .76) : profile.eave);
     const pitch = Math.min(profile.pitch, 10.8 / basis.depth);
-    const riseAt = snowRoof(group, points, basis, eave, pitch, precise ? .78 : .34, roof, snow);
+    const riseAt = snowRoof(group, points, basis, eave, pitch, precise?.eaveOverhang ?? (precise ? .78 : .34), roof, snow);
     const foundation = [], siding = [];
     const centroid = points.reduce((p, [x, z]) => [p[0] + x / points.length, p[1] + z / points.length], [0, 0]);
     const plaza = clock?.point ?? [cx, cz - 14];
@@ -307,12 +310,42 @@ export function buildMappedLodges(scene, config, ground, env) {
       }
       if (!precise || !yard || length < 9) continue;
       const titleWidth = Math.min(11.5, length * .61);
-      const titleY = Math.min(eave + .3, base + (profile.balcony ? 6.42 : 3.45));
-      facadeSign(group, ...local(0, titleY, .29), yaw, titleWidth, profile, profile.awning);
+      const titleY = Math.min(eave + .3, base + (profile.balcony ? 6.42 : profile.steps ? 4.6 : 3.45));
+      facadeSign(group, ...local(0, titleY, .29), yaw, titleWidth, profile, profile.awning,
+        profile.steps ? { bg: '#d4cabc', fg: '#a23229', accent: '#7a6c5e' } : null);
       const patio = Math.min(18.6, length * .80);
       if (profile.awning) {
-        piece(orange, 0, base + 2.97, 1.1, patio, .34, 2.22);
-        piece(snow, 0, base + 3.17, 1.1, patio + .1, .17, 2.32);
+        piece(orange, 0, base + 6.73, 1.1, patio, .18, 2.22);
+        piece(snow, 0, base + 6.88, 1.1, patio + .1, .17, 2.32);
+      }
+      if (profile.steps) {
+        const [bx,,bz] = local(0,0,4.58), apronY = ground.heightAt(bx,bz);
+        const terraceY = Math.max(base + .11, localGround + .35, apronY + .89);
+        // The lodge apron has a central snow-clear stair, with the fenced
+        // private-lesson terrace to either side.
+        const range = Math.min(5.6,patio*.5), stepWidth = 2.3;
+        const topDepth = 2.61, outerDepth = 4.64;
+        piece(stone,0,terraceY-.19,1.23,patio,.42,2.76);
+        for (const side of [-1,1]) {
+          const center = side * ((range + stepWidth*.5) / 2), span = range-stepWidth*.5;
+          piece(stone, center, (terraceY+apronY-.14)*.5, 3.02, span, Math.max(.35,terraceY-apronY+.14), 1.34);
+          piece(snow, center, terraceY + .10, 3.02, span + .10, .27, 1.47);
+          for (let i=0;i<=5;i++) {
+            const u = side*(stepWidth*.5+span*i/5);
+            piece(navy,u,terraceY+.64,3.10,.054,1.2,.061);
+          }
+          for (const h of [.27,.58,.94]) piece(navy,center,terraceY+h,3.10,span,.066,.067);
+          for (let i=0;i<22;i++) {
+            const u = center+span*(i/21-.5);
+            piece(navy,u,terraceY+.55,3.10,.020,.68,.024,i % 2 ? -.17 : .17);
+          }
+        }
+        for(let i=0;i<6;i++) {
+          const f = (i+1)/6, depth = topDepth+(outerDepth-topDepth)*f;
+          const h = Math.max(.08,(terraceY - apronY)*(1-f)+.08);
+          piece(stone,0,apronY + h*.50,depth,stepWidth+.13,h,.52);
+          for(const side of [-1,1]) piece(iron,side*1.17,apronY+h+.48,depth,.043,.97,.043);
+        }
       }
       if (profile.balcony) {
         piece(trim, 0, base + 3.59, 1.65, patio, .28, 3.3);
@@ -320,16 +353,30 @@ export function buildMappedLodges(scene, config, ground, env) {
         piece(trim, 0, base + 4.83, 3.21, patio, .14, .16);
         piece(trim, 0, base + 4.03, 3.21, patio, .10, .08);
         for (let u = -patio * .5; u <= patio * .5; u += .34) piece(iron, u, base + 4.43, 3.21, .042, .85, .042);
-        for (let u = -patio * .47; u <= patio * .5; u += patio / 4) {
+        for (let u = -patio * .47; u <= patio * .5; u += patio / (profile.tickets ? 3 : 4)) {
           const [px, , pz] = local(u, 0, 2.98);
           const y = ground.heightAt(px, pz);
           const top = base + 3.63;
           if (y > top - .26) continue;
-          piece(profile.tickets ? stone : trim, u, (y + top) * .5, 2.98, profile.tickets ? .62 : .25, top - y, profile.tickets ? .64 : .29);
-          env.addCircle(px, pz, .18, 'building', { minY: y, maxY: top });
+          const width = profile.tickets ? .93 : .25;
+          piece(profile.tickets ? stone : trim, u, (y + top) * .5, 2.98, width, top - y, width+.03);
+          if (profile.tickets) {
+            piece(stone,u,y+.15,2.98,1.09,.36,1.11);
+            piece(white,u,top-.095,2.98,1.04,.21,1.04);
+          }
+          env.addCircle(px, pz, width*.5, 'building', { minY: y, maxY: top });
         }
-        if (profile.tickets) facadeSign(group, ...local(-patio * .26, base + 3.57, 3.32), yaw, Math.min(4.25, patio * .28),
-          { title: 'TICKETS', subtitle: 'STEVENS PASS' }, false);
+        if (profile.tickets) {
+          piece(white,0,base+3.55,3.38,patio+.10,.73,.29);
+          piece(orange,0,base+3.88,3.53,patio+.18,.087,.083);
+          facadeSign(group, ...local(0, base + 3.54, 3.561), yaw, Math.min(3.4, patio * .31),
+            { title: 'TICKETS', subtitle: '' }, false, { bg: '#c9c6b8', fg: '#a23229' });
+          for (const u of [-patio*.39,-patio*.16,patio*.07]) {
+            piece(iron,u,base+.63,3.28,patio*.19,.057,.075);
+            piece(iron,u,base+.085,3.28,patio*.19,.057,.075);
+            for(let i=0;i<8;i++) piece(iron,u+patio*.19*(i/7-.5),base+.35,3.28,.033,.57,.045);
+          }
+        }
       }
       // Ski racks immediately outside each lodge entrance.
       for (const u of [-patio * .44, patio * .44]) {

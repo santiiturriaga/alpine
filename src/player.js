@@ -87,6 +87,7 @@ export class Player {
     this.crashTimer = 0;
     this.crashReason = '';
     this.riding = false;
+    this.vehicleLabel = null;
     this.ollieCooldown = 0;
     this.snowSink = 0;
     this.landingLoad = 0;
@@ -197,6 +198,7 @@ export class Player {
     this.crashTimer = 0;
     this.crashReason = '';
     this.riding = false;
+    this.vehicleLabel = null;
     this.model.visible = true;
     this.rig.group.visible = this.cameraMode !== 2;
     this.camYaw = this.heading;
@@ -308,6 +310,7 @@ export class Player {
   setRiding(on) {
     this.clearBoost();
     this.riding = on;
+    if (!on) this.vehicleLabel = null;
     this.rig.group.visible = !on && this.cameraMode !== 2;
     if (on) {
       this.vel.set(0, 0, 0);
@@ -369,6 +372,7 @@ export class Player {
     if (_normal.x !== 0 || _normal.z !== 0) {
       this.heading = Math.atan2(_normal.x, _normal.z);
     }
+    this.switchStance = false;
     this.camYaw = this.heading;
     this.breakSnowContact();
     this.emit('recover', {});
@@ -396,6 +400,7 @@ export class Player {
       for (let i = 0; i < steps; i++) {
         if (this.footMode && this.grounded) this.simulateFoot(h, input);
         else this.simulate(h, input, time);
+        if (this.crash) break;
       }
     }
 
@@ -540,6 +545,11 @@ export class Player {
       if (this.crash) return;
 
       const gy = this.groundHeight(this.pos.x, this.pos.z);
+      if (this.env?.hitForestBump?.(this.beforeStep, this.pos, speed)) {
+        this.pos.y = gy + .035;
+        this.startCrash('mogul impact');
+        return;
+      }
       const predicted = prevY + this.vyGround * dt;
       const threshold = 0.26 + speed * 0.0042;
       if (gy < predicted - Math.max(1, threshold) && speed > 6.0) {
@@ -743,7 +753,8 @@ export class Player {
     const playerR = this.footMode ? .32 : .46;
 
     for (const c of cols) {
-      if (this.pos.y < (c.minY ?? -Infinity) || this.pos.y > (c.maxY ?? Infinity)) continue;
+      const y = c.type === 'fallen log' && !inAir ? gy + .035 : this.pos.y;
+      if (y < (c.minY ?? -Infinity) || y > (c.maxY ?? Infinity)) continue;
       if (c.r) {
         if (inAir && this.pos.y > gy + 7.5) continue;
         const dx = this.pos.x - c.x;
@@ -782,8 +793,8 @@ export class Player {
         const wz = nlx * sr + nlz * cr;
         this.pos.x = c.x + wx;
         this.pos.z = c.z + wz;
-        if (speed > 7.5) {
-          this.startCrash('building');
+        if (speed > 7.5 || (!this.footMode && c.type === 'fallen log' && speed > 4.5)) {
+          this.startCrash(c.type === 'fallen log' ? c.type : 'building');
           return;
         }
         this.vel.multiplyScalar(0.35);

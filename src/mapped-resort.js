@@ -1,9 +1,12 @@
+import { updatePassGates } from './pass-gates.js';
+import { setForestQuality } from './forest-lod.js';
 import { createMultiplayer } from './multiplayer.js';
 import { graphicsProfiles as qualities, graphicsIndex, bindGraphics, applyShadowResolution } from './graphics.js';
 import * as THREE from 'three';
 import { AudioEngine } from './audio.js';
 import { createClimate, CLIMATE_PRESETS } from './climate.js';
 import { Collectibles } from './coins.js';
+import { buildForestLines } from './forest-lines.js';
 import {
   createLighting, createSky, createWinterEnvironment, ParticleFX, SkiContact, SkiTracks,
   Snowstorm, SUN_DIR, TuckWind,
@@ -209,7 +212,7 @@ function installTouchButtons({ keys, queueJump, cycleCamera, openMountain, pause
   `;
   document.head.append(style);
   for (const [group, buttons] of [
-    ['move', [['Left', 'KeyA'], ['Go', 'KeyW'], ['Brake', 'KeyS'], ['Right', 'KeyD'], ['Jump', queueJump]]],
+    ['move', [['Left', 'KeyA'], ['Go', 'KeyW'], ['Brake', 'KeyS'], ['Right', 'KeyD'], ['Jump', 'Space']]],
     ['actions', [['View', cycleCamera], ['Mountain', openMountain], ['Pause', pause]]],
   ]) {
     const cluster = document.createElement('div');
@@ -224,6 +227,7 @@ function installTouchButtons({ keys, queueJump, cycleCamera, openMountain, pause
           event.preventDefault();
           button.setPointerCapture(event.pointerId);
           keys[action] = true;
+          if (action === 'Space') queueJump();
         });
         button.addEventListener('lostpointercapture', () => { keys[action] = false; });
       }
@@ -273,11 +277,14 @@ export async function startMappedResort(mountain) {
   ui.setLoading(.34, 'Building the mountain and forest…');
   await paint();
   const world = await buildMappedResortWorld(scene, config, new URL('./', dataUrl));
-  const { ground, env } = world;
+  const { ground: baseGround, env } = world;
   ui.setLoading(.72, 'Stringing the lifts…');
   await paint();
-  const liftSystem = buildMappedResortLifts(scene, config, ground);
+  const liftSystem = buildMappedResortLifts(scene, config, baseGround);
   registerLiftColliders(env, liftSystem);
+  const forestLines = buildForestLines(world.root, baseGround, env, runs);
+  env.forestLines = forestLines;
+  const { ground } = forestLines;
   const people = buildMappedResortPeople(world.root, { config, world, liftSystem });
   env.people = people;
   const lifts = liftSystem.lifts;
@@ -307,7 +314,7 @@ export async function startMappedResort(mountain) {
   let trickScore = 0;
   const crystalSpecs = crystalLocations(mountain.id, runs, ground, env);
   const collectibles = new Collectibles(scene, fx, {
-    runs, crystals: crystalSpecs, heightAt: (x, z) => ground.heightAt(x, z), coinStep: 10,
+    runs, crystals: crystalSpecs, heightAt: ground.heightAt, coinStep: 10, forestCoins: forestLines.coins,
   });
   ui.collectibles = collectibles;
   const findList = outfitter.dialog.querySelector('[data-finds]');
@@ -419,8 +426,10 @@ export async function startMappedResort(mountain) {
       ['clock-tower', 'Basecamp · Clock Tower', 169.4, -20.6, 2.12],
       ['west-parking', 'West Parking · Lift View', -152, -39, 1.18],
       ['gemini-traverse', 'Gemini · Transmission Crossing', 704.1, 1835.1, 1.58],
+      ['mill-valley-pylon', 'Mill Valley · Transmission Tower', 961.5, 1748.0, 2.62],
     ]) {
-      arrivals.set(id, { pose: { x, z, heading, holdAtUnload: true }, name, footMode: id !== 'gemini-traverse' });
+      arrivals.set(id, { pose: { x, z, heading, holdAtUnload: true }, name,
+        footMode: id === 'clock-tower' || id === 'west-parking' });
       quickChoices.push({ id, label: name });
     }
   }
@@ -457,6 +466,7 @@ export async function startMappedResort(mountain) {
   function applyQuality() {
     const quality = qualities[qualityIndex];
     applyShadowResolution(renderer, lighting.sun, quality.shadow);
+    setForestQuality(quality.name);
     world.setQuality?.(quality.name);
     resize();
   }
@@ -491,7 +501,10 @@ export async function startMappedResort(mountain) {
   function openPanel(name) {
     panelReturn = modal() ?? null;
     showModal(name);
-    if (name === 'map') ui.drawBigMap(playing ? player : null, simTime);
+    if (name === 'map') {
+      ui.resortMap.setSeason(climate.state.season);
+      ui.drawBigMap(playing ? player : null, simTime);
+    }
   }
 
   function closePanel() {
@@ -723,6 +736,11 @@ export async function startMappedResort(mountain) {
   function draw(now) {
     const raw = Math.max(0, (now - lastFrame) / 1000);
     if (document.hidden) return;
+    if (ui.isOpen('map')) {
+      if(playing)multiplayer.update(0,trickScore,outfitter.state.outfit,expeditions.active?.model,false);
+      lastFrame = now;
+      return;
+    }
     const frozen = paused();
     if (frozen && wasPaused && raw < .055) return;
     wasPaused = frozen;
@@ -745,14 +763,17 @@ export async function startMappedResort(mountain) {
       fx.update(dt);
       storm.update(dt);
     }
-    if (playing) multiplayer.update(dt,trickScore,outfitter.state.outfit);
+    updatePassGates(frozen?0:dt,playing&&!frozen?player:null,camera,()=>audio.tone(910,{dur:.065,gain:.025,type:'sine'}));
+    if (playing) multiplayer.update(dt,trickScore,outfitter.state.outfit,expeditions.active?.model,!frozen);
     const ride = liftSystem.active;
-    if (playing && (!frozen || ride)) ui.routeGuide.update(player, { riding: !!ride });
     const vehicle = expeditions.active?.id;
+    ui.resortMap.setSeason(climate.state.season);
+    if (playing && (!frozen || ride)) ui.routeGuide.update(player, { riding: !!ride, hidden: !!vehicle && vehicle !== 'bike' });
     const skiing = playing && !ride && !vehicle && !player.footMode && player.grounded && !player.crash;
     world.update(dt, camera);
     people.update(frozen ? 0 : dt, simTime, camera, playing && !ride ? player : null);
     climate.update(dt, camera);
+    forestLines.update();
     sky.update(dt, camera);
     contact.update(player, playing && !ride && !vehicle);
     tracks.update(simTime, player, skiing);

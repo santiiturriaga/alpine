@@ -152,7 +152,8 @@ export function surfaceAt(x, z, out = {}) {
   const pack = climateUniforms.snowpack.value;
   const alpine = pack < .80 ? smoothstep(-145,115,heightAt(x,z)-climateUniforms.snowline.value) : 1;
   const groomed = smoothstep(.21,.63,channel(0));
-  const cover = Math.max(.90*groomed,smoothstep(.25,.79,Math.max(pack,alpine)));
+  const piste = .90*groomed*smoothstep(.02,.35,pack);
+  const cover = Math.max(piste,smoothstep(.25,.79,Math.max(pack,alpine)));
   if (cover < .28) {
     out.id='ground';out.grip=1;out.drag=3;out.powder=0;
     return out;
@@ -686,7 +687,7 @@ function boxBlurHeights(src, radius, iterations = 2) {
 
 export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Promise.resolve()) {
   initWorldData();
-  onProgress(0.08, 'Sounding the snowpackâ€¦');
+  onProgress(0.08, 'Sounding the snowpack…');
   await yieldFrame();
 
   const N = WORLD.grid;
@@ -705,7 +706,7 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
   gradedHeights = heights.map((elevation, i) =>
     gradeStation(WORLD.minX + i % N * cell, WORLD.minZ + Math.floor(i / N) * dz, elevation));
 
-  onProgress(0.2, 'Tracing mapped ski runsâ€¦');
+  onProgress(0.2, 'Tracing mapped ski runs…');
   await yieldFrame();
   const m = buildMask(1536);
   mask = m.mask;
@@ -728,7 +729,7 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
   const blurred = boxBlurHeights(gradedHeights.slice(), 3, 1);
   const lake = new THREE.Color(0x416d7e);
 
-  onProgress(0.5, 'Shading the alpineâ€¦');
+  onProgress(0.5, 'Shading the alpine…');
   await yieldFrame();
 
   for (let j = 0; j < N; j++) {
@@ -793,7 +794,7 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     }
   }
 
-  onProgress(0.66, 'Grooming corduroyâ€¦');
+  onProgress(0.66, 'Grooming corduroy…');
   await yieldFrame();
 
   snowField = buildSnowField();
@@ -845,7 +846,7 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
       normalData[a * 3 + 1] * wa + normalData[b * 3 + 1] * wb + normalData[c * 3 + 1] * wc,
       normalData[a * 3 + 2] * wa + normalData[b * 3 + 2] * wb + normalData[c * 3 + 2] * wc,
     ).normalize();
-    const values = tile ? tile.values : heights;
+    const values = tile ? tile.values : gradedHeights;
     return values[a] * wa + values[b] * wb + values[c] * wc;
   };
   const cutoutMeshes = new Set();
@@ -908,7 +909,7 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
   terrain.mask = mask;
   terrain.maskN = maskN;
 
-  onProgress(0.78, 'Snow is fallingâ€¦');
+  onProgress(0.78, 'Snow is falling…');
   await yieldFrame();
   return terrain;
 }
@@ -937,6 +938,13 @@ export function heightAt(x, z) {
   return tx + tz <= 1
     ? detailVertex(a * step, b * step) * (1 - tx - tz) + h10 * tx + h01 * tz
     : detailVertex((a + 1) * step, (b + 1) * step) * (tx + tz - 1) + h10 * (1 - tz) + h01 * (1 - tx);
+}
+
+// Root trees against both surfaces when the detailed tile is streamed in.
+// The lower portion of each trunk is buried on the higher of the two terrains.
+export function treeAnchorHeightAt(x, z) {
+  const [gx, gz] = worldIndex(x, z, WORLD);
+  return Math.max(heightAt(x, z), triangleHeight(gradedHeights, n, gx, gz));
 }
 
 export function normalAt(x, z, out = new THREE.Vector3()) {

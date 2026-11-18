@@ -223,14 +223,18 @@ function snowBank(parent) {
 
 export function buildInukshuk(scene,x,z,yaw,name,variant='peak') {
   const group=new THREE.Group(),roundhouse=variant==='roundhouse';
+  const sculpture=new THREE.Group();
   group.name=name;group.position.set(x,heightAt(x,z)-.025,z);group.rotation.y=yaw;
-  group.userData.landmark={variant,stoneCount:5,source:'user Peak photo; Roundhouse silhouette checked against Tourism Whistler',front:[0,0,1]};
+  // The neighboring glass screens provide a scale reference in Tourism Whistler's terrace photograph.
+  if(roundhouse)sculpture.scale.setScalar(.57);
+  group.add(sculpture);
+  group.userData.landmark={variant,stoneCount:5,source:'user Peak photo; Roundhouse scale estimated from Tourism Whistler',front:[0,0,1]};
   PEAK_STONE_OUTLINES.forEach((def,index)=>{
     const stone=new THREE.Mesh(stoneGeometry(def,index,roundhouse),[stoneMaterial(def,index),stoneEdgeMaterial()]);
     // The torso sits behind the long lintel, exposing a broken undercut seam.
     if(index===2){stone.position.z=-.072;stone.position.y=-.026;}
     if(index===3)stone.position.z=.028;
-    stone.name=name+' · '+def.name;stone.castShadow=stone.receiveShadow=true;group.add(stone);
+    stone.name=name+' · '+def.name;stone.castShadow=stone.receiveShadow=true;sculpture.add(stone);
   });
   // The reference has frost only on windward edges and two broken upper
   // ledges, with exposed rock between them. Each ribbon is a rough volume.
@@ -239,11 +243,11 @@ export function buildInukshuk(scene,x,z,yaw,name,variant='peak') {
     if(roundhouse){point[0]*=index===4?1.12:.94;if(index===0)point[0]+=.07;if(index===1)point[0]-=.07;if(index===4)point[1]=2.72+(point[1]-2.72)*.86;}
     return [...point,index===2?.235:.300];
   });
-  rimeRibbon(group,path([[400,48],[391,86],[391,144],[393,194],[408,219],[374,226],[350,225]],4),91,.030);
-  rimeRibbon(group,path([[72,235],[53,275],[40,328],[29,369],[39,394],[73,411]]),93,.036);
-  rimeRibbon(group,path([[236,408],[218,438],[196,487],[180,530],[183,571],[195,601],[196,633]],2),95,.028);
-  rimeRibbon(group,path([[186,928],[178,987],[177,1035],[185,1084]],0),98,.024);
-  rimeRibbon(group,path([[647,222],[680,226],[711,225],[746,227],[782,230],[817,232],[839,241]]),94,.027);
-  rimeRibbon(group,path([[601,610],[619,611],[635,607]],1),100,.026);
+  rimeRibbon(sculpture,path([[400,48],[391,86],[391,144],[393,194],[408,219],[374,226],[350,225]],4),91,.030);
+  rimeRibbon(sculpture,path([[72,235],[53,275],[40,328],[29,369],[39,394],[73,411]]),93,.036);
+  rimeRibbon(sculpture,path([[236,408],[218,438],[196,487],[180,530],[183,571],[195,601],[196,633]],2),95,.028);
+  rimeRibbon(sculpture,path([[186,928],[178,987],[177,1035],[185,1084]],0),98,.024);
+  rimeRibbon(sculpture,path([[647,222],[680,226],[711,225],[746,227],[782,230],[817,232],[839,241]]),94,.027);
+  rimeRibbon(sculpture,path([[601,610],[619,611],[635,607]],1),100,.026);
   scene.add(group);snowBank(group);return group;
 }

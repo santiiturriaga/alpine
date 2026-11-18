@@ -115,15 +115,15 @@ export class TrailRouter {
     return [...candidates.values()].flat().sort((a, b) => a.d - b.d);
   }
 
-  open(a, b, maxGrade) {
+  open(a, b, maxGrade = null) {
     const length = distance(a, b);
     if (length < .05) return true;
-    const steps = Math.max(1, Math.ceil(length / 3.2));
+    const steps = Math.max(1, Math.ceil(length / .9));
     let previous = this.heightAt(a.x, a.z);
     for (let i = 1; i <= steps; i++) {
       const t = i / steps, x = a.x + (b.x - a.x) * t, z = a.z + (b.z - a.z) * t;
       const y = this.heightAt(x, z), change = y - previous;
-      if (change > .65 + length / steps * maxGrade || change < -1.15 - length / steps * .85) return false;
+      if (maxGrade != null && (change > .65 + length / steps * maxGrade || change < -1.15 - length / steps * .85)) return false;
       if (this.isOpen && !this.isOpen(x, y, z)) return false;
       previous = y;
     }
@@ -208,7 +208,7 @@ export class TrailRouter {
     const startY = this.heightAt(start.x, start.z);
     const nearby = this.nearby(start, 175, (n, d) => Math.abs(n.y - startY) < 6 + d * .48);
     for (const { node, d } of nearby.slice(0, 44)) {
-      if (d >= 4 && !this.open(start, node, .48)) continue;
+      if (d >= .4 && !this.open(start, node, .48)) continue;
       update(node, (d + 4) * 1.6, null, { points: [start, node] });
       if (paths.size >= 11) break;
     }
@@ -224,9 +224,19 @@ export class TrailRouter {
         for (let p = link; p; p = p.previous) edges.push(p.edge);
         return edges.reverse();
       }
-      for (const { to, cost, lift } of node.edges) {
-        const points = lift ? lift.points.map(fromPair) : [node, to];
-        update(to, link.cost + cost, link, { points, lift });
+      for (const edge of node.edges) {
+        const { to, cost, lift } = edge;
+        if (lift) {
+          update(to, link.cost + cost, link, { points: lift.points.map(fromPair), lift });
+          continue;
+        }
+        if (!('ground' in edge)) {
+          edge.ground = this.open(node, to) ? [node, to] : this.groundPath(node, to);
+        }
+        if (!edge.ground) continue;
+        const extra = edge.ground.length > 2
+          ? edge.ground.slice(1).reduce((sum, p, i) => sum + distance(p, edge.ground[i]), 0) - distance(node, to) : 0;
+        update(to, link.cost + cost + extra, link, { points: edge.ground });
       }
       const transfers = node.transfers ??= this.nearby(node, Math.max(node.joinRadius, 70), (n, d) =>
         n.source !== node.source && d <= Math.max(node.joinRadius, n.joinRadius) &&

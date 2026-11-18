@@ -10,6 +10,15 @@ export const SKIS={
 const colors={jacket:[['Clay','#ad4939'],['Alpine blue','#3b7190'],['Spruce','#3d6e54'],['Ochre','#ce933e'],['Graphite','#404348']],
   pants:[['Slate','#323e48'],['Sand','#a89a81'],['Navy','#24364a']],helmet:[['Chalk','#d6d6d1'],['Charcoal','#333a40'],['Copper','#9a6852']],
   backpack:[['Charcoal','#363d40'],['Cedar','#694e42'],['Ochre','#bc8340']]};
+const questJackets = {
+  'quest.overlook':['Glacier teal','#348d90'],
+  'quest.wildlife':['Fireweed','#965387'],
+  'quest.delivery':['Lichen','#9ba65e'],
+  'quest.rescue':['Alpine crimson','#b92c40'],
+};
+function jacketPalette(finds) {
+  return [...colors.jacket,...Object.entries(questJackets).filter(([key])=>finds.includes(key)).map(([,value])=>value)];
+}
 const stickers={none:'No decal',peak:'Peak contour',maple:'Maple leaf',snowflake:'Snow crystal'};
 const defaultOutfit=Object.fromEntries(Object.entries(colors).map(([slot,palette])=>[slot,palette[0][1]]));
 const money=n=>Number.isSafeInteger(n)&&n>=0?n:0;
@@ -17,9 +26,10 @@ function read() {
   let data={};try{data=JSON.parse(localStorage.getItem(key)||'{}')||{};}catch{}
   const owned=new Set(['all-mountain',...(Array.isArray(data.owned)?data.owned.filter(s=>Object.hasOwn(SKIS,s)):[])]);
   const outfit={...defaultOutfit};
-  for(const [slot,palette] of Object.entries(colors))if(palette.some(([,hex])=>hex===data.outfit?.[slot]))outfit[slot]=data.outfit[slot];
+  const finds=Array.isArray(data.finds)?[...new Set(data.finds.filter(s=>typeof s==='string'))]:[];
+  for(const [slot,palette] of Object.entries(colors))if((slot==='jacket'?jacketPalette(finds):palette).some(([,hex])=>hex===data.outfit?.[slot]))outfit[slot]=data.outfit[slot];
   return {balance:money(data.balance),owned:[...owned],skis:owned.has(data.skis)?data.skis:'all-mountain',outfit,
-    sticker:Object.hasOwn(stickers,data.sticker)?data.sticker:'none',finds:Array.isArray(data.finds)?[...new Set(data.finds.filter(s=>typeof s==='string'))]:[]};
+    sticker:Object.hasOwn(stickers,data.sticker)?data.sticker:'none',finds};
 }
 const element=(tag,cls,text='')=>{const e=document.createElement(tag);if(cls)e.className=cls;e.textContent=text;return e;};
 
@@ -69,7 +79,7 @@ export class Outfitter {
     const fields=dialog.querySelector('[data-apparel]');fields.replaceChildren();
     for(const [slot,palette] of Object.entries(colors)){
       const label=element('label',null,slot[0].toUpperCase()+slot.slice(1)),select=element('select');
-      select.dataset.slot=slot;for(const [name,hex] of palette)select.add(new Option(name,hex));
+      select.dataset.slot=slot;for(const [name,hex] of (slot==='jacket'?jacketPalette(s.finds):palette))select.add(new Option(name,hex));
       select.value=s.outfit[slot];select.onchange=()=>{s.outfit[slot]=select.value;this.equip();this.save();};
       label.append(select);fields.append(label);
     }

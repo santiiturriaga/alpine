@@ -1,3 +1,4 @@
+import { addPassGate } from './pass-gates.js';
 import * as THREE from 'three';
 import { LIFTS, PEAK_TO_PEAK, VILLAGE_GONDOLA_UPPER } from './worlddata.js';
 import { heightAt } from './terrain.js';
@@ -9,6 +10,7 @@ import { timberMesh } from './plaza-materials.js';
 import { makePeak2PeakBadge } from './lift-stations.js';
 import { createRoofSnow, createIcicles } from './roof-weather.js';
 import { LODGE_FRAME, LODGE_CAFE, LODGE_TERRACE, ROUNDHOUSE_OLYMPIC_SITE } from './roundhouse-site.js';
+import { ROUNDHOUSE_STONE_SITE } from './inukshuk.js';
 
 const snow = '#ebf0f4';
 const frame = '#677987';
@@ -129,6 +131,21 @@ function roundhouseBadge(parent, position) {
   mesh.position.set(...position);parent.add(mesh);
 }
 
+const masonryTones = ['#827463','#968b79','#817b6a','#a49986','#8c806b','#968876','#948a79'];
+function splitStone(parts, left, right, bottom, top, face, rng) {
+  for(let y=bottom;y<top-.035;){
+    const height=Math.min(top-y,.089+rng()*.082);
+    for(let x=left;x<right-.026;){
+      const width=Math.min(right-x,.24+rng()*.57),proud=.018+rng()*.041;
+      const color=masonryTones[Math.floor(rng()*masonryTones.length)];
+      parts.push(box(width-.018,height-.014,proud+.018,color,[x+width/2,y+height/2,face+proud/2],
+        [(rng()-.5)*.08,0,(rng()-.5)*.022]));
+      x+=width;
+    }
+    y+=height;
+  }
+}
+
 function entranceArch(group, grid, masonry, woodwork, roof) {
   const { x, front, floor, width, steps, tread } = LODGE_CAFE;
   const z = front + .59, stone = '#8d8980', spring = 2.36, crown = 3.11, half = 3.35;
@@ -143,28 +160,19 @@ function entranceArch(group, grid, masonry, woodwork, roof) {
     pier(masonry, group, sideX, z - .32, sideWallWidth, 1.08, .83, stone);
   }
   // Each tapered stone has an actual curved opening below it.
-  const shades = ['#807d77','#918b80','#8b857b','#a09a8f','#878379','#969088','#94918a'];
   const random=mulberry32(6630);
   const joints = [];
   for (let i = 0; i <= 24; i++) joints.push(-half * Math.cos(Math.PI * i / 24));
   for (let i = 0; i < 24; i++) {
     const a = joints[i], b = joints[i + 1], left = x + a, right = x + b;
-    const yA = archHeight(a), yB = archHeight(b), color = shades[(random()*shades.length)|0];
+    const yA = archHeight(a), yB = archHeight(b), color = masonryTones[(random()*masonryTones.length)|0];
     panel(masonry,[left,yA,z+.68],[right,yB,z+.68],[right,3.828,z+.68],[left,3.828,z+.68],color);
     panel(masonry,[right,yB,z-.65],[left,yA,z-.65],[left,3.828,z-.65],[right,3.828,z-.65],color);
     panel(masonry,[left,yA,z-.65],[right,yB,z-.65],[right,yB,z+.68],[left,yA,z+.68],color);
   }
   for (const side of [-1, 1]) {
-    for (let y = .04; y < 3.69;) {
-      const height = .096 + random()*.115, left = x + side * 3.96 - .615;
-      for (let offset = 0; offset < 1.212;) {
-        const width = Math.min(1.212-offset,.145+random()*.36);
-        const tint = shades[(random()*shades.length)|0];
-        if(width>.025)masonry.push(box(width-.01,height-.012,.035,tint,[left+.01+offset+width/2,y+height/2,z+.681+random()*.012]));
-        offset+=width;
-      }
-      y+=height;
-    }
+    const pillarX=x+side*3.96;
+    splitStone(masonry,pillarX-.615,pillarX+.615,0,3.77,z+.674,random);
   }
   // Shallow front steps fit inside the stone returns and meet the plaza grade.
   for (let i = 0; i < steps; i++) {
@@ -249,10 +257,12 @@ function lodge(scene, grid) {
   for (const x of [-19.6, -13.5, 2.5, 8.6, 14.8, 20.9, 29.3]) {
     pier(masonry, group, x, 28.8, .73, .86, 3.38, '#8a8881');
     collide(grid, group, x, 28.8, .75, .88, 0, 3.38);
+    splitStone(masonry,x-.365,x+.365,0,3.36,29.233,random);
   }
   for (const y of [3.77, 4.76]) {
     woodwork.push(box(44.2,.15,.12,timber,[1.6,y,deckZ+2.36]));
     woodwork.push(box(3.2,.15,.12,timber,[28.9,y,deckZ+2.36]));
+    for(const x of [-20.45,30.45])woodwork.push(box(.12,.15,4.88,timber,[x,y,deckZ-.06]));
   }
   for (let i = 0; i <= 101; i++) {
     const x = deckX - 25.2 + .5*i;
@@ -315,16 +325,24 @@ function lodge(scene, grid) {
     [annexX, (annexBase-.30)/2, annexZ]));
   block.push(box(13.1,7.61,24.8,'#475968',[annexX,3.42,annexZ]));
   lowRoof(annexX,7.24,annexZ,13.6,25.3,0,891);
+  const annexGlass=[];
+  const shellTones=['#415968','#517082','#476673','#566e77','#476475'];
   for (let i=0;i<9;i++) {
     const x=annexX-5.8+i*1.46;
-    glazing.push(box(1.35,6.28,.071,i%3 ? '#638493' : '#6c8b99',[x,3.57,annexZ+12.45]));
-    block.push(box(.078,6.52,.14,'#c3c8c8',[x+.72,3.57,annexZ+12.485]));
+    for(const h of [2.01,5.13]){
+      annexGlass.push(box(1.362,3.037,.054,shellTones[Math.floor(random()*shellTones.length)],[x,h,annexZ+12.439]));
+    }
+    block.push(box(.135,6.6,.156,'#495a62',[x+.72,3.57,annexZ+12.484]));
+    block.push(box(.064,6.57,.085,'#aeb9bb',[x+.72,3.57,annexZ+12.589]));
   }
-  for (const y of [.43,3.65,6.76]) block.push(box(13,.11,.14,'#bec8cc',[annexX,y,annexZ+12.49]));
+  for (const y of [.43,3.60,6.76]) block.push(box(13,.115,.214,'#88979e',[annexX,y,annexZ+12.49]));
   for (let i=0;i<17;i++) {
     const z = annexZ-12+i*1.49;
-    glazing.push(box(.06,6.28,1.43,i%3?'#628394':'#567586',[annexX-6.59,3.57,z]));
-    block.push(box(.11,6.45,.071,'#adb9bf',[annexX-6.61,3.57,z+.71]));
+    for(const h of [2.01,5.13]){
+      annexGlass.push(box(.052,3.039,1.397,shellTones[Math.floor(random()*shellTones.length)],[annexX-6.579,h,z]));
+    }
+    block.push(box(.159,6.56,.118,'#4c5b63',[annexX-6.621,3.57,z+.71]));
+    block.push(box(.075,6.51,.059,'#a4aeb1',[annexX-6.733,3.57,z+.71]));
   }
   for (const y of [.41,3.65,6.79,7.62]){
     block.push(box(.115,.105,25.02,'#b5c6ca',[annexX-6.61,y,annexZ]));
@@ -332,20 +350,15 @@ function lodge(scene, grid) {
   }
   for (let col=0;col<18;col++) {
     const x=-19.6+col*2.74;
-    for (const [y,h] of [[1.38,2.4],[5.54,2.25]]) {
-      if (y < 2 && Math.abs(x - atrium) < 4.85) continue;
-      if (y > 2 && Math.abs(x - 20.8) < 1.4) continue; // upper dining terrace door
-      const z = y > 2 ? 27.04 : (x > atrium-8 && x < atrium+8 ? front-.13 : mainFront-.93) + .09;
-      // Real window frames surround clear panes; a full backing rectangle
-      // would close the sightline from the dining hall to the balcony.
-      for(const side of [-1,1]){
-        block.push(box(.10,h+.16,.13,'#454642',[x+side*1.175,y,z]));
-        block.push(box(2.45,.10,.13,'#454642',[x,y+side*(h/2+.03),z]));
-      }
-      const color = ['#5b7988','#637983','#506d7d','#557587'][Math.floor(random()*4)];
-      glazing.push(box(2.24,h,.064,color,[x,y,z+.085]));
-      block.push(box(.065,h,.13,'#adb0a8',[x,y,z+.09]));
+    if(Math.abs(x-atrium)<4.85||x>26.35)continue;
+    const y=1.38,h=2.4,z=(Math.abs(x-atrium)<8?front-.13:mainFront-.93)+.09;
+    for(const side of [-1,1]){
+      block.push(box(.10,h+.16,.13,'#454642',[x+side*1.175,y,z]));
+      block.push(box(2.45,.10,.13,'#454642',[x,y+side*(h/2+.03),z]));
     }
+    const color = ['#5b7988','#637983','#506d7d','#557587'][Math.floor(random()*4)];
+    glazing.push(box(2.24,h,.064,color,[x,y,z+.085]));
+    block.push(box(.065,h,.13,'#adb0a8',[x,y,z+.09]));
   }
   roundhouseBadge(group,[atrium,11.05,front+.74]);
   layer(group,masonry,{},'stone');
@@ -353,6 +366,7 @@ function lodge(scene, grid) {
   layer(group,woodwork,{},'timber');
   layer(group,roof,{roughness:.85,side:THREE.DoubleSide});
   layer(group,glazing,{roughness:.29,metalness:.14,transparent:true,opacity:.44,depthWrite:false},'glass');
+  layer(group,annexGlass,{roughness:.29,metalness:.18,transparent:true,opacity:.68,depthWrite:false},'glass');
   collide(grid,group,-18.125,5,8.25,40,0,3.3);
   collide(grid,group,14.825,5,24.85,40,0,3.3);
   collide(grid,group,-5.8,-2.5,16.4,25,0,3.3);
@@ -391,10 +405,7 @@ function scannerGate(parent, structure, x, y, z) {
   structure.push(box(.31,.095,.32,'#738187',[x,y+.048,z]));
   structure.push(box(.145,.96,.16,'#565f63',[x,y+.55,z]));
   structure.push(box(.25,.33,.26,'#34434a',[x,y+1.18,z]));
-  const display=new THREE.Mesh(new THREE.BoxGeometry(.15,.095,.022),
-    new THREE.MeshStandardMaterial({color:'#77cdb4',emissive:'#55a990',emissiveIntensity:.65}));
-  display.position.set(x,y+1.22,z+.139);parent.add(display);
-  structure.push(beam([x-.03,y+.8,z],[x-.69,y+.82,z],.039,.043,'#999fa1'));
+  addPassGate(parent,x,y,z,-.69);
 }
 
 function peakTerminal(scene, grid, lift) {
@@ -696,6 +707,76 @@ function olympicRings(scene, grid) {
   };
 }
 
+function umbrellaBar(scene,grid) {
+  const bar=site(scene,'Umbrella Bar · Roundhouse ridge',467.4,4749.1,.12);
+  const sides=12,radius=5.65,eave=3.18,roofRadius=6.08;
+  const foundation=[],frame=[],roof=[],glass=[],wood=[];
+  const corner=(i,r,y)=>[Math.cos(i/sides*Math.PI*2)*r,y,Math.sin(i/sides*Math.PI*2)*r];
+  const foot=groundFoot(bar,0,0,13.4,13.4);
+  foundation.push(part(new THREE.CylinderGeometry(6.7,6.65,.25-foot,48),'#777c79',[0,(foot+.25)/2,0]));
+  wood.push(part(new THREE.CylinderGeometry(6.68,6.68,.11,48),'#6e6252',[0,.27,0]));
+  frame.push(part(new THREE.CylinderGeometry(.72,.72,.36,18),'#68767c',[0,4.27,0]));
+  frame.push(part(new THREE.CylinderGeometry(.80,.80,.095,18),'#a2a9ab',[0,4.495,0]));
+  const top=[0,4.16,0];
+  for(let i=0;i<sides;i++){
+    const [x,,z]=corner(i,radius,0),a=corner(i,roofRadius,eave),b=corner(i+1,roofRadius,eave);
+    panel(roof,a,b,top,top,i%2?'#35434a':'#303e46');
+    frame.push(beam(a,b,.12,.235,'#596773'),beam(a,top,.071,.105,'#55626b'));
+    frame.push(box(.109,eave-.20,.106,'#7a8f98',[x,(eave+.26)/2,z]));
+    if(i===1)continue;
+    const lo=corner(i,radius,.56), hi=corner(i+1,radius,.56);
+    const left=corner(i,radius,eave-.11), right=corner(i+1,radius,eave-.11);
+    panel(glass,lo,hi,right,left,i%3?'#70909e':'#66818f');
+    frame.push(beam(lo,hi,.10,.19,'#819198'));
+  }
+  const woodScreen=[];
+  for(const x of [-1.9,-.95,0,.95,1.9]){
+    woodScreen.push(box(.86,.89,.56,'#524c42',[x,.77,-1]));
+    woodScreen.push(box(.9,.032,.59,'#a59479',[x,1.24,-1]));
+    for(let i=0;i<3;i++)woodScreen.push(box(.09,.15,.09,i===0?'#dbd8c7':'#718c8e',[x-.23+i*.20,1.33,-1]));
+  }
+  layer(bar,foundation,{},'stone');
+  layer(bar,wood,{},'timber');
+  layer(bar,woodScreen,{},'timber');
+  layer(bar,frame,{metalness:.22,roughness:.55});
+  layer(bar,roof,{roughness:.75,side:THREE.DoubleSide});
+  layer(bar,glass,{side:THREE.DoubleSide,roughness:.36,transparent:true,opacity:.43,depthWrite:false},'glass');
+  const signYaw=Math.PI*.36;
+  sign(bar,'UMBRELLA BAR','',2.7,.44,[Math.sin(signYaw)*5.72,2.78,Math.cos(signYaw)*5.72],'#3e4f56',{yaw:signYaw});
+  grid.addCircle(bar.position.x,bar.position.z,5.64,'lodge',{maxY:bar.position.y+4.51});
+}
+
+function ridgeView(scene,grid) {
+  const {x,z,yaw}=ROUNDHOUSE_STONE_SITE;
+  const view=site(scene,'Roundhouse inukshuk viewpoint',x,z,yaw), slab=[], posts=[], glass=[];
+  const back=-2.2, front=1.75, left=-3.7, right=3.7;
+  pier(slab,view,0,(front+back)/2,right-left,front-back,.015,'#97988c');
+  for(let i=0;i<=5;i++){
+    const u=left+(right-left)*i/5;
+    posts.push(box(.085,1.43,.086,'#47565b',[u,.72,back]));
+    posts.push(box(.17,.07,.16,'#68716f',[u,.045,back]));
+    if(i<5){
+      const panelWidth=(right-left)/5;
+      glass.push(box(panelWidth-.07,1.24,.047,'#a2bdbe',[u+panelWidth/2,.80,back]));
+    }
+  }
+  for(const side of [-1,1]){
+    posts.push(box(.093,1.43,.09,'#46545c',[side*right,.72,back+1.12]));
+    glass.push(box(.047,1.24,1.07,'#9bb3b7',[side*right,.80,back+.56]));
+    collide(grid,view,side*right,back+.56,.125,1.12,0,1.4);
+  }
+  collide(grid,view,0,back,right-left,.13,0,1.43);
+  collide(grid,view,0,0,1.53,.79,0,1.95);
+  layer(view,slab,{},'stone');
+  layer(view,posts,{metalness:.28});
+  layer(view,glass,{roughness:.34,transparent:true,opacity:.25,depthWrite:false},'glass');
+  return (x,z,y)=>{
+    const dx=x-view.position.x,dz=z-view.position.z,c=Math.cos(yaw),s=Math.sin(yaw);
+    const u=dx*c-dz*s,v=dx*s+dz*c,level=view.position.y+.015;
+    return u>=left&&u<=right&&v>=back&&v<=front&&(y===undefined||y>=level-.7)?level:null;
+  };
+}
+
 function skiRack(parts, x,z,y,yaw,rand) {
   const start=parts.length;
   for(const side of [-1,1]){
@@ -730,10 +811,20 @@ function plazaFixtures(scene, grid) {
   const rng=mulberry32(8950);
   for (const [x,z] of [[465,4838],[470,4838.5],[487.2,4837],[491.8,4837],
     [464,4834],[469,4834.5],[487.2,4833],[491.8,4833],
-    [449,4836],[453,4841],[444,4829],[516,4860],[522,4864]]) {
+    [449,4836],[453,4841],[444,4829],[460,4845.5],[466,4847.3],
+    [491.2,4844.8],[497.55,4841.9],[497.8,4846.1],[516,4860],[522,4864]]) {
     const yaw=.075+(rng()-.5)*.19;
     skiRack(props,x,z,heightAt(x,z),yaw,rng);
     grid.addBox(x,z,1.4,.39,-yaw,'station');
+  }
+  for (const [x,z] of [[463.8,4831.1],[493.4,4830.52]]) {
+    const y=heightAt(x,z);
+    for(const offset of [-.69,.69]){
+      const base=heightAt(x+offset,z)-.1;
+      props.push(box(.15,y+.47-base,.42,'#676761',[x+offset,(base+y+.47)/2,z]));
+    }
+    props.push(box(2.05,.092,.48,'#6d5140',[x,y+.48,z]),box(2.05,.42,.07,'#745943',[x,y+.78,z-.195]));
+    grid.addBox(x,z,1.03,.27,0,'station',{maxY:y+1});
   }
   for(const [x,z] of [[449.4,4851.7],[451.4,4848.2],[453.4,4844.7],[455.4,4841.2],[457.6,4837.8]]){
     const y=heightAt(x,z);
@@ -799,6 +890,8 @@ export function buildRoundhouseArrival(scene, grid) {
   const village=villageTerminal(scene,grid,villageLift);
   const peak=peakTerminal(scene,grid,peakLift);
   const olympic=olympicRings(scene,grid);
+  umbrellaBar(scene,grid);
+  const ridge=ridgeView(scene,grid);
   return { update:plazaFixtures(scene,grid), operators:[village.operator,peak.operator],
-    walkSurfaceAt(x,z,y) { return olympic(x,z,y)??peak.walkSurfaceAt(x,z,y)??village.walkSurfaceAt(x,z,y); } };
+    walkSurfaceAt(x,z,y) { return olympic(x,z,y)??peak.walkSurfaceAt(x,z,y)??village.walkSurfaceAt(x,z,y)??ridge(x,z,y); } };
 }

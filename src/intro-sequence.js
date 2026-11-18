@@ -5,8 +5,7 @@ import { DUSTYS_VIEW, CREEKSIDE_SLOPE_VIEW } from './creekside-village.js';
 import { INUKSHUK_VIEW } from './inukshuk.js';
 import { PEAK_TO_PEAK } from './worlddata.js';
 
-// One continuous dolly per shot. A change of shot is a camera cut. The encoded
-// menu reel and its live WebGL fallback use these same views and durations.
+// Each shot moves a camera through the playable scene, then cuts to the next view.
 const century={eye:[-2450,2940,-4050],target:[1900,1540,3900],fov:54};
 const itinerary=[
   {view:VALLEY_VIEW,seconds:5.5,truck:135,push:210,light:'day'},

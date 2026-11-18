@@ -1,6 +1,8 @@
 # Alpine Descent
 
-Ski Whistler Blackcomb in British Columbia or Stevens Pass in Washington. Both resorts use real elevation and trail centerlines with code-built scenery and shared ski physics.
+Ski Whistler Blackcomb, Stevens Pass, The Summit at Snoqualmie or Crystal Mountain. The resorts use real elevation and trail centerlines with code-built scenery and shared ski physics. [Play Alpine Descent](https://santiiturriaga.github.io/alpine/)
+
+Players join the same mountain lobby automatically after dropping in. Open **G → Multiplayer** for the live trick, descent and speed leaderboard, a shareable mountain link, or solo play. A bail clears the current trick score. The static game exchanges temporary session IDs, in-game poses and scores through the public EMQX WebSocket broker. If it disconnects, the game keeps running locally and retries. [Broker information](https://www.emqx.com/en/mqtt/public-mqtt5-broker)
 
 ## Play locally
 
@@ -12,7 +14,7 @@ python -m http.server 8080 --bind 127.0.0.1
 
 Open [Alpine Descent](http://127.0.0.1:8080). The game uses vendored Three.js and local data files. It needs a WebGL browser and no build step.
 
-**Mountain → Resort → Travel** switches resorts from the title or during play. Open [Stevens Pass](http://127.0.0.1:8080/?mountain=stevens-pass) directly to start at Skyline, or choose Daisy for an easier descent. The Front Side, Mill Valley and base-area plates open with **M**. The Stevens pack includes 88 mapped paths, 13 lift lines, and 47 building footprints within 5.2 × 4.3 km of 10 m terrain. Its 44.8 × 57.6 km backdrop includes Mount Stuart. [Stevens data and coverage](data/mountains/stevens-pass/README.md) · [Adding another resort](data/mountains/README.md)
+**Mountain → Resort → Travel** switches resorts from the title or during play. Open [Stevens Pass](http://127.0.0.1:8080/?mountain=stevens-pass) directly to start at Skyline, or choose Daisy for an easier descent. Press **M** for the metric trail map. Hover a trail, lift or landmark, then select it and set it as your destination. Follow the arrows ahead of your skis. The Stevens pack includes 88 mapped paths, 13 lift lines, and 47 building footprints within 5.2 × 4.3 km of 10 m terrain. Its 44.8 × 57.6 km backdrop includes Mount Stuart. [Stevens data and coverage](data/mountains/stevens-pass/README.md) · [Adding another resort](data/mountains/README.md)
 
 ### Start at Roundhouse
 
@@ -22,9 +24,11 @@ For a powder run, open [the forest beside Come a Long](http://127.0.0.1:8080/?st
 
 Press **G** to travel, set the season and weather, or start a challenge. The [mountain-wide avalanche escape](http://127.0.0.1:8080/?challenge=avalanche&view=helmet) starts on Whistler Mountain. Take any downhill route to a village base ahead of the descending slide. [Head-to-head](http://127.0.0.1:8080/?challenge=race) puts a second racer alongside you on Springboard. Whiskey Jack slalom adds three seconds for each missed gate. Landing a spin, flip or held grab can give a short speed boost. Link clean landings to extend it.
 
+Talk to the skiers marked **?** around Roundhouse Lodge. Photo assignments save actual game views in your Mountain field journal. Bring a delivery receipt or photo back to its giver to unlock a jacket. Morgan’s airlift sends a helicopter to an injured guest. Hover over the orange bivy and press **E** to lower the sling, or land nearby. Other online skiers can follow the dispatch under **G** and press **E** at the bivy to help the flight paramedic.
+
 Green jackets identify beginners, blue jackets intermediates and black jackets experts. Guests ski and snowboard in parties, queue at lifts and stop to rest or chat.
 
-Press **B** to take your skis off and walk with **W/S**, turning with **A/D**. Walk through the open entrances at Roundhouse Lodge, Rendezvous Lodge, the village warming hut and the ski rental shop. Indoors, the camera switches to eye level.
+Slow to a stop on the snow, then press **B** to take your skis off and walk with **W/S**, turning with **A/D**. Walk through the open entrances at Roundhouse Lodge, Rendezvous Lodge, the village warming hut and the ski rental shop. Indoors, the camera switches to eye level.
 
 Gondolas board into the cabin. Use **WASD** to walk, drag or use the arrow keys to look around, and look out the side window to see the skis on the rack. **C** changes the scenic camera, **V** returns to the cabin and **E** skips to the unload.
 
@@ -42,7 +46,7 @@ The signed runs around Roundhouse include Ego Bowl and Upper Whiskey Jack. Peak 
 | Q | Cycle nearby lifts |
 | C | Change chase, helmet, lift or vehicle view. Click the game to capture the mouse for free look |
 | V | Return to the gondola cabin |
-| M | Open the illustrated trail atlas. Drag to pan, scroll or pinch to zoom, or press Home to fit the full map |
+| M | Open the interactive trail atlas. Drag to pan, scroll or pinch to zoom, or press Home to fit the full map |
 | G | Choose conditions, destination or challenge |
 | L | Open the outfitter. Coins, owned gear and field notes save in this browser |
 | R | Return to Roundhouse |
@@ -52,7 +56,7 @@ The signed runs around Roundhouse include Ego Bowl and Upper Whiskey Jack. Peak 
 
 Visit Skiers Plaza, the Fairmont, Dusty’s patio, the summit inukshuk, the glacier cave or the cliff overlook from **G**. Scenic views have a local photo-overlay control and an exit to on-foot exploration. The street view was matched to recognizable building corners. The Fairmont, Creekside and village shells use mapped footprints with surveyed roof heights where available. Hidden elevations, cave interiors, wildlife and operating scenes are interpretations.
 
-The Skiers Plaza camera fits Sundial and the Salomon frontage. It sits about 176 m from the panorama coordinates embedded in the supplied Google Maps link. The cliff overlook uses the Cirque/Couloir shoulder on Whistler Peak. The supplied cliff photo did not establish an exact camera location. The illustrated village atlas uses the resort’s original PDF proportions. [Village base map](https://www.whistlerblackcomb.com/-/aemasset/sitecore/whistler-blackcomb/maps/winter-2024-2025/20241120_WB_winter-base_map_001.pdf) · [Sundial](https://www.sundialhotel.com/homepage) · [Garibaldi Lift Co.](https://www.whistlerblackcomb.com/explore-the-resort/the-village/dining/glc.aspx) · [Slope Magazine resort guide](https://www.slopemagazine.com/snow/whistler-blackcomb/) · [Whistler Mountain geology](https://fireandicegeoregion.ca/geosite/whistler-mountain/) · [Blackcomb Mountain geology](https://fireandicegeoregion.ca/geosite/blackcomb-mountain/)
+The Skiers Plaza camera fits Sundial and the Salomon frontage. It sits about 176 m from the panorama coordinates embedded in the supplied Google Maps link. The cliff overlook uses the Cirque/Couloir shoulder on Whistler Peak. The supplied cliff photo did not establish an exact camera location. The village atlas plots landmarks and lift terminals at their game coordinates. [Village base map](https://www.whistlerblackcomb.com/-/aemasset/sitecore/whistler-blackcomb/maps/winter-2024-2025/20241120_WB_winter-base_map_001.pdf) · [Sundial](https://www.sundialhotel.com/homepage) · [Garibaldi Lift Co.](https://www.whistlerblackcomb.com/explore-the-resort/the-village/dining/glc.aspx) · [Slope Magazine resort guide](https://www.slopemagazine.com/snow/whistler-blackcomb/) · [Whistler Mountain geology](https://fireandicegeoregion.ca/geosite/whistler-mountain/) · [Blackcomb Mountain geology](https://fireandicegeoregion.ca/geosite/blackcomb-mountain/)
 
 Vehicle entries under **G** take you to a parked vehicle. Press **E** to enter, **W/S** to change speed, **A/D** to steer and **C** to switch views. Use **Space/Shift** for vertical control in the helicopter and pitch control in the wingsuit. Land before leaving the helicopter. Visit the Roundhouse to observe Canada jays or look for marmots near Rendezvous in the warmer seasons.
 
@@ -60,6 +64,6 @@ The game includes 617 mapped downhill centerline segments, 29 piste areas, and 3
 
 Trail centerlines, station locations, and village footprints come from mapping data. Trail widths, most cable profiles, snow conditions, building heights and appearances, and the skier and forest are modeled in code. The geographic inputs and their coverage limits are documented in [Data and attribution](data/README.md).
 
-The in-game atlas uses the [official 2025/26 trail map](https://cdn.whistler.com/s3/pdf/maps/whistler-blackcomb-trail-map-2025-26.pdf). The rider marker is an approximate position on a painted panorama.
+The in-game atlas draws terrain relief, lift paths, pistes and landmarks directly from the playable world. The [official Whistler trail map](https://cdn.whistler.com/s3/pdf/maps/whistler-blackcomb-trail-map-2025-26.pdf) is available for comparison.
 
 The repository's existing GitHub Pages workflow packages the game on pushes to `main`. This is a fan project.

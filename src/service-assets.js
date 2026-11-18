@@ -1121,37 +1121,23 @@ function flightMembranes() {
   staticBatches(pilot);
   return pilot;
 }
-function readyPilot() {
-  const pilot=new THREE.Group();
-  ellipse(pilot,orange,0,1.228,0,.225,.31,.145);
-  ellipse(pilot,suitPants,0,.962,-.015,.179,.146,.127);
-  ellipse(pilot,trim,0,1.27,-.159,.181,.268,.107);
-  ellipse(pilot,darkSteel,0,1.33,-.218,.148,.182,.056);
-  for(const s of [-1,1]) {
-    segment(pilot,orange,[s*.16,1.42,.005],[s*.286,1.15,.02],.080,.074);
-    segment(pilot,suitPants,[s*.286,1.15,.02],[s*.29,.965,.139],.063,.062);
-    ellipse(pilot,trim,s*.29,.956,.155,.052,.075,.054);
-    const start=[s*.102,.982,-.003], knee=[s*.169,.584,.065], ankle=[s*.188,.155,.011];
-    segment(pilot,suitPants,start,knee,.104,.092);
-    segment(pilot,orange,knee,ankle,.085,.081);
-    ellipse(pilot,trim,s*.187,.073,.076,.079,.073,.167);
-    const armCloth=orange.clone();armCloth.side=THREE.DoubleSide;
-    panel(pilot,armCloth,[[s*.185,1.387,-.015],[s*.253,1.173,-.019],[s*.284,1.014,.084],[s*.120,.958,-.079]],8,8);
-    line(pilot,trim,.017,[[s*.10,1.48,-.126],[s*.137,1.41,.085],[s*.132,1.265,.142],[s*.115,1.073,.127]]);
-    box(pilot,metal,s*.126,1.282,.141,.048,.056,.016);
+function packedWingsuit() {
+  const pack = new THREE.Group();
+  ellipse(pack, trim, 0,.133,.019,.279,.135,.31);
+  ellipse(pack, orange, 0,.222,.032,.267,.128,.292);
+  for (const side of [-1,1]) {
+    line(pack, graphite, .014, [[side*.139,.19,-.247],[side*.14,.286,-.15],
+      [side*.129,.333,.022],[side*.138,.294,.193],[side*.134,.170,.28]]);
+    box(pack, metal, side*.139,.32,.13,.038,.017,.047);
   }
-  const legCloth=suitPants.clone();legCloth.side=THREE.DoubleSide;
-  panel(pilot,legCloth,[[-.101,.902,-.043],[.115,.937,-.049],[.17,.278,.010],[-.17,.311,.01]],8,8);
-  rod(pilot,trim,[-.14,1.213,.13],[.14,1.217,.13],.023);
-  box(pilot,metal,0,1.216,.153,.045,.049,.02);
-  head(pilot,0,1.622,.016);
-  staticBatches(pilot);
-  return pilot;
+  line(pack,orange,.023,[[-.06,.228,-.259],[-.052,.267,-.312],[.055,.266,-.311],[.057,.229,-.26]]);
+  staticBatches(pack);
+  return pack;
 }
 function wingsuit() {
   const group=new THREE.Group();
   const flight=flightMembranes();
-  const parked=readyPilot();
+  const parked=packedWingsuit();
   group.add(flight,parked);
   flight.visible=false;
   const mount = { hipY:.84, hipZ:.05, hinge:.10, grip:[.7,1.14,.18],

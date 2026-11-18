@@ -210,7 +210,7 @@ export class AudioEngine {
       this.motorOsc.frequency.setTargetAtTime(powered?(rotor?53:engine==='snowcat'?34:76)+s*44:48,t,.13);
     }
     const footfall = Math.floor(stridePhase / Math.PI);
-    if (active && !riding && grounded && stride > .35 && footfall !== this.lastFootfall) {
+    if (active && !riding && !vehicle && grounded && stride > .35 && footfall !== this.lastFootfall) {
       const floor = hiking && (surface === 'ground' || enclosed);
       if (hiking) this.noiseHit({ dur: .062, freq: floor ? 194 : 324, gain: floor ? .055 : .035, q: .8 });
       this.noiseHit({ dur: hiking ? .12 : .16, freq: floor ? 1080 : surface === 'ice' ? 1760 : 770,

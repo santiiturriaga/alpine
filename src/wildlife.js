@@ -1,3 +1,4 @@
+import { forestAnimal } from './forest-wildlife.js';
 import * as THREE from 'three';
 import { heightAt } from './terrain.js';
 import { MOUNTAIN } from './worlddata.js';
@@ -79,16 +80,19 @@ export const WILDLIFE_START={x:478,z:4838,heading:-.87,holdAtUnload:true};
 export function buildWildlife(scene,shop,audio) {
   const sites=[
     {id:'grey-jay',title:'Canada jay',hint:'Listen near the Roundhouse deck.',x:474.8,z:4841.5,bird:true},
+    {id:'red-fox',title:'Red fox',hint:'Look along the forest edge below Roundhouse.',x:451,z:4771,species:'fox'},
+    {id:'black-bear',title:'American black bear',hint:'Watch the Creekside forest edge during the thaw.',x:-2484,z:2138,species:'bear'},
     {id:'alpine-marmot',title:'Hoary marmot',hint:'Look by the rocks above Rendezvous during the thaw.',
       x:MOUNTAIN.rendezvous.x+56,z:MOUNTAIN.rendezvous.z+29,bird:false},
   ];
   for(const s of sites){
-    const animal=s.bird?bird():marmot();Object.assign(s,animal);
+    const animal=s.species?forestAnimal(s.species==='bear'):s.bird?bird():marmot();Object.assign(s,animal);
     const y=heightAt(s.x,s.z),r=mulberry32(215);
     const stones=Array.from({length:7},(_,i)=>part(new THREE.DodecahedronGeometry(1,1),
       i%2?'#77786c':'#6e7776',[s.x+(i? (r()-.5)*1.8:0),y+.05,s.z+(i?(r()-.5)*1.18:0)],
       [.1,r()*4,.16],i?[.30+r()*.3,.16+r()*.16,.36]:[.66,.48,.53]));
-    scene.add(mergedMesh(stones),s.group);s.base=y+.49;s.group.position.set(s.x,s.base,s.z);s.timer=0;s.cooldown=0;
+    if(!s.species)scene.add(mergedMesh(stones));
+    scene.add(s.group);s.base=y+(s.species?0:.49);s.homeX=s.x;s.homeZ=s.z;s.group.position.set(s.x,s.base,s.z);s.timer=0;s.cooldown=0;
     s.group.name=s.title;
   }
   shop.catalog=[...(shop.catalog||[]),...sites];
@@ -98,14 +102,24 @@ export function buildWildlife(scene,shop,audio) {
     observe(s){if(s.cooldown>0)return;
       s.timer=2.7;s.cooldown=3.1;
       const tones=s.bird?[1780,2140,1860]:[1650,2040];
-      tones.forEach((f,i)=>audio.tone(f,{dur:s.bird?.12:.24,gain:.032,when:i*.19,attack:.028,slide:f*(s.bird?1.10:.77)}));
+      if (!s.species) tones.forEach((f,i)=>audio.tone(f,{dur:s.bird?.12:.24,gain:.032,when:i*.19,attack:.028,slide:f*(s.bird?1.10:.77)}));
       return shop.find(s.id,4);
     },
     update(dt,t,season,p){
       for(const s of sites){
-        s.group.visible=s.bird||season!=='winter';if(!s.group.visible)continue;
+        s.group.visible=s.bird||s.species==='fox'||season!=='winter';if(!s.group.visible)continue;
         s.cooldown=Math.max(0,s.cooldown-dt);s.timer=Math.max(0,s.timer-dt);
         if(Math.hypot(p.x-s.x,p.z-s.z)>65)continue;
+        if(s.species){
+          const t0=t*(s.species==='bear'?.19:.30);
+          const dx=2.4*Math.cos(t0),dz=1.15*Math.cos(2*t0);
+          s.x=s.homeX+2.4*Math.sin(t0);s.z=s.homeZ+.575*Math.sin(2*t0);
+          s.base=heightAt(s.x,s.z);s.group.position.set(s.x,s.base,s.z);s.group.rotation.y=Math.atan2(dx,dz);
+          const step=t*(s.species==='bear'?3.1:4.8);
+          s.legs.forEach((leg,i)=>leg.rotation.x=Math.sin(step+(i===1||i===2?Math.PI:0))*.18);
+          s.head.rotation.set(.04+.08*Math.sin(t0*1.6),.19*Math.sin(t0*2.4),0);
+          s.tail.rotation.y=.14*Math.sin(step*.5);continue;
+        }
         const gesture=Math.sin(s.timer/2.7*Math.PI);
         s.head.rotation.y=Math.sin(t*(s.bird?2.1:.84))*(s.bird?.45:.17);
         s.group.rotation.y=Math.atan2(p.x-s.x,p.z-s.z)+Math.sin(t*.8)*.10;
