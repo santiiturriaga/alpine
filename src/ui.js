@@ -4,6 +4,9 @@ import {
 import { ResortMap } from './resort-map.js';
 import { RouteGuide } from './route-guide.js';
 import { clamp, formatNumber, formatTime } from './util.js';
+import {
+  formatTravelDistance, onProfileChange, setSkierName, setSkierUnits, skierName, skiUnits, travelStats, unitPreference,
+} from './skier-profile.js';
 
 /* ═══════════════════════════════════════════════════════════════
    INTERFACE
@@ -12,6 +15,7 @@ import { clamp, formatNumber, formatTime } from './util.js';
    ═══════════════════════════════════════════════════════════════ */
 
 const $ = (id) => document.getElementById(id);
+const formatHeight = (metres) => `${formatNumber(metres * skiUnits().lengthFactor)} ${skiUnits().small}`;
 
 const NEARBY_MAP_SIZE = 160;
 const NEARBY_MAP_RADIUS = 70;
@@ -59,7 +63,7 @@ export class UI {
       guide: $('guide-screen'), map: $('map-screen'), pause: $('pause-screen'), summary: $('summary-screen'),
       fade: $('fade'),
       altitude: $('altitude'), mountain: $('mountain-name'), trailName: $('trail-name'),
-      statVertical: $('stat-vertical'), speed: $('speed'),
+      statVertical: $('stat-vertical'), speed: $('speed'), speedUnit: $('speed-unit'),
       coins: $('coin-count'), crystals: $('crystal-count'), instruments: $('instruments'),
       bigmap: $('bigmap'), nearbyMap: $('nearby-map'), pauseNearbyMap: $('pause-nearby-map'),
       prompt: $('interaction-prompt'), promptTitle: $('prompt-title'), promptSub: $('prompt-sub'),
@@ -82,6 +86,41 @@ export class UI {
     this.nearest = null;
     this.lastNearestCheck = 0;
     this.toastTimers = new Set();
+    this.bindProfile();
+  }
+
+  bindProfile() {
+    const form = $('profile-name-form'), input = $('profile-name');
+    const status = $('profile-name-status'), units = $('profile-units');
+    input.value = skierName();
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const accepted = setSkierName(input.value);
+      input.setAttribute('aria-invalid', String(!accepted));
+      if (accepted) input.value = skierName();
+      status.textContent = accepted ? (input.value ? 'Name saved' : 'Automatic callsign restored') :
+        'Choose a clean name of up to 24 characters.';
+    });
+    input.addEventListener('input', () => {
+      input.removeAttribute('aria-invalid');
+      status.textContent = '';
+    });
+    units.addEventListener('change', () => setSkierUnits(units.value));
+    const render = (event) => {
+      if (event?.type === 'preferences') {
+        if (document.activeElement !== input) input.value = skierName();
+        this.nearbyMapFrame = null;
+      }
+      const { metres, runs, resorts, mountains } = travelStats();
+      units.value = unitPreference();
+      this.setText($('profile-distance'), 'profileDistance', formatTravelDistance(metres));
+      for (const [kind, entries] of [['run', runs], ['resort', resorts], ['mountain', mountains]]) {
+        this.setText($(`profile-${kind}s`), `profile-${kind}s`, formatNumber(entries.length));
+        this.setText($(`profile-${kind}-list`), `profile-${kind}-list`, entries.sort((a, b) => a.localeCompare(b)).join(', ') || 'None yet');
+      }
+    };
+    onProfileChange(render);
+    render();
   }
 
   /* ── loading & screens ─────────────────────────────────────── */
@@ -252,7 +291,8 @@ export class UI {
   updateRide(progress, metres, seconds) {
     this.el.rideProgress.value = progress;
     const clock = formatTime(Math.ceil(seconds));
-    const distance = metres >= 1000 ? `${(metres / 1000).toFixed(2)} km` : `${Math.ceil(metres / 10) * 10} m`;
+    const { lengthFactor, distanceFactor, small } = skiUnits();
+    const distance = metres * distanceFactor >= 1 ? formatTravelDistance(metres) : `${Math.ceil(metres * lengthFactor / 10) * 10} ${small}`;
     this.setText(this.el.rideRemaining, 'rideRemaining', `${distance} · ${clock}`);
   }
 
@@ -321,16 +361,18 @@ export class UI {
     const nearUnload = trailName == null && Math.hypot(player.pos.x - ROUNDHOUSE_START.x, player.pos.z - ROUNDHOUSE_START.z) < 43;
     const trail = trailName ?? (nearUnload ? 'Roundhouse' : nearest?.run.named ? nearest.run.name : '');
     this.setText(this.el.mountain, 'mountain', mountain);
-    this.setText(this.el.altitude, 'altitude', `${formatNumber(player.pos.y)} m`);
+    this.setText(this.el.altitude, 'altitude', formatHeight(player.pos.y));
     this.setText(this.el.trailName, 'trail', trail);
-    this.setText(this.el.statVertical, 'vertical', `${formatNumber(Math.max(0, player.stats.vertical))} m`);
+    this.setText(this.el.statVertical, 'vertical', formatHeight(Math.max(0, player.stats.vertical)));
     $('gear-mode').hidden = !player.canChangeFootMode() || (player.footMode && (indoors || player.surfaceType === 'ground'));
     this.setText($('gear-mode-label'), 'gearMode', player.footMode ? 'Put on skis' : 'Walk');
     this.setText($('snow-surface'), 'surface', player.vehicleLabel ? ` · ${player.vehicleLabel}` : player.footMode ? ' · On foot' :
       player.surfaceType === 'ice' ? ' · Ice' : player.surfaceType === 'powder' ? ' · Powder' : '');
     this.setText(this.el.coins, 'coins', formatNumber(collectibles?.coinCount || 0));
     this.setText(this.el.crystals, 'crystals', String(collectibles?.crystalCount || 0));
-    this.setText(this.el.speed, 'speed', String(Math.round(player.speedKmh)));
+    const units = skiUnits();
+    this.setText(this.el.speed, 'speed', String(Math.round(player.speedKmh * units.speedFactor)));
+    this.setText(this.el.speedUnit, 'speedUnit', units.speed);
     this.drawNearbyMap(player, time);
     const boost=$('boost-readout');
     boost.hidden=player.boostTime<=0;
@@ -348,8 +390,11 @@ export class UI {
       longestAir = 0, trail = 'Alpine', elapsed = 0,
     } = data;
     this.setText(this.el.sumScore, 'sumScore', formatNumber(Math.round(score)));
-    this.setText(this.el.sumSpeed, 'sumSpeed', `${Math.round(topSpeed * 3.6)}`);
-    this.setText(this.el.sumVert, 'sumVert', formatNumber(Math.round(vertical)));
+    const units = skiUnits();
+    this.setText(this.el.sumSpeed, 'sumSpeed', `${Math.round(topSpeed * 3.6 * units.speedFactor)}`);
+    this.setText($('sum-speed-unit'), 'sumSpeedUnit', units.speed.toUpperCase());
+    this.setText(this.el.sumVert, 'sumVert', formatNumber(vertical * units.lengthFactor));
+    this.setText($('sum-vert-unit'), 'sumVertUnit', units.small.toUpperCase());
     this.setText(this.el.sumCoins, 'sumCoins', formatNumber(coins));
     this.setText(this.el.sumCrystals, 'sumCrystals', `${crystals}`);
     this.setText(this.el.sumAir, 'sumAir', longestAir.toFixed(1));
@@ -435,7 +480,10 @@ export class UI {
     ctx.strokeText('N', cx, 10);
     ctx.fillText('N', cx, 10);
     ctx.textAlign = 'left';
-    const ruler = 100 * scale;
+    const { lengthFactor, small } = skiUnits();
+    const rulerLength = small === 'ft' ? 300 : 100;
+    const ruler = rulerLength / lengthFactor * scale;
+    const rulerLabel = `${rulerLength} ${small}`;
     ctx.beginPath();
     ctx.moveTo(11, 150);
     ctx.lineTo(11, 154);
@@ -447,8 +495,8 @@ export class UI {
     ctx.stroke();
     ctx.strokeStyle = MAP_INK;
     ctx.lineWidth = 2.7;
-    ctx.strokeText('100 m', 17 + ruler, 156);
-    ctx.fillText('100 m', 17 + ruler, 156);
+    ctx.strokeText(rulerLabel, 17 + ruler, 156);
+    ctx.fillText(rulerLabel, 17 + ruler, 156);
   }
 
   configureMap(scene, settings, isOpen) {
@@ -461,7 +509,7 @@ export class UI {
   drawBigMap(player, time = 0) {
     this.resortMap.update(player, time);
     const nearest = this.nearest || (player ? this.findNearest(player, true, time) : null);
-    this.setText(this.el.mapAltitude, 'mapAltitude', player ? `${formatNumber(Math.round(player.pos.y))} m` : '');
+    this.setText(this.el.mapAltitude, 'mapAltitude', player ? formatHeight(player.pos.y) : '');
     this.setText(this.el.mapRunName, 'mapRun', nearest ? nearest.run.name : 'Alpine');
   }
 }

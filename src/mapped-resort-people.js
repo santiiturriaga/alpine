@@ -432,7 +432,8 @@ export function buildMappedResortPeople(scene, { config, world, liftSystem }) {
 
   function person(grade, props) {
     const p = {
-      id: people.length, grade, speed: 0, stride: 0, lean: 0, height: .91 + .17 * random(),
+      id: people.length, trafficSeed: (Math.imul(people.length + 1, 0x9e3779b1) >>> 0) / 4294967296,
+      grade, speed: 0, stride: 0, lean: 0, height: .91 + .17 * random(),
       board: random() < (grade === 'green' ? .18 : .35), boardSide: random() < .68 ? -1 : 1,
       jacket: pick(jacketColors[grade], random), pants: pick(pantsColors, random),
       helmet: pick(helmetColors, random), gear: pick(gearColors, random),
@@ -859,6 +860,9 @@ export function buildMappedResortPeople(scene, { config, world, liftSystem }) {
     }
   }
 
+  let density = 1;
+  const visiting = p => p.trafficSeed < density;
+
   function hitPlayer(previous, current, dt) {
     if (!(dt > 0)) return null;
     const dx = current.x - previous.x, dz = current.z - previous.z, length = dx * dx + dz * dz;
@@ -866,6 +870,7 @@ export function buildMappedResortPeople(scene, { config, world, liftSystem }) {
     const vx = dx / dt, vz = dz / dt;
     let hit = null, earliest = Infinity;
     for (const p of people) {
+      if (!visiting(p)) continue;
       if (p.state !== 'skiing' && p.state !== 'social' && p.state !== 'village walk') continue;
       if (p.immunity > clock || p.recovery > 0) continue;
       const t = length > 1e-8 ? clamp(((p.x - previous.x) * dx + (p.z - previous.z) * dz) / length, 0, 1) : 0;
@@ -890,6 +895,7 @@ export function buildMappedResortPeople(scene, { config, world, liftSystem }) {
     model.begin();
     stats.visible = 0;
     for (const p of people) {
+      if (!visiting(p)) continue;
       const d2 = camera ? (p.x - camera.position.x) ** 2 + (p.y - camera.position.y) ** 2 + (p.z - camera.position.z) ** 2 : 0;
       if (d2 > 295 ** 2 || stats.visible >= 72) continue;
       model.draw(p, clock, ground, d2 < 64 ** 2);
@@ -900,10 +906,11 @@ export function buildMappedResortPeople(scene, { config, world, liftSystem }) {
 
   return {
     group, update, hitPlayer, people,
+    setDensity(value) { density = value; },
     debug() {
       const states = {};
       for (const p of people) states[p.state] = (states[p.state] ?? 0) + 1;
-      return { ...stats, people: people.length, states,
+      return { ...stats, people: people.length, states, density,
         stations: stations.map(({ lift, circuits, queue, rests }) => ({ lift: lift.def.name,
           routes: circuits.map(circuit => ({ name: circuit.run.name || lift.def.name + ' practice slope',
             id: circuit.run.id, length: Math.round(circuit.path.length) })),

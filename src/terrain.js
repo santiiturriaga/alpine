@@ -12,9 +12,10 @@ import { climateUniforms } from './climate-state.js';
 import { coniferGeometry, coniferMaterial } from './conifers.js';
 import { ForestCell, makeForestCrowns, preloadForestCrowns } from './forest-lod.js';
 import { createSkiSnowSurface, SKI_SNOW_FOOTPRINT } from './ski-snow-surface.js';
-import { prepareValleyLakes, valleyLakeAt } from './valley-scenery.js';
+import { prepareValleyLakes } from './valley-scenery.js';
 import { createStationGrading } from './station-sites.js';
 import { gradeGlacierCave } from './glacier-cave.js';
+import { compressSnow } from './snow-traffic.js';
 
 export const terrain = {
   heightAt,
@@ -106,7 +107,7 @@ function buildSnowField() {
       const pad = 1 - smoothstep(23, 99, crossing);
       const powder = (.26 + .74 * smoothstep(.21, .78, drift)) * (1 - .88 * smoothstep(.18, .72, piste)) * (1 - pad);
       const scale = smoothstep(745, 1210, h) * (1 - pad) * (1 - .61 * powder);
-      const ice = smoothstep(.33, .63, scoured + .185 * piste + .15 * wind)
+      const ice = smoothstep(.285, .57, scoured + .205 * piste + .15 * wind)
         * smoothstep(.06, .71, .55 * piste + .67 * wind) * scale;
       data[key] = Math.round(255 * piste);
       data[key + 1] = Math.round(255 * powder);
@@ -215,7 +216,7 @@ export function surfaceAt(x, z, out = {}) {
   out.grip = 1 - .61 * ice - .27 * powder;
   out.drag = 1 - .31 * ice + .53 * powder;
   out.powder = (.11 + powder * .88) * (1 - ice) * cover;
-  return out;
+  return compressSnow(x, z, out);
 }
 
 function makePatches(n, attributes, material, skipCell = () => false, patch = 64) {
@@ -296,6 +297,9 @@ function makeTerrainDetail(mesh, material) {
   const spacingZ = WORLD.sizeZ / (n - 1);
   const verts = terrainTile * detailStep + 1;
   const detailWidth = verts - 1;
+  const cache = new Map();
+  const builders = new Map();
+  const cacheLimit = 14;
   const indices = new Uint16Array(detailWidth * detailWidth * 6);
   let offset = 0;
   for (let j = 0; j < detailWidth; j++) {
@@ -306,7 +310,7 @@ function makeTerrainDetail(mesh, material) {
     }
   }
 
-  function buildTile(ix, iz) {
+  function* buildTile(ix, iz) {
     const original = tiles[iz * tileCount + ix];
     const values = new Float32Array(verts ** 2);
     const positions = new Float32Array(values.length * 3);
@@ -326,8 +330,11 @@ function makeTerrainDetail(mesh, material) {
         const gx = x0 + i / detailStep, k = j * verts + i;
         const y = detailVertex(gx, gz);
         values[k] = y;
-        positions.set([WORLD.minX + gx * cell, y, WORLD.minZ + gz * spacingZ], k * 3);
+        positions[k * 3] = WORLD.minX + gx * cell;
+        positions[k * 3 + 1] = y;
+        positions[k * 3 + 2] = WORLD.minZ + gz * spacingZ;
       }
+      if (j % 8 === 7) yield;
     }
 
     for (let j = 0; j < verts; j++) {
@@ -345,6 +352,7 @@ function makeTerrainDetail(mesh, material) {
         normals[k * 3 + 2] = lerp(interpolate(baseNormal, p, 2, u - x, v - z), dz * inv, mix);
         for (let ch = 0; ch < 3; ch++) colors[k * 3 + ch] = interpolate(color, p, ch, u - x, v - z);
       }
+      if (j % 8 === 7) yield;
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -354,37 +362,71 @@ function makeTerrainDetail(mesh, material) {
     const detail = new THREE.Mesh(geometry, material);
     detail.receiveShadow = true;
     detail.name = 'Detailed snow surface';
-    terrain.add(detail);
-    original.visible = false;
     return { values, detail, original };
   }
 
-  function updateDetail(...centers) {
+  function detailAround(centers, deadline) {
     const needed = new Set();
+    const ahead = new Set();
     for (const center of centers) {
       const [gx, gz] = worldIndex(center.x, center.z, WORLD);
       const ix = Math.min(tileCount - 1, Math.floor(gx / terrainTile));
       const iz = Math.min(tileCount - 1, Math.floor(gz / terrainTile));
       needed.add(iz * tileCount + ix);
       const edgeX = gx - ix * terrainTile, edgeZ = gz - iz * terrainTile;
-      if (edgeX < 5 && ix > 0) needed.add(iz * tileCount + ix - 1);
-      if (edgeX > terrainTile - 5 && ix < tileCount - 1) needed.add(iz * tileCount + ix + 1);
-      if (edgeZ < 5 && iz > 0) needed.add((iz - 1) * tileCount + ix);
-      if (edgeZ > terrainTile - 5 && iz < tileCount - 1) needed.add((iz + 1) * tileCount + ix);
+      for (const [distance, neighbor, available] of [
+        [edgeX, iz * tileCount + ix - 1, ix > 0],
+        [terrainTile - edgeX, iz * tileCount + ix + 1, ix < tileCount - 1],
+        [edgeZ, (iz - 1) * tileCount + ix, iz > 0],
+        [terrainTile - edgeZ, (iz + 1) * tileCount + ix, iz < tileCount - 1],
+      ]) {
+        if (!available) continue;
+        if (distance < 5) needed.add(neighbor);
+        else if (distance < 10 && deadline !== Infinity) ahead.add(neighbor);
+      }
     }
-    for (const key of needed) {
-      if (!detailTiles.has(key)) detailTiles.set(key, buildTile(key % tileCount, Math.floor(key / tileCount)));
+    const wanted = new Set([...needed, ...ahead]);
+    for (const key of builders.keys()) if (!wanted.has(key)) builders.delete(key);
+    for (const key of wanted) {
+      if (detailTiles.has(key)) continue;
+      let tile = cache.get(key);
+      if (!tile) {
+        if (performance.now() >= deadline) continue;
+        let builder = builders.get(key);
+        if (!builder) builders.set(key, builder = buildTile(key % tileCount, Math.floor(key / tileCount)));
+        let result;
+        do result = builder.next(); while (!result.done && performance.now() < deadline);
+        if (!result.done) continue;
+        builders.delete(key);
+        tile = result.value;
+      }
+      cache.delete(key);
+      if (needed.has(key)) {
+        terrain.add(tile.detail);
+        tile.original.visible = false;
+        detailTiles.set(key, tile);
+      } else cache.set(key, tile);
     }
     for (const [key, tile] of detailTiles) {
       if (needed.has(key)) continue;
       terrain.remove(tile.detail);
-      tile.detail.geometry.dispose();
       tile.original.visible = true;
+      tile.detail.material = material;
       detailTiles.delete(key);
+      cache.set(key, tile);
+    }
+    while (cache.size > cacheLimit) {
+      const victim = cache.keys().next().value;
+      cache.get(victim).detail.geometry.dispose();
+      cache.delete(victim);
     }
   }
 
-  return { terrain, updateDetail };
+  return {
+    terrain,
+    updateDetail(...centers) { detailAround(centers, Infinity); },
+    streamDetail(...centers) { detailAround(centers, performance.now() + 2.2); },
+  };
 }
 
 function drawOldTracks(origin, span, seed, count, maxLength) {
@@ -776,7 +818,8 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
   const snowWind = new THREE.Color().setRGB(0.83, 0.895, 0.945, THREE.SRGBColorSpace);
   const col = new THREE.Color();
   const blurred = boxBlurGrid(gradedHeights.slice(), 3, 1);
-  const lake = new THREE.Color(0x416d7e);
+  const winterShore = new THREE.Color(0x95aeba);
+  const waterEdge = boxBlurGrid(Float32Array.from(landCover, kind => Number(kind === 80)), 1, 2);
 
   onProgress(0.5, 'Shading the alpine…');
   await yieldFrame();
@@ -830,7 +873,9 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
       col.multiplyScalar(1 - conc * 0.85);
       // very subtle large-scale tonal drift
       col.offsetHSL(0, 0, nFine * 0.014);
-      if (cover === 80) col.copy(valleyLakeAt(x,z) ? snowShade : lake);
+      // Valley water is drawn by the exact lake outlines. Any high-elevation
+      // water pixels grade into a pale frozen shoreline over the DEM.
+      if (waterEdge[k] > .01) col.lerp(winterShore, waterEdge[k] * .60);
 
       colors[k * 3] = col.r;
       colors[k * 3 + 1] = col.g;
@@ -938,6 +983,7 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
 
   terrain.mesh = detail.terrain;
   terrain.updateDetail = detail.updateDetail;
+  terrain.streamDetail = detail.streamDetail;
   terrain.updateSkiSnow = skiSnow.update;
   terrain.skiSnowDepthAt = skiSnow.depthAt;
   terrain.sampleSnowSurface = sampleSurface;

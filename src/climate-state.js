@@ -7,6 +7,8 @@ export const climateUniforms = {
   spring: { value: 0 },
   wetness: { value: 0 },
   night: { value: 0 },
+  realism: { value: 0 },
+  terrainSun: { value: 1 },
 };
 
-export const climateState = { season: 'winter', weather: 'flurries', time: 'day' };
+export const climateState = { season: 'winter', weather: 'flurries', time: 'day', traffic: 'scheduled' };

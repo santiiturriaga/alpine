@@ -25,7 +25,7 @@ import { buildSkiersPlaza, SKIERS_PLAZA_BUILDING_IDS } from './skiers-plaza.js';
 import { buildSummitLandmarks, buildAlpineChairStation } from './alpine-landmarks.js';
 import { buildingData } from '../data/osm-whistler.js';
 import { buildLodgeInteriors, buildBlackcombTerminal, ENTERABLE_VILLAGE_IDS, lodgeSocialSlots } from './lodge-interiors.js';
-import { buildMappedTerminal, buildStationOperations, REPLACED_STATION_BUILDING_IDS } from './lift-stations.js';
+import { buildChairTurnaround, buildMappedTerminal, buildStationOperations, REPLACED_STATION_BUILDING_IDS } from './lift-stations.js';
 import { makeGondolaShell, addGondolaShell, attachCreeksideReflection, gondolaFleetGeometry,
   gondolaDoorsAtDistance } from './gondola-shell.js';
 import { ropeOffset, stationPoint, stationSite } from './station-sites.js';
@@ -1224,6 +1224,44 @@ function surfaceLift(def, group, grid, material) {
   } };
 }
 
+function terminalTurnEndpoints(samplers, upper) {
+  const start = new THREE.Vector3(), end = new THREE.Vector3();
+  const inward = new THREE.Vector3(), outward = new THREE.Vector3();
+  if (upper) {
+    samplers[0].at(1, start, inward);
+    samplers[1].at(1, end, outward);
+    outward.negate();
+  } else {
+    samplers[1].at(0, start, inward);
+    inward.negate();
+    samplers[0].at(0, end, outward);
+  }
+  inward.setY(0).normalize();
+  outward.setY(0).normalize();
+  const across = end.clone().sub(start).normalize();
+  const axis = inward.clone().sub(outward).normalize();
+  axis.addScaledVector(across, -axis.dot(across)).normalize();
+  return { start, end, inward, outward, axis, across, radius: start.distanceTo(end) / 2 };
+}
+
+function terminalTurnPath({ start, end, inward, outward, axis, across, radius }, depth) {
+  // Match the two exact sampler endpoints and tangents. The rounded end stays
+  // level at the drive elevation while the grip moves between the haul lanes.
+  const a = start.clone().addScaledVector(axis, depth), b = end.clone().addScaledVector(axis, depth);
+  const center = a.clone().lerp(b, .5), nose = center.clone().addScaledVector(axis, radius);
+  const handle = .5522847498 * radius, lead = depth / 3;
+  const curve = new THREE.CurvePath();
+  curve.add(new THREE.CubicBezierCurve3(start, start.clone().addScaledVector(inward, lead),
+    a.clone().addScaledVector(axis, -lead), a));
+  curve.add(new THREE.CubicBezierCurve3(a, a.clone().addScaledVector(axis, handle),
+    nose.clone().addScaledVector(across, -handle), nose));
+  curve.add(new THREE.CubicBezierCurve3(nose, nose.clone().addScaledVector(across, handle),
+    b.clone().addScaledVector(axis, handle), b));
+  curve.add(new THREE.CubicBezierCurve3(b, b.clone().addScaledVector(axis, -lead),
+    end.clone().addScaledVector(outward, -lead), end));
+  return { curve, center };
+}
+
 function buildLifts(scene, grid) {
   const group = new THREE.Group();
   group.name = 'Lift network';
@@ -1239,8 +1277,7 @@ function buildLifts(scene, grid) {
   const tangent = new THREE.Vector3();
   let occupied = null;
 
-  function gondolaCircuit(samplers, speed, large = false) {
-    const slowSpeed = large ? .76 : .65;
+  function liftCircuit(samplers, speed, { slowSpeed, turnDepth, approach, cabin }) {
     const sections = [], joins = [], turns = [];
     let duration = 0;
     const append = (section) => {
@@ -1248,53 +1285,58 @@ function buildLifts(scene, grid) {
       sections.push(section); joins.push(duration);
     };
     const timedHaul = (sampler, direction) => {
-      const length = sampler.total, zone = Math.min(24, length * .08);
-      const steps = Math.max(64, Math.ceil(length / .5));
-      const times = new Float64Array(steps + 1);
-      const velocity = d => lerp(slowSpeed, speed, smoothstep(0, zone, Math.min(d, length-d)));
-      const stride = length / steps;
-      for(let i=1;i<=steps;i++) times[i] = times[i-1] + stride * .5 * (1/velocity((i-1)*stride) + 1/velocity(i*stride));
-      const distanceFractionAt=seconds=>{
-        let lo=0,hi=steps;
-        while(lo<hi-1){const mid=(lo+hi)>>1;if(times[mid]<=seconds)lo=mid;else hi=mid;}
-        const fraction=(seconds-times[lo])/(times[hi]-times[lo]||1);
-        return (lo+clamp(fraction,0,1))/steps;
-      };
-      return { kind:'haul', direction, duration:times[steps], length, zone,
+      const length = sampler.total, zone = Math.min(approach, length * .08);
+      let duration = length / speed;
+      let distanceFractionAt = seconds => clamp(seconds / duration, 0, 1);
+      if (slowSpeed < speed) {
+        const steps = Math.max(64, Math.ceil(length / .5));
+        const times = new Float64Array(steps + 1);
+        const velocity = d => lerp(slowSpeed, speed, smoothstep(0, zone, Math.min(d, length - d)));
+        const stride = length / steps;
+        for (let i = 1; i <= steps; i++) {
+          times[i] = times[i - 1] + stride * .5 * (1 / velocity((i - 1) * stride) + 1 / velocity(i * stride));
+        }
+        duration = times[steps];
+        distanceFractionAt = seconds => {
+          let lo = 0, hi = steps;
+          while (lo < hi - 1) {
+            const mid = (lo + hi) >> 1;
+            if (times[mid] <= seconds) lo = mid;
+            else hi = mid;
+          }
+          const fraction = (seconds - times[lo]) / (times[hi] - times[lo] || 1);
+          return (lo + clamp(fraction, 0, 1)) / steps;
+        };
+      }
+      return { kind:'haul', direction, duration, length, zone,
         distanceFractionAt,
         at(seconds, position, tangent, state) {
           const along=distanceFractionAt(seconds);
           const t=direction?1-along:along;
           sampler.at(t,position,tangent);if(direction)tangent.negate();
-          if(state){state.direction=direction;state.t=t;state.kind='haul';
-            state.doorOpening=gondolaDoorsAtDistance(Math.min(along,1-along)*length);}
+          if (state) {
+            state.direction = direction; state.t = t; state.kind = 'haul';
+            if (cabin) state.doorOpening = gondolaDoorsAtDistance(Math.min(along, 1 - along) * length);
+          }
         },
       };
     };
     const turn = (upper) => {
-      const start=new THREE.Vector3(),end=new THREE.Vector3(),inward=new THREE.Vector3(),outward=new THREE.Vector3();
-      // A cabin keeps its surveyed position and yaw at each rope/drive join.
-      // Project the station track onto its level loading deck; cabins remain
-      // upright while the hangers circulate behind the public loading bay.
-      if(upper){samplers[0].at(1,start,inward);samplers[1].at(1,end,outward);outward.negate();}
-      else {samplers[1].at(0,start,inward);inward.negate();samplers[0].at(0,end,outward);}
-      inward.y=outward.y=0;inward.normalize();outward.normalize();
-      const axis=inward.clone().sub(outward).normalize(),across=end.clone().sub(start).normalize();
-      const radius=start.distanceTo(end)/2,leg=large?6:7,k=.5522847498;
-      const a=start.clone().addScaledVector(axis,leg),b=end.clone().addScaledVector(axis,leg);
-      const center=a.clone().lerp(b,.5),nose=center.clone().addScaledVector(axis,radius);
-      const curve=new THREE.CurvePath();
-      curve.add(new THREE.CubicBezierCurve3(start,start.clone().addScaledVector(inward,leg/3),a.clone().addScaledVector(axis,-leg/3),a));
-      curve.add(new THREE.CubicBezierCurve3(a,a.clone().addScaledVector(axis,k*radius),nose.clone().addScaledVector(across,-k*radius),nose));
-      curve.add(new THREE.CubicBezierCurve3(nose,nose.clone().addScaledVector(across,k*radius),b.clone().addScaledVector(axis,k*radius),b));
-      curve.add(new THREE.CubicBezierCurve3(b,b.clone().addScaledVector(axis,-leg/3),end.clone().addScaledVector(outward,-leg/3),end));
-      curve.arcLengthDivisions=192;
-      const length=curve.getLength();turns.push(curve);
-      return {kind:'turn',upper,curve,length,duration:length/slowSpeed,
+      const endpoints = terminalTurnEndpoints(samplers, upper);
+      const turnPath = terminalTurnPath(endpoints, turnDepth);
+      const { curve } = turnPath;
+      const length = curve.getLength();
+      const duration = length / slowSpeed;
+      turns.push(curve);
+      return {kind:'turn',upper,curve,length,duration,endpoints, center: turnPath.center,
         at(seconds,position,tangent,state){
-          const t=clamp(seconds/(length/slowSpeed),0,1);
-          position.copy(curve.getPointAt(t));tangent.copy(curve.getTangentAt(t)).normalize();
-          if(state){state.direction=null;state.t=upper?1:0;state.kind='turn';state.doorOpening=1;}
+          const t = clamp(seconds / duration, 0, 1);
+          curve.getPoint(t, position);
+          curve.getTangent(t, tangent);
+          if (state) {
+            state.direction = null; state.t = upper ? 1 : 0; state.kind = 'turn';
+            if (cabin) state.doorOpening = 1;
+          }
         },
       };
     };
@@ -1351,13 +1393,23 @@ function buildLifts(scene, grid) {
     const geometry = chair ? chairGeometries.get(chairKey)
       : makeCabinGeometry(isP2P ? '#b81630' : /Excalibur/.test(def.name)?'#e2e5de':'#273840', '#ddd9cf', isP2P, def.name==='Creekside Gondola');
     const perSide = Math.max(3, Math.ceil(samplers[0].total / (isP2P ? 300 : chair ? 49 : 94)));
-    // Ordinary detachable gondolas slow through both drive halls and use the
-    // same timed haul for the occupied carrier.
-    const circulation = (def.type==='gondola' || isP2P) ? gondolaCircuit(samplers,def.speed,isP2P) : null;
-    if(circulation){
-      for(const curve of circulation.turns){
-        const rail=new THREE.Mesh(new THREE.TubeGeometry(curve,48,.085,6,false),cableMat);
-        rail.name=def.name+' · station turnaround drive rail';group.add(rail);
+    const fixedChair = chair && ((def.seats || 2) <= 3 || def.name === 'Showcase Quad');
+    const circulation = liftCircuit(samplers, def.speed, {
+      slowSpeed: chair ? (fixedChair ? def.speed : 1.1) : isP2P ? .76 : .65,
+      turnDepth: fixedChair ? 1.9 : chair ? 4.45 : isP2P ? 6 : 7,
+      approach: chair ? 18 : 24,
+      cabin: !chair,
+    });
+    const wheels = [];
+    for (const section of [circulation.sections[1], circulation.sections[3]]) {
+      if (chair) {
+        const ropeWrap = fixedChair ? section : terminalTurnPath(section.endpoints, .84);
+        const rope = new THREE.Mesh(new THREE.TubeGeometry(ropeWrap.curve, 64, .044, 8), cableMat);
+        rope.name = def.name + ' · bullwheel rope wrap'; group.add(rope);
+        wheels.push(buildChairTurnaround(group, def, section, ropeWrap.center, fixedChair));
+      } else {
+        const rail = new THREE.Mesh(new THREE.TubeGeometry(section.curve, 48, .085, 6, false), cableMat);
+        rail.name = def.name + ' · station turnaround drive rail'; group.add(rail);
       }
     }
     const shell=geometry.userData.carrierShell;
@@ -1369,7 +1421,7 @@ function buildLifts(scene, grid) {
     carriers.boundingSphere = new THREE.Box3()
       .setFromPoints(samplers.flatMap((sampler) => sampler.points))
       .getBoundingSphere(new THREE.Sphere());
-    carriers.boundingSphere.radius += circulation ? 14 : 8;
+    carriers.boundingSphere.radius += 14;
     group.add(carriers);
     if(shell) {
       carriers.userData.gondolaCarrier=true;
@@ -1393,7 +1445,7 @@ function buildLifts(scene, grid) {
     passenger.visible = false;
     passenger.castShadow = true;
     group.add(passenger);
-    lifts.push({ def, samplers, supports, perSide, carriers, passenger, circulation, doorOpen, setPassengerDoors });
+    lifts.push({ def, samplers, supports, perSide, carriers, passenger, circulation, wheels, doorOpen, setPassengerDoors });
   }
 
   const regular = towers.filter((t) => !t.isP2P);
@@ -1471,41 +1523,24 @@ function buildLifts(scene, grid) {
     const state={};
     for (const lift of lifts) {
       if (!lift.def.aerial) { lift.surfaceUpdate?.(clock); continue; }
-      const { samplers, carriers, perSide, circulation, doorOpen } = lift;
-      if(circulation){
-        const count=perSide*2,headway=circulation.duration/count;
-        for(let i=0;i<count;i++){
-          circulation.at(clock+i*headway,position,tangent,state);
-          const own=occupied?.lift===lift;
-          const sameRope=own&&state.direction===occupied.direction
-            &&Math.abs(state.t-occupied.t)*samplers[occupied.direction].total<8;
-          const intersectsRider=own&&position.distanceToSquared(lift.passenger.position)<2.8**2;
-          dummy.position.copy(position);dummy.rotation.set(0,Math.atan2(tangent.x,tangent.z),0);
-          dummy.scale.setScalar(sameRope||intersectsRider?0:1);dummy.updateMatrix();carriers.setMatrixAt(i,dummy.matrix);
-          doorOpen.setX(i,state.doorOpening);
-        }
-        carriers.instanceMatrix.needsUpdate=true;
-        doorOpen.needsUpdate=true;
-        continue;
-      }
-      for (let direction = 0; direction < 2; direction++) {
-        const sampler = samplers[direction];
-        const travel=sampler.total/lift.def.speed;
-        for (let i = 0; i < perSide; i++) {
-          const progress=(i / perSide + clock / travel) % 1;
-          const t = direction ? 1 - progress : progress;
-          const overlap = occupied?.lift === lift && occupied.direction === direction
-            && Math.abs(t - occupied.t) * sampler.total < 8;
-          sampler.at(t, position, tangent);
-          dummy.position.copy(position);
-          dummy.rotation.set(0, Math.atan2(tangent.x, tangent.z) + (direction ? Math.PI : 0), 0);
-          dummy.scale.setScalar(overlap ? 0 : 1);
-          dummy.updateMatrix();
-          const index=direction*perSide+i;
-          carriers.setMatrixAt(index,dummy.matrix);
-        }
+      const { samplers, carriers, perSide, circulation, wheels, doorOpen } = lift;
+      for (const wheel of wheels) wheel(clock);
+      const count = perSide * 2, headway = circulation.duration / count;
+      const own = occupied?.lift === lift;
+      for (let i = 0; i < count; i++) {
+        circulation.at(clock + i * headway, position, tangent, state);
+        const sameRope = own && state.direction === occupied.direction
+          && Math.abs(state.t - occupied.t) * samplers[occupied.direction].total < 8;
+        const intersectsRider = own && position.distanceToSquared(lift.passenger.position) < 2.8 ** 2;
+        dummy.position.copy(position);
+        dummy.rotation.set(0, Math.atan2(tangent.x, tangent.z), 0);
+        dummy.scale.setScalar(sameRope || intersectsRider ? 0 : 1);
+        dummy.updateMatrix();
+        carriers.setMatrixAt(i, dummy.matrix);
+        doorOpen?.setX(i, state.doorOpening);
       }
       carriers.instanceMatrix.needsUpdate = true;
+      if (doorOpen) doorOpen.needsUpdate = true;
     }
   }
 
@@ -2153,7 +2188,7 @@ function buildFlags(scene) {
 
 const cameraObstacles = new Set([
   'lodge', 'station', 'building-wall', 'lift-tower', 'furniture', 'landmark',
-  'plaza-building-wall', 'plaza-railing', 'plaza-planter', 'plaza-canopy', 'tree', 'fallen log',
+  'plaza-building-wall', 'plaza-railing', 'plaza-planter', 'plaza-canopy', 'tree', 'fallen log', 'ice-wall',
 ]);
 
 export async function buildEnvironment(scene, { onProgress = () => {} } = {}) {

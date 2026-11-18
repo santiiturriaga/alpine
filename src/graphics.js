@@ -1,4 +1,5 @@
 import { ACESFilmicToneMapping, PCFSoftShadowMap, SRGBColorSpace, Vector3, WebGLRenderer } from 'three';
+import { climateUniforms } from './climate-state.js';
 
 // All resorts keep the same shadow shader when changing detail. Resizing its
 // depth target costs one allocation; toggling shadows recompiles visible materials.
@@ -10,6 +11,7 @@ export const graphicsProfiles = [
 ];
 
 const preference = 'alpine.graphics';
+const realismPreference = 'alpine.realism';
 const shadowRight = new Vector3();
 const shadowUp = new Vector3();
 
@@ -82,6 +84,24 @@ export function applyShadowResolution(renderer, sun, resolution) {
     sun.shadow.mapSize.set(resolution, resolution);
   }
   renderer.shadowMap.needsUpdate = true;
+}
+
+export function bindRealism(button, query) {
+  let enabled;
+  try { enabled = localStorage.getItem(realismPreference) === 'on'; } catch { enabled = false; }
+  if (query.has('realism')) enabled = query.get('realism') === 'on';
+  const update = () => {
+    climateUniforms.realism.value = Number(enabled);
+    button.classList.toggle('on', enabled);
+    button.setAttribute('aria-pressed', String(enabled));
+    button.querySelector('span').textContent = enabled ? 'ON' : 'OFF';
+  };
+  update();
+  button.addEventListener('click', () => {
+    enabled = !enabled;
+    try { localStorage.setItem(realismPreference, enabled ? 'on' : 'off'); } catch {}
+    update();
+  });
 }
 
 export function updateSunShadow(renderer, sun, direction, anchor, radius = sun.shadow.camera.right) {

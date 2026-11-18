@@ -1,6 +1,6 @@
 import { addPassGate } from './pass-gates.js';
 import * as THREE from 'three';
-import { LIFTS, RUNS, PEAK_TO_PEAK } from './worlddata.js';
+import { LIFTS, RUNS, FITZSIMMONS, HARMONY_EXPRESS, PEAK_EXPRESS, PEAK_TO_PEAK } from './worlddata.js';
 import { heightAt } from './terrain.js';
 import { box, beam, part, mergedMesh, mergeParts } from './scenery.js';
 import { makeCanvas, canvasTexture } from './util.js';
@@ -258,21 +258,17 @@ function curvedHood(parent, parts, { halfW = 4.4, eave = 4.3, rise = 1.85, lengt
   return { rear, front };
 }
 
-function fixedChair(parent, frame, grid, def, base) {
-  const parts = [], wheelY = 2.85, radius = def.seats >= 4 ? 2.4 : 1.9;
+function fixedDriveStand(parts, frame, grid) {
   footing(parts, frame, 0, -1.9, 1.4, 1.5, .07);
   parts.push(box(1.05, 2.25, 1.15, '#bac1be', [0, 1.075, -1.9]));
   parts.push(box(1.55, .42, 1.8, '#8a9799', [0, 2.30, -1.9]));
-  parts.push(box(2.6, .24, 5.4, steel, [0, 2.62, -.3]));
-  const wheel = new THREE.TorusGeometry(radius, .11, 8, 48); wheel.rotateX(Math.PI / 2);
-  parts.push(part(wheel, '#aab6b7', [0, wheelY, -1.9]));
-  const inner = new THREE.TorusGeometry(radius - .23, .045, 6, 48); inner.rotateX(Math.PI / 2);
-  parts.push(part(inner, '#58686d', [0, wheelY, -1.9]));
-  for (let i = 0; i < 8; i++) {
-    const a = i * Math.PI / 4;
-    parts.push(beam([0,wheelY,-1.9],[Math.sin(a)*radius,wheelY,-1.9+Math.cos(a)*radius],.12,.18,steel));
-  }
-  parts.push(part(new THREE.CylinderGeometry(.31,.31,.45,14), '#778c93', [0,wheelY,-1.9]));
+  parts.push(box(2.1, .17, 4.6, steel, [0, 2.55, -.8]));
+  postCollider(grid, frame, 0, -1.9, .8);
+}
+
+function fixedChair(parent, frame, grid, def, base) {
+  const parts = [];
+  fixedDriveStand(parts, frame, grid);
   // Ladder, tensioning gear and an operator hut distinguish open fixed grips.
   for(let i=0;i<7;i++) parts.push(box(.73,.048,.055,steel,[1.02,.36+i*.32,-2.55]));
   for(const x of [.66,1.38]) parts.push(box(.055,2.25,.055,steel,[x,1.35,-2.55]));
@@ -282,7 +278,94 @@ function fixedChair(parent, frame, grid, def, base) {
   parts.push(box(2.1,1,.06,'#526e78',[5,1.36,-4]));
   groundBoard(parent, parts, frame, def.name.toUpperCase(), base ? 'LOAD HERE' : 'UNLOAD', -3.4, -6.8, 3);
   addParts(parent, parts, { roughness:.61,metalness:.25 });
-  postCollider(grid,frame,0,-1.9,.8); postCollider(grid,frame,5,-2.5,1.5);
+  postCollider(grid,frame,5,-2.5,1.5);
+}
+
+export function buildChairTurnaround(parent, def, turn, wheelCenter, fixedGrip) {
+  const { start, end, inward, outward, axis, radius } = turn.endpoints;
+  const station = new THREE.Group();
+  const terminal = turn.upper ? 'upper' : 'base';
+  station.name = `${def.name} · ${terminal} return machinery`;
+  station.position.copy(start).lerp(end, .5);
+  station.rotation.y = Math.atan2(axis.x, axis.z);
+  parent.add(station);
+
+  const wheel = new THREE.Group();
+  const wheelDepth = wheelCenter.clone().sub(station.position).dot(axis);
+  wheel.position.z = wheelDepth;
+  wheel.name = def.name + ' · rotating bullwheel';
+  station.add(wheel);
+  const rims = [];
+  for (const [y, r, gauge, paint] of [[-.095, radius - .067, .064, '#9ca8a8'],
+    [0, radius - .055, .049, '#364249'], [.095, radius - .067, .064, '#acb7b5']]) {
+    rims.push(part(new THREE.TorusGeometry(r, gauge, 8, 56), paint, [0, y, 0], [Math.PI/2, 0, 0]));
+  }
+  rims.push(part(new THREE.CylinderGeometry(.34, .34, .31, 16), '#616f74', [0, -.025, 0]));
+  rims.push(part(new THREE.CylinderGeometry(.21, .21, .08, 12), '#a9b6b4', [0, -.19, 0]));
+  for (let i = 0; i < 8; i++) {
+    const angle = i * Math.PI/4, reach = radius - .13;
+    const center = (reach + .25) * .5;
+    rims.push(box(.20, .125, reach - .25, i === 0 ? '#cb623d' : '#829398',
+      [Math.sin(angle) * center, -.035, Math.cos(angle) * center], [0, angle, 0]));
+  }
+  addParts(wheel, rims, { roughness: .47, metalness: .39 });
+
+  if (!fixedGrip) {
+    const wide = def.id === FITZSIMMONS, alpine = def.id === HARMONY_EXPRESS || def.id === PEAK_EXPRESS;
+    const extension = wide ? 8.7 : 5.6;
+    const rail = new THREE.CurvePath();
+    rail.add(new THREE.LineCurve3(start.clone().addScaledVector(inward, -extension), start));
+    turn.curve.curves.forEach(segment => rail.add(segment));
+    rail.add(new THREE.LineCurve3(end, end.clone().addScaledVector(outward, extension)));
+    const upperRail = new THREE.Mesh(new THREE.TubeGeometry(rail, 96, .081, 8),
+      new THREE.MeshStandardMaterial({ color: '#83969f', roughness: .38, metalness: .50 }));
+    upperRail.name = def.name + ' · detachable grip return rail';
+    upperRail.position.y = .112;
+    upperRail.receiveShadow = true;
+    parent.add(upperRail);
+
+    const crossbarHalf = wide ? 6.65 : alpine ? 3.64 : 3.74;
+    const crossbarY = wide ? 1.36 : alpine ? .67 : 1.0;
+    const crossbarEnds = wide ? [-9.4, 5.4] : alpine ? [-3.68, 3.79] : [-4.55, 4.72];
+    const assembly = [
+      box(.57, .27, extension + 6.0, '#485860', [0, .77, (6.0 - extension) / 2]),
+      box(.87, .40, 1.11, '#546971', [0, .45, wheelDepth]),
+      part(new THREE.CylinderGeometry(.27, .27, .34, 14), '#809095', [0, .22, wheelDepth]),
+      box(.49, .36, .59, '#7f8888', [0, .51, wheelDepth - .78]),
+    ];
+    for (const z of crossbarEnds) {
+      assembly.push(box(crossbarHalf * 2, .17, .32, '#56656c', [0, crossbarY, z]));
+      for (const side of [-1, 1]) {
+        const x = side * crossbarHalf;
+        assembly.push(beam([0, .78, z], [x, crossbarY, z], .12, .12, '#647880'));
+        assembly.push(box(.24, .56, .37, '#617076', [x, crossbarY - .23, z]));
+      }
+    }
+    const tire = new THREE.CylinderGeometry(.117, .117, .17, 12).rotateZ(Math.PI/2);
+    const hub = new THREE.CylinderGeometry(.064, .064, .206, 10).rotateZ(Math.PI/2);
+    const xAxis = new THREE.Vector3(axis.z, 0, -axis.x);
+    const point = new THREE.Vector3(), tangent = new THREE.Vector3();
+    const count = Math.ceil(rail.getLength() / .60);
+    for (let i = 1; i < count; i++) {
+      const t = i/count;
+      rail.getPoint(t, point).sub(station.position);
+      rail.getTangent(t, tangent);
+      const x = point.dot(xAxis), z = point.dot(axis);
+      const yaw = Math.atan2(tangent.dot(xAxis), tangent.dot(axis));
+      assembly.push(part(tire, '#28373b', [x, .265, z], [0, yaw, 0]));
+      assembly.push(part(hub, '#9baba9', [x, .265, z], [0, yaw, 0]));
+      if (i % 3 === 1) {
+        assembly.push(beam([x, .295, z], [x, .56, z], .12, .15, '#6c8088'));
+        assembly.push(beam([x, .56, z], [0, .76, Math.min(z, 5.84)], .105, .13, '#687982'));
+      }
+    }
+    addParts(station, assembly, { roughness: .64, metalness: .30 });
+  }
+  // Match the angular velocity to the full-speed rope even when detached
+  // carriers progress more slowly around their separate guide rail.
+  const wheelTangent = new THREE.Vector3(0, 1, 0).cross(start.clone().sub(wheelCenter));
+  const angularSpeed = Math.sign(wheelTangent.dot(inward)) * def.speed / radius;
+  return time => { wheel.rotation.y = (time * angularSpeed) % (2 * Math.PI); };
 }
 
 export function buildMappedTerminal(scene, grid, def, index) {
@@ -336,34 +419,19 @@ export function buildMappedTerminal(scene, grid, def, index) {
       if(chair) structure.push(box(.72,1.12,.83,'#eb7a2a',[x,.56,z]));
       postCollider(grid,frame,x,z,.51);
     }
-    const trackY=chair?2.85:3.65;
-    structure.push(box(.21,.25,length-.8,'#798d96',[side*(chair?1.9:1.6),trackY,1]));
-    if(!showcase)for(let z=-length/2+1;z<length/2;z+=1.13) {
-      const wheel=new THREE.CylinderGeometry(.19,.19,.13,10);wheel.rotateZ(Math.PI/2);
-      structure.push(part(wheel,'#34474e',[side*(chair?1.9:1.6),trackY-.10,z]));
+    if (gondola) {
+      structure.push(box(.21,.25,length-.8,'#798d96',[side*1.6,3.65,1]));
+      for (let z = -length/2+1; z < length/2; z += 1.13) {
+        const wheel = new THREE.CylinderGeometry(.19,.19,.13,10).rotateZ(Math.PI/2);
+        structure.push(part(wheel,'#34474e',[side*1.6,3.55,z]));
+      }
     }
   }
   for(const z of [1-length/2,1+length/2]) {
     parts.push(box(halfW*2,.56,.22,creek ? '#17645e' : redTerminal?trim:'#dce3e3',[0,eave-.31,z]));
     parts.push(box(halfW*2,.11,.25,trim,[0,eave+.025,z]));
   }
-  if(showcase){
-    const wheelY=eave-.83,centerZ=1-length/2+3.18,radius=1.9;
-    for(const [r,tint] of [[radius,'#9ca9ad'],[radius-.16,'#424f57']]){
-      const ring=new THREE.TorusGeometry(r,.071,6,48);ring.rotateX(Math.PI/2);structure.push(part(ring,tint,[0,wheelY,centerZ]));
-    }
-    structure.push(part(new THREE.CylinderGeometry(.38,.38,.22,20),'#798b92',[0,wheelY,centerZ]));
-    for(let i=0;i<8;i++){
-      const a=i*Math.PI/4;
-      structure.push(beam([Math.sin(a)*.35,wheelY,centerZ+Math.cos(a)*.35],
-        [Math.sin(a)*(radius-.17),wheelY,centerZ+Math.cos(a)*(radius-.17)],.15,.18,'#6e818a'));
-    }
-    for(let i=0;i<32;i++){
-      const a=i*Math.PI/16;
-      structure.push(part(new THREE.CylinderGeometry(.017,.017,.034,6),'#cad2cd',
-        [Math.sin(a)*radius,wheelY-.071,centerZ+Math.cos(a)*radius]));
-    }
-  }
+  if (showcase) fixedDriveStand(structure, frame, grid);
   // Cable bays remain completely open at cabin/chair level.
   const operatorX=(creek&&base?-1:1)*(halfW+1.7);
   footing(structure, frame, operatorX, -2.8, 2.55, 3.25, -.04);

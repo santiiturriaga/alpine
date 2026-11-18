@@ -20,6 +20,9 @@ export class AudioEngine {
     this.carve = null;
     this.rustle = null;
     this.nextBird = 0;
+    this.nextIce = 0;
+    this.onIce = false;
+    this.lastMix = -Infinity;
     this.lastFootfall = -1;
     this.motor = null;
     this.noiseBuffer = null;
@@ -175,8 +178,10 @@ export class AudioEngine {
 
   update(dt, state = {}) {
     if (!this.ready || !this.ctx) return;
-    this.score.update(state);
     const t = this.ctx.currentTime;
+    if (t - this.lastMix < .026) return;
+    this.lastMix = t;
+    this.score.update(state);
     const {
       speed = 0, grounded = true, airborne = false, crash = false,
       powder = 0, riding = false, paused = false,
@@ -201,6 +206,18 @@ export class AudioEngine {
     const carveTarget = (!active || riding || hiking || vehicle || !grounded) ? 0 : (s * s * 0.085 + powder * s * 0.04);
     this.carve.gain.gain.setTargetAtTime(carveTarget, t, 0.08);
     this.carve.filter.frequency.setTargetAtTime(2100 + s * 1300, t, 0.16);
+
+    const onIce = active && grounded && !riding && !hiking && !vehicle && surface === 'ice' && speed > 2.6;
+    const edge = Math.abs(state.steer ?? 0);
+    if (onIce && t > this.nextIce && (!this.onIce || edge > .42)) {
+      const pitch = 1440 + Math.random() * 310 + s * 480;
+      // A narrow, bright tick followed by a lower vibrating ski edge.
+      this.noiseHit({ dur: .076, freq: pitch * 2.2, slide: pitch * 1.1, q: 2.7, gain: .032 + s * .021 });
+      this.tone(pitch, { dur: .135, gain: .016 + s * .006, slide: pitch * .68, attack: .003 });
+      this.tone(pitch * 1.47, { dur: .085, gain: .009, slide: pitch * .98, when: .021, attack: .002 });
+      this.nextIce = t + .33 + Math.random() * .29;
+    }
+    this.onIce = onIce;
 
     if (this.motor) {
       const engine=state.vehicle,rotor=engine==='helicopter';

@@ -62,7 +62,7 @@ export const LIFTS = liftData.map((lift) => ({
   rideable: (liftsWithCable.has(lift.type) || surfaceLifts.has(lift.type)) && lift.id !== 'way-682523542',
   speed: lift.type === 'p2p' ? 6.7 : lift.id === FITZSIMMONS ? 5
     : lift.type === 'gondola' ? 5.5 : lift.type === 'magic_carpet' ? .68
-      : lift.type === 't-bar' ? 2.45 : (lift.seats >= 4 ? 4.7 : 2.8),
+      : lift.type === 't-bar' ? 2.45 : (lift.seats >= 4 && lift.name !== 'Showcase Quad' ? 4.7 : 2.8),
 }));
 
 export const LODGES = [

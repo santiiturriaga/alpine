@@ -27,8 +27,7 @@ export function createGuestSimulation({ grid, lifts, queueSlots, interiors, pers
 
   const stationPose = (station, id, time, out) => {
     const { lift } = station;
-    if (lift.circulation) lift.circulation.at(time + id * station.headway, cablePos, tangent, carrierState);
-    else lift.samplers[0].at(mod((time + id * station.headway) / station.cycle, 1), cablePos, tangent);
+    lift.circulation.at(time + id * station.headway, cablePos, tangent, carrierState);
     out.x = cablePos.x;
     out.y = cablePos.y;
     out.z = cablePos.z;
@@ -68,13 +67,12 @@ export function createGuestSimulation({ grid, lifts, queueSlots, interiors, pers
 
   for (const lift of lifts?.lifts ?? []) {
     if (!lift.def.rideable || !lift.def.aerial || lift.def.type === 'p2p') continue;
-    const chair = lift.def.type === 'chair', sampler = lift.samplers[0];
-    const cycle = lift.circulation?.duration ?? sampler.total / lift.def.speed;
-    const count = chair ? lift.perSide : lift.perSide * 2;
+    const chair = lift.def.type === 'chair', count = lift.carriers.count;
+    const { duration, sections } = lift.circulation;
     const station = {
-      lift, chair, cycle, count, headway: cycle / count, lanes: [],
+      lift, chair, count, headway: duration / count, lanes: [],
       loadAt: chair ? .30 : -1.9,
-      offAt: chair ? cycle - 1.55 : lift.circulation.sections[0].duration - 1.35,
+      offAt: sections[0].duration - (chair ? 1.55 : 1.35),
       onDuration: chair ? .72 : 1.6,
       offDuration: chair ? 1.50 : 1.62,
     };

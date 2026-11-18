@@ -121,6 +121,21 @@
       <button type="button" id="map-open" aria-label="Open full trail map">Trail map <kbd>M</kbd></button>
     </div>
     <aside id="assignment-hud" hidden aria-label="Current assignment"><b></b><span id="assignment-next"></span></aside>
+    <aside id="patrol-nav" hidden aria-label="Patrol flight navigation">
+      <div class="patrol-nav-heading">
+        <span>Heading <b id="patrol-heading">000°</b></span>
+        <span id="patrol-leg"></span>
+      </div>
+      <div class="patrol-compass" aria-hidden="true">
+        <div id="patrol-bearing-ticks"></div>
+        <div class="patrol-compass-center"></div>
+        <div id="patrol-course-marker"></div>
+      </div>
+      <div class="patrol-nav-target">
+        <span id="patrol-target"></span><b id="patrol-distance"></b>
+      </div>
+      <p id="patrol-flight-tip"></p>
+    </aside>
     <div class="floater-layer" id="floater-layer" aria-hidden="true"></div>
 
     <div class="interaction-prompt hidden" id="interaction-prompt">
@@ -154,7 +169,7 @@
       <span aria-label="Crystals"><i class="crystal-outline" aria-hidden="true"></i><span id="crystal-count">0</span></span>
     </div>
     <div class="ski-readout">
-      <div><strong id="speed">0</strong> km/h</div>
+      <div><strong id="speed">0</strong> <span id="speed-unit">km/h</span></div>
       <div id="boost-readout" hidden><span></span><progress value="0" max="1" aria-label="Speed boost remaining"></progress></div>
       <div><span id="stat-vertical">0 m</span> descent<span id="snow-surface"></span></div>
       <button id="gear-mode" type="button"><span id="gear-mode-label">Walk</span> <kbd>B</kbd></button>
@@ -181,6 +196,29 @@
       <select id="resort-choose" aria-label="Choose ski resort"></select>
       <button id="resort-travel" type="button">Travel</button>
     </div></fieldset>
+    <fieldset id="skier-profile"><legend>Skier profile</legend>
+      <form id="profile-name-form" class="profile-name-form">
+        <label for="profile-name">Multiplayer name</label>
+        <input id="profile-name" type="text" maxlength="48" placeholder="Automatic callsign" autocomplete="off" spellcheck="false" aria-describedby="profile-name-status">
+        <button type="submit">Save name</button>
+        <output id="profile-name-status"></output>
+      </form>
+      <label class="profile-units">Units<select id="profile-units"><option value="km">Kilometres (km)</option><option value="mi">Miles (mi)</option></select></label>
+      <dl class="profile-stats">
+        <div><dt>Lifetime distance</dt><dd id="profile-distance">0.00 km</dd></div>
+        <div><dt>Runs explored</dt><dd id="profile-runs">0</dd></div>
+        <div><dt>Resorts visited</dt><dd id="profile-resorts">0</dd></div>
+        <div><dt>Mountains visited</dt><dd id="profile-mountains">0</dd></div>
+      </dl>
+      <details class="profile-log">
+        <summary>Exploration log</summary>
+        <dl>
+          <dt>Runs</dt><dd id="profile-run-list">None yet</dd>
+          <dt>Resorts</dt><dd id="profile-resort-list">None yet</dd>
+          <dt>Mountains</dt><dd id="profile-mountain-list">None yet</dd>
+        </dl>
+      </details>
+    </fieldset>
     <fieldset id="assignments" hidden><legend>Field assignments</legend>
       <div class="arrival-links" id="assignment-list"></div>
       <div class="arrival-links" id="assignment-actions"><button type="button" id="assignment-route">Guide to objective</button><button type="button" id="assignment-abandon">Abandon assignment</button></div>
@@ -195,7 +233,8 @@
       <label>Season<select id="select-season"></select></label>
       <label>Weather<select id="select-weather"></select></label>
       <label>Light<select id="select-light"></select></label>
-    </div></fieldset>
+      <label>Crowds<select id="select-traffic"></select></label>
+    </div><output id="resort-clock" aria-label="Mountain time and crowd level"></output></fieldset>
     <fieldset><legend>Explore</legend><div class="arrival-links">
       <button data-arrival="roundhouse">Roundhouse Lodge</button><button data-arrival="creekside">Creekside Gondola</button>
       <button data-arrival="come-along">Come a Long glade</button><button data-arrival="olympic-plaza">Olympic Plaza at blue hour</button>
@@ -355,6 +394,7 @@
         <div class="setting-row"><span>Nearby trail map</span><button class="toggle" id="pause-nearby-map" aria-label="Nearby trail map" aria-controls="nearby-map" aria-pressed="false"><i></i><span>OFF</span></button></div>
         <div class="setting-row"><span>Camera</span><button class="seg" id="pause-camera">CHASE</button></div>
         <div class="setting-row"><label for="pause-quality">Graphics</label><div class="graphics-control"><span>Low</span><input id="pause-quality" type="range" min="0" max="3" step="1" value="2" aria-describedby="graphics-level"><span>Max</span><output id="graphics-level" for="pause-quality">High</output></div></div>
+        <div class="setting-row"><span>Realism</span><button class="toggle" id="pause-realism" type="button" aria-label="Realistic surface lighting" aria-pressed="false" title="Extra snow sparkle and sharper ice reflections"><i></i><span>OFF</span></button></div>
       </div>
       <div class="pause-foot"><button class="text-btn" id="restart-session">Restart session</button></div>
     </div>
@@ -368,8 +408,8 @@
       <p class="summary-sub">Your descent is complete.</p>
       <div class="summary-grid">
         <div class="summary-stat big"><span>SCORE</span><strong id="sum-score">0</strong></div>
-        <div class="summary-stat"><span>TOP SPEED</span><strong id="sum-speed">0</strong><small>KM/H</small></div>
-        <div class="summary-stat"><span>VERTICAL</span><strong id="sum-vert">0</strong><small>M</small></div>
+        <div class="summary-stat"><span>TOP SPEED</span><strong id="sum-speed">0</strong><small id="sum-speed-unit">KM/H</small></div>
+        <div class="summary-stat"><span>VERTICAL</span><strong id="sum-vert">0</strong><small id="sum-vert-unit">M</small></div>
         <div class="summary-stat"><span>COINS</span><strong id="sum-coins">0</strong></div>
         <div class="summary-stat"><span>CRYSTALS</span><strong id="sum-crystals">0</strong><small>/5</small></div>
         <div class="summary-stat"><span>LONGEST AIR</span><strong id="sum-air">0.0</strong><small>SEC</small></div>

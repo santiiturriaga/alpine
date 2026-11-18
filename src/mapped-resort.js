@@ -2,13 +2,15 @@ import { updatePassGates } from './pass-gates.js';
 import { updateChaseFoliage } from './chase-foliage.js';
 import { setForestQuality } from './forest-lod.js';
 import { createMultiplayer } from './multiplayer.js';
+import { createTravelTracker } from './skier-profile.js';
+import { createSnowTraffic } from './snow-traffic.js';
 import {
-  graphicsProfiles, graphicsIndex, bindGraphics, createRenderer, resizeViewport,
+  graphicsProfiles, graphicsIndex, bindGraphics, bindRealism, createRenderer, resizeViewport,
   applyShadowResolution, updateSunShadow,
 } from './graphics.js';
 import * as THREE from 'three';
 import { AudioEngine } from './audio.js';
-import { createClimate, CLIMATE_PRESETS } from './climate.js';
+import { createClimate, bindConditionsClock, CLIMATE_PRESETS } from './climate.js';
 import { Collectibles } from './coins.js';
 import { buildForestLines } from './forest-lines.js';
 import {
@@ -268,6 +270,7 @@ export async function startMappedResort(mountain) {
   scene.environment = createWinterEnvironment(renderer);
   const lighting = createLighting(scene);
   const sky = createSky(scene);
+  const snowTraffic = createSnowTraffic();
   const storm = new Snowstorm(scene);
   const tuckWind = new TuckWind($('app'));
   const ui = new UI({ runs, lifts: config.lifts.map((def) => ({ ...def, rideable: def.rideable !== false })) });
@@ -306,6 +309,7 @@ export async function startMappedResort(mountain) {
   const audio = new AudioEngine();
   const climate = createClimate({ scene, renderer, lighting, sky, storm, terrain: ground });
   const player = new Player(scene, camera, { ground, env, fx, tracks, audio });
+  const travelTracker = createTravelTracker({ resortId: mountain.id, resortName: mountain.label, mountainAt: () => mountain.label });
   const mountainPanel = $('mountain-panel');
   const outfitter = new Outfitter(player, () => outfitter.dialog.close());
   const multiplayer = createMultiplayer(scene,mountain.id,()=>player);
@@ -348,11 +352,12 @@ export async function startMappedResort(mountain) {
   let ollie = false, signs = true, drag = null;
   let wasPaused = false;
 
-  const conditions = {};
+  const conditions = { hour: query.has('hour') ? Number(query.get('hour')) : 10.5 };
   for (const [key, id, presets, fallback] of [
     ['season', 'select-season', CLIMATE_PRESETS.seasons, 'winter'],
     ['weather', 'select-weather', CLIMATE_PRESETS.weather, 'clear'],
-    ['time', 'select-light', CLIMATE_PRESETS.times, 'day'],
+    ['time', 'select-light', CLIMATE_PRESETS.times, 'cycle'],
+    ['traffic', 'select-traffic', CLIMATE_PRESETS.traffic, 'scheduled'],
   ]) {
     const select = $(id);
     select.setAttribute('aria-label', select.parentElement.firstChild.textContent.trim());
@@ -362,6 +367,7 @@ export async function startMappedResort(mountain) {
     select.addEventListener('change', () => climate.set({ [key]: select.value }));
   }
   climate.set(conditions, { instant: true });
+  const updateConditionsClock = bindConditionsClock(climate, $('resort-clock'));
 
   const arrivals = new Map();
   const summerRoutePoses = (config.summerRoutes ?? []).filter(({ points }) => points?.length > 1).map(route => {
@@ -502,6 +508,7 @@ export async function startMappedResort(mountain) {
   }
 
   function openMountain() {
+    updateConditionsClock();
     if (mountainPanel.open || outfitter.dialog.open) return;
     releaseLook();
     clearInput();
@@ -550,6 +557,7 @@ export async function startMappedResort(mountain) {
     ui.cinematic(false);
     ui.clearToasts();
     player.footMode = !!arrival.footMode || climate.state.season === 'summer';
+    travelTracker.reset();
     player.teleport(pose, { resetStats: true });
     stationLabel = arrival.name ?? '';
     stationPose = pose;
@@ -717,7 +725,7 @@ export async function startMappedResort(mountain) {
     const raw = Math.max(0, (now - lastFrame) / 1000);
     if (document.hidden) return;
     if (ui.isOpen('map')) {
-      if(playing)multiplayer.update(0,trickScore,outfitter.state.outfit,expeditions.active?.model,false);
+      if(playing)multiplayer.update(0,trickScore,outfitter.broadcastOutfit ?? outfitter.state.outfit,expeditions.active?.model,false);
       lastFrame = now;
       return;
     }
@@ -744,15 +752,21 @@ export async function startMappedResort(mountain) {
       storm.update(dt);
     }
     updatePassGates(frozen?0:dt,playing&&!frozen?player:null,camera,()=>audio.tone(910,{dur:.065,gain:.025,type:'sine'}));
-    if (playing) multiplayer.update(dt,trickScore,outfitter.state.outfit,expeditions.active?.model,!frozen);
+    if (playing) multiplayer.update(dt,trickScore,outfitter.broadcastOutfit ?? outfitter.state.outfit,expeditions.active?.model,!frozen);
     const ride = liftSystem.active;
     const vehicle = expeditions.active?.id;
     ui.resortMap.setSeason(climate.state.season);
     if (playing && (!frozen || ride)) ui.routeGuide.update(player, { riding: !!ride, hidden: !!vehicle && vehicle !== 'bike' });
     const skiing = playing && !ride && !vehicle && !player.footMode && player.grounded && !player.crash;
+    climate.update(dt, camera, playing && !frozen ? Math.min(.5, raw) : 0);
+    const conditionsNow = climate.state;
+    people.setDensity(conditionsNow.crowd);
+    if (mountainPanel.open) updateConditionsClock();
+    const movingOnMountain = playing && !frozen && !ride && !vehicle;
+    travelTracker.update(dt, player, { active: movingOnMountain, nearest: movingOnMountain ? ui.findNearest(player, false, simTime) : null });
+    if (playing && !frozen) snowTraffic.update(dt, player, people.people, conditionsNow, movingOnMountain);
     world.update(dt, camera);
     people.update(frozen ? 0 : dt, simTime, camera, playing && !ride ? player : null);
-    climate.update(dt, camera);
     forestLines.update();
     sky.update(dt, camera);
     contact.update(player, playing && !ride && !vehicle);
@@ -769,7 +783,8 @@ export async function startMappedResort(mountain) {
       powder: player.powder, altitude: player.pos.y, riding: !!ride, surface: player.surfaceType,
       trees: ground.forestAt?.(player.pos.x, player.pos.z) ?? 0, tuck: player.tuckAmount,
       stride: player.footMode ? player.walkAmount : player.strideAmount, stridePhase: player.stridePhase,
-      gustKmh: climate.state.gust, hiking: player.footMode, paused: frozen || !playing,
+      gustKmh: conditionsNow.gust, night: conditionsNow.night, steer: player.steer,
+      hiking: player.footMode, paused: frozen || !playing,
     });
     updateChaseFoliage(camera, playing && !ride && !vehicle ? player : null);
     renderer.render(scene, camera);
@@ -781,7 +796,7 @@ export async function startMappedResort(mountain) {
       for (const key of turnKeys) if (keys[key]) heldAtTakeoff.add(key);
       audio.launch();
     } else if (event.type === 'land' || event.type === 'touchdown') {
-      trickScore += event.points || 0;
+      trickScore += (event.points || 0) * (player.landingTrickMultiplier ?? 1);
       audio.land(event.impact, event.points ?? 0);
       if (event.label) ui.floaty(event.label, { big: true });
     } else if (event.type === 'crash') {
@@ -817,6 +832,7 @@ export async function startMappedResort(mountain) {
     qualityIndex = next;
     applyQuality();
   });
+  bindRealism($('pause-realism'), query);
   for (const [id, action] of Object.entries(bindings)) $(id)?.addEventListener('click', action);
   for (const name of ['map', 'guide', 'pause']) {
     document.querySelectorAll(`[data-close="${name}-screen"]`).forEach((button) =>
@@ -934,7 +950,7 @@ export async function startMappedResort(mountain) {
   renderer.setAnimationLoop(draw);
 
   window.__mappedResort = {
-    mountain, config, world, ground, env, lifts, liftSystem, player, camera, scene, renderer, climate, audio, ui, tracks, collectibles, people, multiplayer, expeditions,
+    mountain, config, world, ground, env, lifts, liftSystem, player, camera, scene, renderer, climate, audio, ui, tracks, collectibles, people, multiplayer, expeditions, snowTraffic,
     travel,
     boardLift: interact,
     get state() {

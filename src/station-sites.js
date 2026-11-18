@@ -1,6 +1,7 @@
 import { LIFTS, FITZSIMMONS, PEAK_TO_PEAK, VILLAGE_GONDOLA_UPPER } from './worlddata.js';
 import { smoothstep } from './util.js';
-import { LODGE_FRAME, LODGE_CAFE, LODGE_TERRACE, ROUNDHOUSE_OLYMPIC_SITE, lodgePoint } from './roundhouse-site.js';
+import { LODGE_FRAME, LODGE_CAFE, LODGE_TERRACE, LODGE_ANNEX, ROUNDHOUSE_OLYMPIC_SITE,
+  lodgePoint, whistlerPeakTerminalSite } from './roundhouse-site.js';
 
 // Transfer stages share a surveyed point at the centre of the building. Give
 // each drive its own bay on the inbound side of that point.
@@ -43,10 +44,10 @@ export function ropeOffset(lift) {
 // outside the ramps remains the original elevation model.
 export function createStationGrading(sampleOriginal) {
   const cellSize = 64, cells = new Map();
-  function apron(site, minX, maxX, minZ, maxZ, feather, elevation) {
+  function apron(site, minX, maxX, minZ, maxZ, feather, elevation, approach = null) {
     const radius = Math.hypot(Math.max(-minX, maxX), Math.max(-minZ, maxZ)) + feather;
     const datum = elevation ?? sampleOriginal(site.surveyX, site.surveyZ);
-    const pad = { ...site, c: Math.cos(site.yaw), s: Math.sin(site.yaw), minX, maxX, minZ, maxZ, feather, datum };
+    const pad = { ...site, c: Math.cos(site.yaw), s: Math.sin(site.yaw), minX, maxX, minZ, maxZ, feather, datum, approach };
     for (let z = Math.floor((site.z - radius) / cellSize); z <= Math.floor((site.z + radius) / cellSize); z++) {
       for (let x = Math.floor((site.x - radius) / cellSize); x <= Math.floor((site.x + radius) / cellSize); x++) {
         const key = x * 512 + z;
@@ -61,6 +62,14 @@ export function createStationGrading(sampleOriginal) {
       const site = stationSite(lift, i);
       if (lift.id === PEAK_TO_PEAK) {
         if (i > 0) apron(site, -11.8, 11.8, -24, 17, 18);
+        else {
+          const entry = whistlerPeakTerminalSite(lift);
+          const front = entry.depth / 2;
+          const level = sampleOriginal(entry.surveyX, entry.surveyZ) + entry.datumOffset + entry.deck - .025;
+          // Keep the original ropeway elevation at the survey point, beside the graded footpath.
+          apron(entry, entry.entryX - 4.9, entry.entryX + 4.9, front - 4.2, 55, 7.5, level,
+            { landing: front + 5.2, slope: .125 });
+        }
         continue;
       }
       if (lift.id === FITZSIMMONS) apron(site, -8.8, 9.8, -11, 13, 18);
@@ -76,8 +85,13 @@ export function createStationGrading(sampleOriginal) {
   const lodgeDatum = sampleOriginal(LODGE_FRAME.datumX, LODGE_FRAME.datumZ) - .15;
   const cafeApproach = lodgePoint(LODGE_CAFE.x, LODGE_CAFE.front + LODGE_CAFE.steps * LODGE_CAFE.tread + .7);
   const stairFoot = lodgePoint(LODGE_TERRACE.stairX, LODGE_TERRACE.stairBottom);
+  const annexFront = lodgePoint(LODGE_ANNEX.doorX, LODGE_ANNEX.z + LODGE_ANNEX.depth / 2);
+  const annexCenter = lodgePoint(LODGE_ANNEX.x, LODGE_ANNEX.z);
   apron({ ...cafeApproach, yaw: LODGE_FRAME.yaw }, -4.2, 4.2, -.6, 1.8, 3.4, lodgeDatum);
   apron({ ...stairFoot, yaw: LODGE_FRAME.yaw }, -2.1, 2.1, -1.4, 2.2, 5.5, lodgeDatum);
+  apron({ ...annexCenter, yaw: LODGE_FRAME.yaw }, -LODGE_ANNEX.width/2, LODGE_ANNEX.width/2,
+    -LODGE_ANNEX.depth/2, LODGE_ANNEX.depth/2, 4, lodgeDatum + LODGE_ANNEX.floor - .09);
+  apron({ ...annexFront, yaw: LODGE_FRAME.yaw }, -2.55, 2.55, -2, 4.4, 5.2, lodgeDatum + LODGE_ANNEX.floor - .025);
   const cliff = ROUNDHOUSE_OLYMPIC_SITE;
   apron({ ...cliff, yaw: 0 }, -.25, 1.4, 4.1, 9.5, 5.5, sampleOriginal(cliff.x, cliff.z) + .12);
 
@@ -90,11 +104,16 @@ export function createStationGrading(sampleOriginal) {
       const u = dx * pad.c - dz * pad.s, v = dx * pad.s + dz * pad.c;
       const distance = Math.hypot(Math.max(0, pad.minX - u, u - pad.maxX), Math.max(0, pad.minZ - v, v - pad.maxZ));
       if (distance >= pad.feather) continue;
-      const weight = 1 - smoothstep(0, pad.feather, distance);
+      let weight = 1 - smoothstep(0, pad.feather, distance);
+      let target = pad.datum;
+      if (pad.approach) {
+        weight *= smoothstep(6.1, 9, Math.hypot(x - pad.surveyX, z - pad.surveyZ));
+        target -= Math.max(0, v - pad.approach.landing) * pad.approach.slope;
+      }
       // An adjacent apron can blend the approaches without tilting the core
       // under another terminal's sleepers and pier shoes.
       const priority = weight ** 6;
-      elevationSum += pad.datum * priority;
+      elevationSum += target * priority;
       total += priority;
       strongest = Math.max(strongest, weight);
     }

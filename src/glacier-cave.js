@@ -1,11 +1,14 @@
 import * as THREE from 'three';
 import { climateUniforms } from './climate-state.js';
-import { lerp, mulberry32, noise2, smoothstep } from './util.js';
+import { hash2, lerp, mulberry32, noise2, smoothstep } from './util.js';
 
 // The chamber is a historical interpretation of the glacier's lower eastern flank.
 // The generated entrance and its dimensions are independent of current ice extent.
 const site = { x: 6090, y: 2062.8, z: 2258 };
 const end = 46;
+const rearWall = 41.3;
+const shoulderStart = 5;
+const shoulderEnd = 68;
 export const GLACIER_CAVE_START = { x: site.x - 2.4, z: site.z - 10.5, heading: .075, holdAtUnload: true };
 
 const centerAt = (w) => 1.28 * Math.sin(w*.135) - smoothstep(15,37,w) * 4.5;
@@ -13,6 +16,9 @@ const widthAt = (w) => (8.5 + .9*Math.sin(w*.16) + 1.9*smoothstep(9,24,w)) * (1-
 const crownAt = (w) => (5.15 + 1.8*smoothstep(2,18,w) + .46*Math.sin(w*.21)) * (1-.96*smoothstep(31,end,w));
 const streamAt = (w) => centerAt(w) + 1.65 + .60*Math.sin(w*.49) + .42*Math.sin(w*.23+2);
 const streamWidth = (w) => .88 + .51*smoothstep(1,19,w) + .22*Math.sin(.64*w);
+const footpathAt = (w) => centerAt(w) - 2.65 - .27*Math.sin(w*.32);
+const mouthAt = (theta) => -.56 + .72*Math.cos(theta*2.26+.2) + .29*Math.sin(theta*5.1);
+const rearAt = (theta) => rearWall + .37*Math.cos(theta*2.87+.29);
 
 function bedHeight(u,w) {
   const channel = 1-smoothstep(.35,1.22,Math.abs(u-streamAt(w))/streamWidth(w));
@@ -20,40 +26,100 @@ function bedHeight(u,w) {
   return site.y + w*.14 + .08*Math.sin(w*.36) - .33*channel + banks;
 }
 
-const entranceGrade = (u,w) => smoothstep(-6.6,-.55,w)
-  * (1 - smoothstep(.72,1.025,Math.abs(u-centerAt(w)) / widthAt(w)));
-
-// Grade the terrain and collision surface together, leaving the original raster at
-// the edges of the interpretive ice lobe and below the downhill approach.
+// Prepare the walk-in bed and merge the surrounding snow back into the slopes.
 export function gradeGlacierCave(x,z,ground) {
   const u=x-site.x, w=z-site.z;
-  if (Math.abs(u)>39 || w < -28 || w > 79) return ground;
-  const axial = smoothstep(-28,-8,w) * (1 - smoothstep(47,64,w));
-  const lateral = 1 - smoothstep(11,27,Math.abs(u-centerAt(w)));
-  const fromWall = Math.abs(u - centerAt(w)) - widthAt(w);
-  const tail = 1 - smoothstep(55,78,w);
-  const shoulder = smoothstep(.70,4.6,fromWall) * (1 - smoothstep(8.3,21.5,fromWall))
-    * smoothstep(-7,8,w) * tail;
-  const back = smoothstep(43,53,w) * tail * (1 - smoothstep(9,26,Math.abs(u-centerAt(w))));
-  const debris = .48 + .52 * noise2.fbm(u*.21,w*.15,3);
-  const bed = bedHeight(u,w);
-  const approach = entranceGrade(u,w) * (1 - smoothstep(-.36,.22,w));
-  return lerp(lerp(ground,bed-.46,axial*lateral),bed+.057,approach)
-    + shoulder * (1.6 + 2.1 * debris + .8 * Math.sin(w*.12)**2)
-    + back * (1.5 + 2.3 * debris);
+  if (Math.abs(u)>33 || w < -27 || w > 61) return ground;
+  const relative=u-centerAt(w), distance=Math.abs(relative);
+  const cut = smoothstep(-27,-4,w) * (1-smoothstep(39,61,w))
+    * (1-smoothstep(Math.max(9,widthAt(w)+.6),relative>0?24:26,distance));
+  const reservoir = bedHeight(u,w) - lerp(.025,.48,smoothstep(-1.6,1.9,w));
+  const bankOffset=(u+14.8+2.1*Math.sin(w*.14))/3.0;
+  const westBank=Math.exp(-bankOffset*bankOffset);
+  const bankLength=smoothstep(-8,3,w)*(1-smoothstep(21,47,w));
+  const rubbleRelief=.32+.68*noise2.fbm(u*.28+2.3,w*.30,3);
+  return lerp(ground,reservoir,cut) + 1.65*westBank*bankLength*rubbleRelief;
 }
 
 function positionAt(u,y,w) { return [site.x+u,y,site.z+w]; }
 
+// Each gently off-centre pocket is elongated in the direction of water flow.
+function meltPockets(theta,w) {
+  const x=theta*3.25, z=w*.52 + .28*Math.sin(theta*3.2+w*.12);
+  const ix=Math.floor(x), iz=Math.floor(z);
+  let relief=0;
+  for(let j=iz-1;j<=iz+1;j++) for(let i=ix-1;i<=ix+1;i++) {
+    const dx=x-i-.18-.64*hash2(i,j,19), dz=z-j-.18-.64*hash2(i,j,67);
+    const radial=dx*dx*.79+(dz-.34*dx)**2*.53;
+    const bowl=Math.max(0,1-radial);
+    relief+=(.23+.31*hash2(i,j,103))*bowl**3;
+  }
+  return relief;
+}
+
 function archPoint(theta,w) {
   const cosine=Math.cos(theta), sine=Math.sin(theta);
-  const warp = noise2.fbm(theta*3.7+w*.15, w*.41, 3);
-  const basin = noise2.fbm(theta*8.1+w*.38,w*1.13-theta,2);
-  const cups=.26*basin + .19*Math.cos(basin*5.8);
-  const u=centerAt(w) + cosine * (widthAt(w)+.52*warp+cups);
-  const overhang=.51*Math.sin(theta*2.26+.21)*Math.exp(-.032*Math.max(w,0));
-  const y=bedHeight(u,w)-.35 + crownAt(w)*Math.pow(sine,.72) + sine*(.75*warp+cups+overhang);
+  const drift=.49*noise2.fbm(theta*1.85+w*.09,w*.13,3);
+  const ripple=.10*Math.sin(theta*5.7+w*.76);
+  const relief=meltPockets(theta,w)+drift+ripple;
+  const u=centerAt(w)+cosine*(widthAt(w)+relief) + .43*sine*sine*Math.sin(w*.17+.7);
+  const overhang=.50*Math.sin(theta*2.47+.50)*Math.exp(-.040*Math.max(w,0));
+  const skirt=.32*(1-smoothstep(0,.20,sine));
+  const y=bedHeight(u,w)-.39-skirt+crownAt(w)*sine**.78+sine*(relief+overhang);
   return [u,y,w];
+}
+
+function shoulderProfile(w) {
+  const climb=smoothstep(shoulderStart,59,w);
+  const width=12.75+8.7*smoothstep(1.5,29,w)-2.1*smoothstep(44,shoulderEnd,w)
+    + .58*Math.sin(w*.29+.4);
+  return {
+    center:1.10+12.1*climb-1.32*Math.sin(w*.127),
+    width,
+    shoulderBias:.49+1.85*Math.sin(w*.079+1.1),
+  };
+}
+
+function shoulderHeight(u,w,theta,contact) {
+  const taper=smoothstep(41,shoulderEnd,w);
+  const crown=site.y+9.25+.42*w-.0018*w*w;
+  const flex=1.30*Math.sin(w*.20+theta*3.76) + .47*Math.sin(w*.49-theta*4.1);
+  const rollers=1.55*noise2.fbm(u*.16+9,w*.20,3);
+  const runoff=theta*2.29 + w*.041 + .25*Math.sin(w*.17);
+  const trough=.46*smoothstep(.68,.97,Math.sin(runoff*3.31));
+  const crest=crown+flex+rollers-trough;
+  const profile=lerp(contact-1.28,crest,Math.sin(theta)**1.26);
+  return lerp(profile,contact-.82,taper);
+}
+
+function shoulderPoint(theta,w,ground) {
+  const {center,width,shoulderBias}=shoulderProfile(w);
+  const side=Math.cos(theta);
+  const u=center+side*(width+shoulderBias*side);
+  return [u,shoulderHeight(u,w,theta,ground(site.x+u,site.z+w)),w];
+}
+
+function shoulderSurfaceAt(u,w,ground) {
+  const {center,width,shoulderBias}=shoulderProfile(w);
+  const offset=u-center;
+  if (offset<shoulderBias-width || offset>shoulderBias+width) return null;
+  // Invert the swept section to sample the same surface the render uses.
+  const side=2*offset/(width+Math.sqrt(width*width+4*shoulderBias*offset));
+  const contact=ground(site.x+u,site.z+w);
+  return Math.max(contact,shoulderHeight(u,w,Math.acos(THREE.MathUtils.clamp(side,-1,1)),contact));
+}
+
+function terminusPoint(theta,t,ground) {
+  const inner=archPoint(theta,mouthAt(theta));
+  const outer=shoulderPoint(theta,shoulderStart,ground);
+  const tangent=shoulderPoint(theta,shoulderStart-.25,ground);
+  const side=Math.cos(theta), up=Math.sin(theta);
+  const curl=1.58+.51*Math.sin(theta*4.8+.77)+.40*Math.sin(theta*8.9);
+  const lip=[inner[0]+side*1.62,inner[1]+up*(2.65+.85*Math.sin(theta*3.37)),inner[2]-curl*up];
+  // Match the shoulder tangent through the rollover at the top of the cut face.
+  const back=outer.map((v,i)=>v-(v-tangent[i])*9.6);
+  const a=1-t;
+  return inner.map((v,i)=>a**3*v+3*a*a*t*lip[i]+3*a*t*t*back[i]+t**3*outer[i]);
 }
 
 function surface(rows,cols,point,reverse = false) {
@@ -86,19 +152,23 @@ const iceNoise = /* glsl */ `
       mix(iceHash(i+vec3(0,1,1)),iceHash(i+vec3(1,1,1)),f.x),f.y),f.z);
   }
   float glacierDim(vec3 p) {
-    float sky=exp(-max(p.z+1.,0.)*.071);
-    float spill=.34*exp(-length((p-vec3(4.5,5.2,17.))*vec3(.11,.26,.091)));
-    float tail=.40*exp(-length((p-vec3(-4.,5.,33.))*vec3(.19,.35,.15)));
+    float sky=exp(-max(p.z+1.,0.)*.118);
+    float spill=.37*exp(-length((p-vec3(4.5,5.2,15.))*vec3(.11,.19,.079)));
+    float tail=.36*exp(-length((p-vec3(-4.,6.6,32.))*vec3(.17,.21,.14)));
     return (sky+spill+tail)*(1.-iceNight*.77);
+  }
+  // Sediment follows the same deformed layers through the portal and the vault.
+  float glacierFlow(vec3 p,float curl) {
+    return p.y - .22*p.z + .020*p.x*p.x + .48*sin(p.z*.21+p.x*.19) + 1.16*curl;
   }
 `;
 
 function caveMaterial(kind,time) {
   const water=kind==='water';
   const m = new THREE.MeshStandardMaterial({
-    roughness:water?.18:kind==='interior'?.26:.88,
+    roughness:water?.18:kind==='interior'?.45:.86,
     color:0xffffff,side:THREE.DoubleSide,transparent:water,opacity:water?.80:1,depthWrite:!water,
-    envMapIntensity:water?.9:kind==='interior'?.39:.38,
+    envMapIntensity:water?.9:kind==='interior'?.28:.38,
   });
   m.name = {interior:'Stratified glacial ice',outside:'Snow over blue glacial ice',floor:'Moraine gravel and ice',water:'Flowing glacial meltwater',stone:'Wet stone and glacial till',moraine:'Glacial moraine and frost'}[kind];
   m.onBeforeCompile = (shader) => {
@@ -117,17 +187,24 @@ function caveMaterial(kind,time) {
     const color = {
       outside: /* glsl */ `
         vec3 p=glacierPoint;
-        float up = abs(dot(normalize(vNormal),mat3(viewMatrix)*vec3(0,1,0)));
-        float strata=iceNoise(vec3(p.x*.30,(p.y+.022*p.x*p.x)*5.1,p.z*.44));
-        float cornice=iceNoise(p*.68);
-        float grainCoverage=1.-smoothstep(.33,1.3,length(fwidth(p*20.)));
-        float granules=mix(.5,iceNoise(p*20.),grainCoverage);
-        float snow=smoothstep(.13,.65,up+.53*iceSnow+cornice*.30-.44);
-        vec3 blue=mix(vec3(.025,.13,.19),vec3(.22,.54,.66),.61*strata+.39*cornice);
-        float iceBand = (p.y + .32*sin(p.x*.42) + .16*cos(p.z*.82))*10.5 + 1.8*strata;
-        float layer=.5+.5*cos(iceBand)*(1.-smoothstep(.5,2.3,fwidth(iceBand)));
-        vec3 rime=mix(vec3(.50,.65,.75),vec3(.90,.94,.98),.25*strata+.18*granules+.49*cornice+.08*layer);
-        diffuseColor.rgb=mix(blue,rime,snow);`,
+        float up=dot(normalize(vNormal),mat3(viewMatrix)*vec3(0,1,0));
+        float wind=iceNoise(p*vec3(.23,.41,.27));
+        float drift=iceNoise(p*vec3(.53,1.0,.45));
+        float dust=iceNoise(p*3.71);
+        float snow=smoothstep(.40,.77,up*.84+(wind-.45)*.49+(drift-.5)*.20+(dust-.5)*.09+iceSnow*.47-.24);
+        float flow=glacierFlow(p,wind);
+        float strata=iceNoise(vec3(.14*p.x,2.1*flow,.15*p.z));
+        float lens=iceNoise(p*vec3(.49,.29,.62));
+        float seam=abs(fract(flow*.73+.53*wind)-.5);
+        float silt=(1.-smoothstep(.012,.068+fwidth(flow)*.20,seam))*smoothstep(.39,.72,lens);
+        vec3 blue=mix(vec3(.068,.25,.33),vec3(.36,.62,.69),smoothstep(.19,.79,lens*.54+strata*.46));
+        float spoil=smoothstep(.65,.82,drift*.65+dust*.35)*(1.-smoothstep(.2,.76,up));
+        blue=mix(blue,vec3(.26,.244,.22),silt*.37+spoil*.57);
+        float scrim=smoothstep(.40,.82,.61*strata+.39*lens);
+        blue=mix(blue,vec3(.44,.64,.71),scrim*.36);
+        vec3 powder=mix(vec3(.73,.80,.87),vec3(.92,.96,.99),.68*wind+.22*drift+.10*dust);
+        diffuseColor.rgb=mix(blue,powder,snow);
+        float heightRelief=(.026*strata+.089*lens+.009*dust)*(1.-snow)+.025*drift*snow;`,
       moraine: /* glsl */ `
         vec3 p=glacierPoint;
         float grit = iceNoise(p * vec3(3.1,2.0,3.8));
@@ -138,31 +215,28 @@ function caveMaterial(kind,time) {
         diffuseColor.rgb *= mix(schist,vec3(.69,.77,.82),drift);`,
       interior: /* glsl */ `
         vec3 p=glacierPoint;
-        vec3 flow=vec3(p.x*.52+p.z*.15,(p.y+.015*p.x*p.x+.35*sin(p.z*.39))*3.6,p.z*.48);
-        float strata=iceNoise(flow);
-        float deformation=iceNoise(p*vec3(.40,.58,.66));
-        float coarseness=iceNoise(p*vec3(2.8,3.3,2.0));
-        float cups=iceNoise(vec3(p.x*.95+p.z*.15,p.y*1.5,p.z*.7));
+        float deformation=iceNoise(p*vec3(.23,.31,.39));
+        float flow=glacierFlow(p,deformation);
+        float strata=iceNoise(vec3(p.x*.23,flow*2.25,p.z*.20));
+        float coarseness=iceNoise(p*vec3(2.3,2.6,1.7));
+        float cups=iceNoise(vec3(p.x*.43+p.z*.075,p.y*.74,p.z*.45));
         vec3 microPosition=p*vec3(16.,16.,18.);
         float grit=iceNoise(microPosition);
         float depth=glacierDim(p);
-        float vein=1.-smoothstep(.035,.092,abs(fract(flow.y*.51+coarseness*.16)-.5));
-        float silt=vein*smoothstep(.57,.67,deformation)*(.20+.80*smoothstep(.33,.64,strata));
-        float entrainedAir=smoothstep(.52,.73,.46*strata+.35*cups+.19*coarseness);
-        float lowIce=smoothstep(-.4,2.2,p.y-.14*p.z);
-        float shear=flow.y*3.40+coarseness*.94+.54*sin(p.x*.86+p.z*.46);
-        float shimmer=1.-smoothstep(.018,.069+fwidth(shear)*.11,abs(fract(shear)-.5));
-        float cloudyVein=shimmer*smoothstep(.41,.67,.62*cups+.22*deformation+.16*strata);
-        vec3 cleanIce=mix(vec3(.010,.062,.102),vec3(.051,.26,.35),smoothstep(.13,.73,deformation*.49+cups*.51));
-        vec3 milkyIce=mix(vec3(.13,.34,.45),vec3(.44,.66,.74),.55*strata+.45*deformation);
-        vec3 ice=mix(cleanIce,milkyIce,entrainedAir*.69)*(1.-silt*.31);
-        ice+=vec3(.19,.34,.43)*cloudyVein*depth*.31;
-        float frost = (1.-smoothstep(0.,4.8,p.z))*iceSnow*smoothstep(.51,.84,strata*.58+cups*.42);
-        ice=mix(ice,vec3(.43,.67,.77),frost*.68);
-        ice*=mix(.51,1.,lowIce);
-        diffuseColor.rgb=ice*(.44+depth*.36);
+        float vein=1.-smoothstep(.024,.068+fwidth(flow)*.20,abs(fract(flow*.73+.53*deformation)-.5));
+        float silt=vein*smoothstep(.31,.62,cups)*(.38+.62*smoothstep(.25,.61,strata));
+        float bubbles=smoothstep(.31,.77,.56*strata+.32*cups+.12*coarseness);
+        float lowIce=smoothstep(-.25,2.6,p.y-.14*p.z);
+        vec3 cleanIce=mix(vec3(.021,.104,.155),vec3(.055,.24,.33),smoothstep(.18,.72,deformation*.47+cups*.53));
+        vec3 whiteIce=mix(vec3(.15,.37,.49),vec3(.47,.67,.74),.49*strata+.51*deformation);
+        vec3 ice=mix(cleanIce,whiteIce,bubbles*.66);
+        ice=mix(ice,ice*vec3(.53,.53,.43),silt*.41);
+        float frost = (1.-smoothstep(-.5,3.8,p.z))*iceSnow*smoothstep(.47,.82,strata*.54+cups*.46);
+        ice=mix(ice,vec3(.45,.63,.72),frost*.50);
+        vec3 till=mix(vec3(.041,.046,.056),ice,.33+.67*lowIce);
+        diffuseColor.rgb=till*(.56+depth*.38);
         float microFade=1.-smoothstep(.26,.82,length(fwidth(microPosition)));
-        float heightRelief=.15*cups+.045*coarseness+.003*cloudyVein+.006*grit*microFade;`,
+        float heightRelief=.071*cups+.015*coarseness+.0015*grit*microFade;`,
       floor: /* glsl */ `
         vec3 p=glacierPoint;
         float dim=glacierDim(p);
@@ -173,7 +247,11 @@ function caveMaterial(kind,time) {
         float cover=(1.-smoothstep(-1.5,6.,p.z))*.96*iceSnow;
         vec3 silt=mix(vec3(.023,.031,.038),vec3(.16,.154,.143),chunks*.46+chips*.54);
         vec3 planedIce=mix(vec3(.035,.13,.16),vec3(.26,.46,.52),sediment*.39+chips*.61);
-        diffuseColor.rgb=mix(mix(silt,planedIce,banks),vec3(.58,.72,.81),cover)
+        float pathCenter=1.28*sin(p.z*.135)-4.5*smoothstep(15.,37.,p.z)-2.65-.27*sin(p.z*.32);
+        float wear=(1.-smoothstep(.36,1.24,abs(p.x-pathCenter)+(chunks-.5)*.48))
+          *smoothstep(-3.8,.1,p.z)*(1.-smoothstep(30.,37.,p.z));
+        vec3 tread=mix(vec3(.106,.108,.098),vec3(.23,.232,.214),sediment*.58+chips*.42);
+        diffuseColor.rgb=mix(mix(mix(silt,planedIce,banks),tread,.82*wear),vec3(.58,.72,.81),cover*(1.-.72*wear))
           * mix(.53,1.,dim);`,
       water: /* glsl */ `
         vec3 p=glacierPoint;
@@ -195,21 +273,23 @@ function caveMaterial(kind,time) {
     shader.fragmentShader=shader.fragmentShader
       .replace('#include <common>','#include <common>\n'+iceNoise)
       .replace('#include <color_fragment>','#include <color_fragment>\n'+color);
-    if (kind==='interior' || water) {
+    if (kind==='interior' || kind==='outside' || water) {
       shader.fragmentShader=shader.fragmentShader
         .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
           vec3 dxG=dFdx(-vViewPosition), dyG=dFdy(-vViewPosition);
           vec3 rxG=cross(dyG,normal), ryG=cross(normal,dxG);
           float deG=dot(dxG,rxG);
-          normal=normalize(max(abs(deG),1e-8)*normal-sign(deG)*(dFdx(heightRelief)*rxG+dFdy(heightRelief)*ryG));`)
-        .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+          normal=normalize(max(abs(deG),1e-8)*normal-sign(deG)*(dFdx(heightRelief)*rxG+dFdy(heightRelief)*ryG));`);
+    }
+    if (kind==='interior' || water) {
+      shader.fragmentShader=shader.fragmentShader.replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
           float spill=glacierDim(glacierPoint);
           float grazing=pow(1.-max(dot(normal,normalize(vViewPosition)),0.),3.);
           reflectedLight.directDiffuse *= .19+.22*spill;
           reflectedLight.indirectDiffuse *= .26+.38*spill;
-          reflectedLight.directSpecular *= .50*spill;
-          reflectedLight.indirectSpecular *= .18+.62*spill;
-          totalEmissiveRadiance += diffuseColor.rgb*(.060 + spill*(.41+.45*grazing));`);
+          reflectedLight.directSpecular *= .37*spill;
+          reflectedLight.indirectSpecular *= .12+.33*spill;
+          totalEmissiveRadiance += diffuseColor.rgb*(.091+spill*(.41+.24*grazing));`);
     }
   };
   m.customProgramCacheKey=()=>`blackcomb-glacier-${kind}`;
@@ -245,15 +325,37 @@ function icicleGeometry() {
   return tube;
 }
 
-function addWallColliders(grid) {
-  const outerEdge=(w,side)=>centerAt(w)+side*(widthAt(w)*.88-.25);
-  for (const side of [-1,1]) for(let a=-1;a<40;a+=2.6) {
-    const b=a+2.6, u=outerEdge(a,side), v=outerEdge(b,side);
-    const w=(a+b)*.5, x=(u+v)*.5+side*1.44;
-    grid.addBox(site.x+x,site.z+w,1.47,Math.hypot(v-u,b-a)*.5+.24,
-      Math.atan2(u-v,b-a),'ice-wall',{minY:bedHeight(x,w)-1.8,maxY:bedHeight(x,w)+2.45});
+function innerWall(w,side) {
+  let near=0,far=Math.PI*.5;
+  for(let i=0;i<9;i++) {
+    const angle=(near+far)*.5;
+    const [u,y]=archPoint(side>0?angle:Math.PI-angle,w);
+    if(y-bedHeight(u,w)<1.82) near=angle; else far=angle;
   }
-  grid.addBox(site.x+centerAt(40),site.z+40,5.6,.6,0,'ice-wall',{minY:site.y+1,maxY:site.y+10.4});
+  const [u]=archPoint(side>0?far:Math.PI-far,w);
+  return u-side*.15;
+}
+
+function addWallColliders(grid) {
+  const start = -.36, spacing = 2.6;
+  const count = Math.ceil((rearWall - start) / spacing);
+  const walls = [-1,1].map(side => {
+    const points = Array.from({ length: count + 1 }, (_, i) => innerWall(start + i * spacing, side));
+    for (let i = 0; i < count; i++) {
+      const a = points[i], b = points[i + 1], w = start + (i + .5) * spacing;
+      const x = (a + b) * .5 + side * 1.44;
+      grid.addBox(site.x+x,site.z+w,1.47,Math.hypot(b-a,spacing)*.5+.24,
+        Math.atan2(a-b,spacing),'ice-wall',{minY:bedHeight(x,w)-1.8,maxY:bedHeight(x,w)+2.45});
+    }
+    return points;
+  });
+  grid.addBox(site.x+centerAt(rearWall),site.z+rearWall,5.1,.63,0,'ice-wall',
+    {minY:site.y+3.8,maxY:site.y+10.4});
+  return (w, side) => {
+    const at = Math.max(0, Math.min(count - .0001, (w - start) / spacing));
+    const i = Math.floor(at), points = walls[side > 0 ? 1 : 0];
+    return lerp(points[i], points[i + 1], at - i);
+  };
 }
 
 export function buildGlacierCave(scene,grid,ground) {
@@ -266,29 +368,19 @@ export function buildGlacierCave(scene,grid,ground) {
     object.name=name;cave.add(object);return object;
   };
 
-  const mouthShift=(theta)=>-.65 + .61*Math.cos(theta*2.8) - .28*Math.sin(theta*7.1);
-  mesh('Scalloped ice vault',surface(108,62,(a,b)=>{
-    const theta=b*Math.PI, w=lerp(mouthShift(theta),end,a);
+  mesh('Scalloped ice vault',surface(128,96,(a,b)=>{
+    const theta=b*Math.PI, w=lerp(mouthAt(theta),rearAt(theta),a);
     const [u,y]=archPoint(theta,w);
     return positionAt(u,y,w);
   },true),caveMaterial('interior',time));
 
-  const apron=mesh('Layered terminus and seasonal cornice',surface(71,80,(a,b)=>{
-    const theta=b*Math.PI, w0=mouthShift(theta), w=lerp(w0,55,a);
-    const [u,y]=archPoint(theta,w0);
-    const fan=Math.cos(theta) * (5.6+8.2*Math.sin(a*Math.PI*.82));
-    const span=u+fan*smoothstep(0,.24,a);
-    const lipWave=.52+.34*Math.sin(6.6*theta)+.27*Math.cos(9.7*theta);
-    const wrap=(.55+4.15*Math.sin(theta)**.76+lipWave)*smoothstep(0,.16,a);
-    const crossSlope=Math.max(.12,Math.sin(theta))**.6;
-    const lip=w0-.46*Math.sin(theta);
-    const face=lerp(y,y+wrap+.12,a<.12 ? smoothstep(0,.12,a):1);
-    const rest=bedHeight(span,w)+crossSlope*(11.4 + 2.4*noise2.fbm(span*.12,w*.17,3))*Math.sin(Math.PI*(.43+a*.50));
-    const [x,,z]=positionAt(span,0,lerp(lip,w,smoothstep(.025,.16,a)));
-    const tuck=ground(x,z)-.69;
-    const exterior=lerp(lerp(face,rest,smoothstep(.10,.38,a)),tuck,smoothstep(.61,.99,a));
-    const sideTuck=(1-smoothstep(.11,.49,Math.sin(theta)))*smoothstep(.025,.15,a);
-    return [x,lerp(exterior,tuck,sideTuck),z];
+  const terminusRows=32, shellRows=140;
+  const apron=mesh('Grounded glacial lobe and seasonal snow mantle',surface(shellRows,96,(a,b)=>{
+    const row=a*shellRows, theta=b*Math.PI;
+    const point=row<terminusRows
+      ? terminusPoint(theta,row/terminusRows,ground)
+      : shoulderPoint(theta,lerp(shoulderStart,shoulderEnd,(row-terminusRows)/(shellRows-terminusRows)),ground);
+    return positionAt(...point);
   }),caveMaterial('outside',time));
   apron.castShadow=true;
 
@@ -298,14 +390,17 @@ export function buildGlacierCave(scene,grid,ground) {
     const width=widthAt(w)*lerp(.65,1.002,smoothstep(-5.8,1.1,w));
     const u=centerAt(w)+(b*2-1)*width;
     const [x,,z]=positionAt(u,0,w);
-    const feather=smoothstep(0,.18,edge) * smoothstep(-1.5,1.8,w+1.1*Math.sin(b*13.01));
+    const edgeTuck=smoothstep(0,.155,edge);
+    const threshold=smoothstep(-3.6,.14,w+.41*Math.sin(b*13.01));
+    const feather=edgeTuck*threshold;
     const y=lerp(ground(x,z)-.20,floorAt(x,z),feather);
     return [x,y,z];
   }),caveMaterial('floor',time));
-  mesh('Ice and silt back wall',surface(9,40,(a,b)=>{
-    const theta=b*Math.PI, w=end-.82-.68*Math.sin(theta*1.5);
-    const [u,y]=archPoint(theta,w);
-    return positionAt(lerp(centerAt(w),u,a),lerp(bedHeight(u,w)-.47,y,a),w);
+  mesh('Ice and silt back wall',surface(24,96,(a,b)=>{
+    const theta=b*Math.PI, rim=rearAt(theta);
+    const [u,y]=archPoint(theta,rim);
+    const center=centerAt(rearWall), w=lerp(rearWall-.37,rim,a);
+    return positionAt(lerp(center,u,a),lerp(bedHeight(center,w)-.73,y,a),w);
   }),caveMaterial('interior',time));
 
   const water=mesh('Flowing meltwater',surface(121,12,(a,b)=>{
@@ -315,13 +410,36 @@ export function buildGlacierCave(scene,grid,ground) {
   }),caveMaterial('water',time));
   water.renderOrder=3;
 
+  const postsAt=[1.8,7.4,13.6,20.5,27.3,33.2];
+  const posts=new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(.026,.037,.62,8),
+    new THREE.MeshStandardMaterial({color:0x454847,roughness:.77}),postsAt.length);
+  const reflectors=new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(.041,.041,.13,8),
+    new THREE.MeshStandardMaterial({color:0xffa642,emissive:0xffa642,emissiveIntensity:.28,roughness:.68}),postsAt.length);
+  const obj=new THREE.Object3D();
+  for(const [i,w] of postsAt.entries()) {
+    const u=footpathAt(w)-1.04+.12*Math.sin(w);
+    const [x,,z]=positionAt(u,0,w), y=floorAt(x,z);
+    const tilt=.093*Math.sin(w*5.13);
+    obj.rotation.set(0,0,tilt);
+    obj.position.set(x,y+.24,z);
+    obj.updateMatrix();
+    posts.setMatrixAt(i,obj.matrix);
+    obj.position.set(x-.248*Math.sin(tilt),y+.24+.248*Math.cos(tilt),z);
+    obj.updateMatrix();
+    reflectors.setMatrixAt(i,obj.matrix);
+  }
+  posts.name='Walkway stakes in the gravel bank';
+  reflectors.name='Amber walkway reflectors';
+  cave.add(posts,reflectors);
+
   const rng=mulberry32(712193);
   const ice = glacierIceMaterial();
-  const icicles = new THREE.InstancedMesh(icicleGeometry(),ice,61);
-  const obj=new THREE.Object3D();
+  const icicles = new THREE.InstancedMesh(icicleGeometry(),ice,47);
   const drips=[];
   for(let i=0;i<icicles.count;i++) {
-    const inner=i>=24, w=inner?lerp(4.3,32,rng()):lerp(-.4,1.6,rng());
+    const inner=i>=18, w=inner?lerp(4.3,32,rng()):lerp(-.4,1.6,rng());
     const angle=inner?lerp(.39,2.73,rng()):lerp(.19,2.98,rng());
     const [u,y]=archPoint(angle,w);
     const allowable=Math.max(.10,y-bedHeight(u,w)-.48);
@@ -363,14 +481,16 @@ export function buildGlacierCave(scene,grid,ground) {
   }
   stones.name='Broken schist and glacial till on the banks';
   cave.add(stones);
-  const moraine = new THREE.InstancedMesh(stoneGeo,caveMaterial('moraine',time),71);
+  const moraine = new THREE.InstancedMesh(stoneGeo,caveMaterial('moraine',time),94);
   const rubble = mulberry32(911071);
   for(let i=0;i<moraine.count;i++) {
-    const behind = i >= 49;
-    const w = behind ? lerp(42.0,69.2,rubble()) : lerp(-3.8,56.5,rubble());
-    const side = i % 2 === 0 ? 1 : -1;
-    const u = centerAt(w) + side * (behind ? lerp(1.9,18.6,rubble()) : widthAt(w)+lerp(3.2,17.8,rubble()));
-    const radius = lerp(.18,1.74,rubble()**2.7);
+    const foreland=i<25, side=i<66?-1:1;
+    const w=foreland?lerp(-9,1.0,rubble()):lerp(2.8,60,rubble());
+    const {center,width}=shoulderProfile(w);
+    const edge=foreland?widthAt(w)+2.8:width;
+    const u=(foreland?centerAt(w):center)+side*(edge+lerp(-1.0,4.6,rubble()))
+      + 1.74*Math.sin(w*.22);
+    const radius=lerp(.19,foreland?1.30:1.88,rubble()**2.7);
     const x = site.x+u, z = site.z+w, y = ground(x,z);
     obj.position.set(x,y-radius*.18,z);
     obj.rotation.set(rubble()*.58,rubble()*Math.PI*2,rubble()*.42);
@@ -400,28 +520,35 @@ export function buildGlacierCave(scene,grid,ground) {
   const drops=new THREE.Points(dropletGeo,new THREE.PointsMaterial({color:0xb4deed,size:.040,transparent:true,depthWrite:false,opacity:.46}));
   drops.name='Seasonal drips';drops.frustumCulled=false;drops.visible=false;
   cave.add(drops);
-  addWallColliders(grid);
+  const wallAt = addWallColliders(grid);
 
   const mouthX=site.x-5.4, mouthZ=site.z-16.6;
-  const withinCave=(x,z,y,widthFactor,maxDistance)=>{
+  const withinCave=(x,z,y,maxDistance)=>{
     const w=z-site.z,u=x-site.x;
     if (w < -.75 || w > maxDistance) return false;
-    const relative=Math.abs(u-centerAt(w))/widthAt(w);
-    if (relative>widthFactor) return false;
+    const relative=(u-centerAt(w)) / widthAt(w);
+    if (Math.abs(relative)> .8) {
+      const side = Math.sign(relative);
+      if (side * (u - wallAt(w,side)) > .28) return false;
+    }
     const floor=bedHeight(u,w);
-    const ceiling=floor+crownAt(w)*Math.pow(1-relative*relative,.36);
+    const ceiling=floor+Math.max(1.7,crownAt(w)*Math.pow(Math.max(0,1-relative*relative),.36));
     return y>=floor-4.6 && y<ceiling+.26;
   };
   return {
     views:{
-      entrance:{eye:[mouthX,ground(mouthX,mouthZ)+4.3,mouthZ],target:positionAt(.9,site.y+2.66,1.7),fov:48,aspect:1.5},
+      entrance:{eye:[mouthX,ground(mouthX,mouthZ)+5.6,mouthZ],target:positionAt(.9,site.y+3.40,1.7),fov:52,aspect:1.5},
       interior:{eye:positionAt(-3.55,bedHeight(-3.55,25.3)+1.51,25.3),target:positionAt(.9,site.y+2.95,-1.4),fov:61,aspect:1.42},
     },
     walkSurfaceAt(x,z,y) {
-      return withinCave(x,z,y,.94,40.3) ? floorAt(x,z) : null;
+      if (withinCave(x,z,y,rearWall)) return floorAt(x,z);
+      const w=z-site.z, u=x-site.x;
+      if (w<shoulderStart || w>shoulderEnd || Math.abs(u)>38 || !Number.isFinite(y)) return null;
+      const top=shoulderSurfaceAt(u,w,ground);
+      return top!==null && y>=top-.78 ? top : null;
     },
     interiorAt(x,z,y) {
-      return z>site.z-.39 && withinCave(x,z,y,.94,40.9) ? cave : null;
+      return z>site.z-.39 && withinCave(x,z,y,rearWall) ? cave : null;
     },
     update(seconds,camera) {
       const distance=camera?Math.hypot(camera.position.x-site.x,camera.position.z-site.z):Infinity;

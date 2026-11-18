@@ -15,7 +15,9 @@ const questJackets = {
   'quest.wildlife':['Fireweed','#965387'],
   'quest.delivery':['Lichen','#9ba65e'],
   'quest.rescue':['Alpine crimson','#b92c40'],
+  'quest.patrol-shell':['Alpine Patrol Shell · 2× landing tricks','patrol-shell'],
 };
+const patrolShell = questJackets['quest.patrol-shell'][1];
 function jacketPalette(finds) {
   return [...colors.jacket,...Object.entries(questJackets).filter(([key])=>finds.includes(key)).map(([,value])=>value)];
 }
@@ -45,7 +47,21 @@ export class Outfitter {
   equip() {
     const s=this.state;
     this.player.tuning=SKIS[s.skis];
-    this.player.rig.setAppearance?.({...s.outfit,skis:s.skis,sticker:s.sticker});
+    const patrol=s.outfit.jacket===patrolShell;
+    this.player.landingTrickMultiplier=patrol?2:1;
+    this.player.rig.setAppearance?.({...this.broadcastOutfit,apparel:patrol?patrolShell:undefined,skis:s.skis,sticker:s.sticker});
+  }
+  get broadcastOutfit() {
+    const {outfit}=this.state;
+    return outfit.jacket===patrolShell ? {...outfit,jacket:'#323538'} : outfit;
+  }
+  equipPatrolShell() {
+    if(!this.state.finds.includes('quest.patrol-shell'))return false;
+    this.state.outfit.jacket=patrolShell;
+    this.equip();
+    this.save();
+    if(this.dialog.open)this.render();
+    return true;
   }
   save(){try{localStorage.setItem(key,JSON.stringify(this.state));}catch{}}
   credit(amount){if(!Number.isSafeInteger(amount)||amount<=0)return;this.state.balance+=amount;this.save();}

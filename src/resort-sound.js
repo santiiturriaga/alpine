@@ -7,11 +7,15 @@ const air={
 const tavern={
   beat:.35,bar:6,roots:[55,52,48,50,55,59,48,50], notes:[7,9,7,4,2,0,4,7,11,9,7,2,4,0,2,5],
 };
+const night={
+  beat:.58,bar:8,roots:[45,41,48,43,45,40,41,43],notes:[0,7,3,9,4,7,2,10,0,14,7,3,4,9,2,7],
+};
 const hz=n=>440*2**((n-69)/12);
 
 export class ResortSound {
   constructor(engine){
     this.engine=engine;this.ctx=engine.ctx;this.next=0;this.step=0;this.popAt=0;this.chatterAt=0;
+    this.piece=air;
     const ctx=this.ctx;
     this.music=ctx.createGain();this.music.gain.value=.55;this.music.connect(engine.master);
     this.delay=ctx.createDelay(1);this.delay.delayTime.value=.27;
@@ -57,8 +61,13 @@ export class ResortSound {
     }
     if(!engine.musicEnabled){this.next=t+.25;return;}
     if(this.next<t)this.next=t+.018;
-    const score=near>.38?tavern:air,pluck=score===tavern;
+    const requested=near>.48 ? tavern : (state.night ?? 0)>.73 ? night : air;
     while(this.next<t+.36){
+      if(this.step%this.piece.bar===0 && requested!==this.piece){
+        this.piece=requested;
+        this.step=0;
+      }
+      const score=this.piece,pluck=score===tavern;
       const bar=Math.floor(this.step/score.bar),n=this.step%score.bar,root=score.roots[bar%8];
       if(n===0)this.note(root-12,this.next,score.beat*(score.bar-.5),.055,false,-.18);
       if(n===0||n===Math.floor(score.bar/2)){
@@ -66,6 +75,7 @@ export class ResortSound {
         this.note(root+12+voice,this.next+.025,score.beat*(pluck?2.35:3.65),.048,pluck,.22);
       }
       if(n===2||n===4||(!pluck&&n===6))this.note(root+(n===4?12:7),this.next,score.beat*1.9,.026,pluck,-.27);
+      if(!pluck && n===6 && bar%2===1)this.note(root+19,this.next+.045,score.beat*2.8,.017,false,.42);
       this.next+=score.beat;this.step++;
     }
   }

@@ -120,6 +120,7 @@ export class Player {
     this.walkDirection = 1;
     this.lastFootfall = 0;
     this.sampleGround = (x, z) => this.groundHeight(x, z);
+    this.sampleTread = (x, z) => this.env?.interiors?.stairTreadAt?.(x, z) ?? null;
     this.beforeStep=new THREE.Vector3();
 
     this.stats = {
@@ -750,16 +751,20 @@ export class Player {
 
     for (const c of cols) {
       const y = c.type === 'fallen log' && !inAir ? gy + .035 : this.pos.y;
-      if (y < (c.minY ?? -Infinity) || y > (c.maxY ?? Infinity)) continue;
+      // Rails and overhanging beams can hit the body even when the soles
+      // clear their underside. Leave enough room to step over short lips.
+      const bodyHeight = this.footMode ? 1.58 : 1.33;
+      if (y + bodyHeight < (c.minY ?? -Infinity) || y + .07 > (c.maxY ?? Infinity)) continue;
       if (c.r) {
         if (inAir && this.pos.y > gy + 7.5) continue;
         const dx = this.pos.x - c.x;
         const dz = this.pos.z - c.z;
         const rr = c.r + playerR;
         const d2 = dx * dx + dz * dz;
-        if (d2 >= rr * rr || d2 < 1e-6) continue;
-        const d = Math.sqrt(d2);
-        const nx = dx / d, nz = dz / d;
+        if (d2 >= rr * rr) continue;
+        const d = Math.sqrt(d2), along = Math.max(.001, speed);
+        const nx = d > .0001 ? dx / d : speed > .001 ? -this.vel.x / along : 1;
+        const nz = d > .0001 ? dz / d : speed > .001 ? -this.vel.z / along : 0;
         this.pos.x = c.x + nx * rr;
         this.pos.z = c.z + nz * rr;
         const vn = this.vel.x * nx + this.vel.z * nz;
@@ -767,11 +772,10 @@ export class Player {
           this.vel.x -= vn * nx * 1.25;
           this.vel.z -= vn * nz * 1.25;
         }
-        if (speed > 5.5 && ['tree', 'boulder', 'rock', 'lift-tower', 'arch-pole'].includes(c.type)) {
+        if (vn < -5.5 && ['tree', 'boulder', 'rock', 'lift-tower', 'arch-pole'].includes(c.type)) {
           this.startCrash(c.type);
           return;
         }
-        this.vel.multiplyScalar(0.72);
       } else if (c.hw) {
         if (inAir && !Number.isFinite(c.maxY) && this.pos.y > gy + 5.0) continue;
         if (!pointInBox(this.pos.x, this.pos.z, c, playerR * 0.5, playerR * 0.5)) continue;
@@ -782,18 +786,23 @@ export class Player {
         const px = c.hw + playerR * 0.5 - Math.abs(lx);
         const pz = c.hd + playerR * 0.5 - Math.abs(lz);
         let nlx = lx, nlz = lz;
-        if (px < pz) nlx = Math.sign(lx || 1) * (c.hw + playerR * 0.5);
+        const side = px < pz;
+        if (side) nlx = Math.sign(lx || 1) * (c.hw + playerR * 0.5);
         else nlz = Math.sign(lz || 1) * (c.hd + playerR * 0.5);
         const cr = Math.cos(c.rot), sr = Math.sin(c.rot);
         const wx = nlx * cr - nlz * sr;
         const wz = nlx * sr + nlz * cr;
         this.pos.x = c.x + wx;
         this.pos.z = c.z + wz;
-        if (speed > 7.5 || (!this.footMode && c.type === 'fallen log' && speed > 4.5)) {
+        const nx = side ? cr * Math.sign(nlx) : -sr * Math.sign(nlz);
+        const nz = side ? sr * Math.sign(nlx) : cr * Math.sign(nlz);
+        const inward = Math.min(0, this.vel.x * nx + this.vel.z * nz);
+        if (inward < -7.5 || (!this.footMode && c.type === 'fallen log' && inward < -4.5)) {
           this.startCrash(c.type === 'fallen log' ? c.type : 'building');
           return;
         }
-        this.vel.multiplyScalar(0.35);
+        this.vel.x -= inward * nx;
+        this.vel.z -= inward * nz;
       }
     }
 
@@ -887,6 +896,7 @@ export class Player {
       walk: this.walkAmount,
       walkStride: this.walkStride,
       walkDirection: this.walkDirection,
+      stairTreadAt: this.footMode ? this.sampleTread : null,
       switchStance: this.switchStance,
       switchSide: this.switchLookSide,
       snowSink: this.snowSink,
@@ -909,13 +919,13 @@ export class Player {
       if(!shadow.visible)continue;
       const sole=this.rig.contactPoints[i],forward=this.rig.skiAxes[i];
       const yaw=Math.atan2(forward.x,forward.z),sin=Math.sin(yaw),cos=Math.cos(yaw);
-      const ground=this.groundHeight(sole.x,sole.z);
+      const ground=this.sampleTread(sole.x,sole.z) ?? this.groundHeight(sole.x,sole.z);
       shadow.material.uniforms.load.value=1-smoothstep(.015,.16,sole.y-ground);
       const geometry=shadow.geometry, position=geometry.attributes.position, uv=geometry.attributes.uv;
       for(let k=0;k<4;k++){
         const u=(uv.getX(k)-.5)*.51,v=(.5-uv.getY(k))*.72;
         const x=sole.x+cos*u+sin*v,z=sole.z-sin*u+cos*v;
-        const y=this.groundHeight(x,z);
+        const y=this.sampleTread(x,z) ?? this.groundHeight(x,z);
         _sole.set(x,Math.abs(y-ground)<.16?y+.006:ground+.006,z).applyMatrix4(_inverseModel);
         position.setXYZ(k,_sole.x,_sole.y,_sole.z);
       }
@@ -968,7 +978,8 @@ export class Player {
     this.camYaw = snap ? yaw
       : wrapAngle(this.camYaw + shortestAngle(this.camYaw, yaw) * (1 - Math.exp(-4.4 * dt)));
     const fx = Math.sin(this.camYaw+this.lookYaw), fz = Math.cos(this.camYaw+this.lookYaw);
-    const distance = wide ? 9.5 : this.holdAtUnload ? 6.9 : 4.5 + speed * 1.65;
+    const walking = this.footMode;
+    const distance = walking ? (wide ? 5.2 : 3.4) : wide ? 9.5 : this.holdAtUnload ? 6.9 : 4.5 + speed * 1.65;
     const height = (wide ? 3.4 : 1.95 + speed * .35) + this.lookPitch*distance*.65;
     const lookAhead = wide ? 13 : 8 + speed * 4;
     const ground = this.groundHeight(this.pos.x, this.pos.z);
@@ -1006,6 +1017,15 @@ export class Player {
     const maxStep = (movingIn ? 16 : 8) * dt / Math.max(.001, length);
     this.cameraArmFraction = snap ? target : Math.min(fraction,
       this.cameraArmFraction + clamp(next - this.cameraArmFraction, -maxStep, maxStep));
+    if (walking && this.cameraArmFraction * length < 1.35) {
+      // In a narrow corridor, frame from the eyes instead of parking inside the backpack.
+      this.rig.showHelmetGear(true, this);
+      this.updateHelmetCamera(dt, snap);
+      // Retain the original boom so backing out of the corridor doesn't jump.
+      this.camPos.copy(_cameraArm);
+      this.cameraArmFraction = target;
+      return;
+    }
     this.camera.position.copy(_cameraAnchor).lerp(_cameraArm, this.cameraArmFraction);
     this.camLook.lerp(_tourLook, follow);
     this.camera.up.copy(_up);

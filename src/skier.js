@@ -287,7 +287,9 @@ function jointGarment(parent, material, options = {}) {
   };
 }
 
+let wovenFabric, ripstopFabric;
 function fabricMaps() {
+  if (wovenFabric) return wovenFabric;
   const height = makeCanvas(128, 128), surface = makeCanvas(128, 128);
   const bump = height.ctx.createImageData(128, 128), color = surface.ctx.createImageData(128, 128);
   const rand = mulberry32(2217);
@@ -304,10 +306,28 @@ function fabricMaps() {
   }
   height.ctx.putImageData(bump, 0, 0);
   surface.ctx.putImageData(color, 0, 0);
-  return {
+  return wovenFabric = {
     bumpMap: canvasTexture(height.canvas, { srgb: false, repeat: [3, 3] }),
     map: canvasTexture(surface.canvas, { repeat: [3, 3] }),
   };
+}
+
+function patrolFabric() {
+  if (ripstopFabric) return ripstopFabric;
+  const { canvas, ctx } = makeCanvas(128, 128);
+  ctx.fillStyle = '#dcdfe2';
+  ctx.fillRect(0, 0, 128, 128);
+  ctx.lineWidth = 1;
+  for (const direction of [-1, 1]) {
+    ctx.strokeStyle = direction > 0 ? '#aeb4bc' : '#b9bec4';
+    ctx.beginPath();
+    for (let j = -128; j <= 256; j += 8) {
+      ctx.moveTo(j, 0);
+      ctx.lineTo(j + 128 * direction, 128);
+    }
+    ctx.stroke();
+  }
+  return ripstopFabric = canvasTexture(canvas, { repeat: [2, 2] });
 }
 
 const skiEdges = [-1, 1];
@@ -437,6 +457,30 @@ export function createSkier({
     });
   };
   const jacketMesh = put(torso, shapeJacket(shell(jacketProfile, .021, 40, true)), jacket);
+  let rescueTrim;
+  function patrolTrim() {
+    const group = new THREE.Group();
+    group.name = 'Patrol shell · high storm collar, bonded pockets and stitched crest';
+    torso.add(group);
+    const trim = material(0x272d31, .82);
+    const thread = material(0xc4c9c6, .92);
+    put(group, shell([[.535,.112,.103,.006],[.58,.114,.111,.009],[.627,.108,.102,.016],
+      [.649,.099,.092,.019]], .018, 28), shoulderPanel);
+    piping(group, trim, jacketFront([[-.184,.318],[-.092,.331],[0,.332],[.092,.331],[.184,.318]], .009), .0027);
+    for (const side of [-1, 1]) {
+      const start = side * .09;
+      piping(group, trim, jacketFront([[start,.066],[side*.102,.158],[side*.112,.253],[side*.108,.310]], .009), .0044);
+      rounded(group, black, .010,.024,.008, ...jacketFront([[side*.108,.287],[side*.108,.291]],.017)[0], .002);
+    }
+    // Embroidered fossil-bird motif and feather stitching on the chest.
+    for (const line of [
+      [[.105,.414],[.091,.418],[.078,.408],[.086,.393],[.107,.383],[.125,.383]],
+      [[.088,.398],[.067,.396],[.049,.382]], [[.086,.398],[.107,.401],[.132,.391]],
+      [[.085,.392],[.065,.382],[.052,.370]], [[.093,.386],[.084,.372],[.072,.369]],
+      [[.098,.388],[.112,.375],[.13,.369]],
+    ]) piping(group, thread, jacketFront(line,.012), .0009);
+    return group;
+  }
   put(torso, shell([[.495,.103,.082,-.058],[.54,.107,.094,-.067],[.603,.105,.096,-.056],[.657,.089,.083,-.017],[.688,.077,.069,.014]], .026), shoulderPanel);
   piping(torso, black, jacketFront([[0,-.065],[0,.115],[0,.24],[0,.36],[0,.48],[0,.563]], .0075), .0043);
   piping(torso, accent, jacketFront([[0,.475],[0,.499]], .012), .0037);
@@ -670,8 +714,9 @@ export function createSkier({
   const skiRights = legs.map(() => new THREE.Vector3(1, 0, 0));
   const skiSink = [0, 0], skiPlanted = [false, false];
 
-  function plantSki(ski, groundHeight, edgeAngle, footMode, sink) {
+  function plantSki(ski, groundHeight, edgeAngle, footMode, sink, stairTreadAt) {
     skiCenter.copy(ski.position).applyMatrix4(frameMatrix);
+    const tread = stairTreadAt?.(skiCenter.x, skiCenter.z);
     tipDirection.copy(skiForward).applyQuaternion(ski.quaternion).applyQuaternion(frameRotation);
     tipDirection.y = 0;
     tipDirection.normalize();
@@ -680,8 +725,8 @@ export function createSkier({
       groundHeight(skiCenter.x + axis.x * range, skiCenter.z + axis.z * range)
       - groundHeight(skiCenter.x - axis.x * range, skiCenter.z - axis.z * range)
     ) / (range * 2);
-    tipDirection.y = gradient(tipDirection, footMode ? .13 : .68);
-    crossDirection.y = gradient(crossDirection, .10);
+    tipDirection.y = tread == null ? gradient(tipDirection, footMode ? .13 : .68) : 0;
+    crossDirection.y = tread == null ? gradient(crossDirection, .10) : 0;
     tipDirection.normalize();
     groundNormal.crossVectors(tipDirection, crossDirection).normalize();
     crossDirection.crossVectors(groundNormal, tipDirection).normalize();
@@ -695,7 +740,7 @@ export function createSkier({
     for (const [z, width, y] of (footMode ? bootContactProfile : activeDeck.profile)) {
       for (const side of skiEdges) {
         sample.set(side * width, y - baseThickness, z).applyQuaternion(skiRotation);
-        support = Math.max(support, groundHeight(skiCenter.x + sample.x, skiCenter.z + sample.z) - sample.y);
+        support = Math.max(support, (tread ?? groundHeight(skiCenter.x + sample.x, skiCenter.z + sample.z)) - sample.y);
       }
     }
     skiCenter.y = support + .002 - sink;
@@ -713,7 +758,7 @@ export function createSkier({
   function animate(dt, params, groundHeight) {
     const { speed, steer, tuck, brake, airborne, grab, crash, crashTime,
       stride = 0, stridePhase = 0, climb = 0, footMode = false, walk = 0, snowSink = 0,
-      walkStride = .49, walkDirection = 1, switchStance = false, switchSide = 1, mount } = params;
+      walkStride = .49, walkDirection = 1, switchStance = false, switchSide = 1, stairTreadAt, mount } = params;
     if (groundHeight) {
       frameMatrix.copy(group.parent.matrix);
       inverseFrame.copy(frameMatrix).invert();
@@ -838,7 +883,7 @@ export function createSkier({
       skiSink[i] = Math.max(0, loadedDepth - stepLift);
       skiPlanted[i] = !!groundHeight && !footMode && stepLift < loadedDepth + .004;
       if (groundHeight) {
-        plantSki(ski, groundHeight, edge, footMode, loadedDepth);
+        plantSki(ski, groundHeight, edge, footMode, loadedDepth, stairTreadAt);
         // Lift only the recovering ski; the other remains supported by its base.
         // Up is transformed into the model frame so lift stays vertical on slopes.
         sample.set(0, stepLift, 0).applyQuaternion(inverseRotation);
@@ -869,6 +914,9 @@ export function createSkier({
     body.visible = !on;
     for(const leg of legs)leg.trousers.mesh.visible=!on;
     helmetGear.visible = on;
+    if (on && player.footMode) {
+      for (const { equipment } of legs) equipment.visible = false;
+    }
     helmetGear.rotation.y = player.switchStance ? Math.PI : 0;
     if (!helmetGear.visible) return;
     for (const { hand, side, pole, forearm } of helmetHands) {
@@ -890,7 +938,11 @@ export function createSkier({
   }
 
   const acceptsColor = (value) => typeof value === 'string' && /^#(?:[\da-f]{3}|[\da-f]{6})$/i.test(value);
-  function setAppearance({ jacket: color, pants: trousers, helmet: shellColor, backpack, sticker, skis } = {}) {
+  function setAppearance({ jacket: color, pants: trousers, helmet: shellColor, backpack, sticker, skis, apparel } = {}) {
+    const patrol = apparel === 'patrol-shell';
+    if (patrol && !rescueTrim) rescueTrim = patrolTrim();
+    if (rescueTrim) rescueTrim.visible = patrol;
+    jacket.map = shoulderPanel.map = patrol ? patrolFabric() : cloth.map;
     if (acceptsColor(color)) {
       jacket.color.set(color);
       shoulderPanel.color.copy(jacket.color).multiplyScalar(.58);

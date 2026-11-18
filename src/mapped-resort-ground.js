@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { bindSnowTraffic, compressSnow, snowTrafficGLSL } from './snow-traffic.js';
 import { stevensHeightDetails } from './stevens-pass-terrain.js';
 import { climateUniforms } from './climate-state.js';
 import { clamp, lerp, smoothstep } from './util.js';
@@ -254,6 +255,8 @@ function snowMaterial(bounds, field, regional = false) {
     shader.uniforms.resortField = { value: field.texture };
     if (summerTrails) shader.uniforms.summerField = { value: field.summerTexture };
     shader.uniforms.snowpack = climateUniforms.snowpack;
+    shader.uniforms.realism = climateUniforms.realism;
+    if (!regional) bindSnowTraffic(shader);
     shader.uniforms.snowline = climateUniforms.snowline;
     shader.uniforms.resortLimits = { value: new THREE.Vector4(bounds.minX, bounds.minZ,
       bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) };
@@ -266,6 +269,8 @@ function snowMaterial(bounds, field, regional = false) {
       uniform vec4 resortLimits;
       uniform float snowpack;
       uniform float snowline;
+      uniform float realism;
+      ${regional ? '' : snowTrafficGLSL}
     `).replace('#include <color_fragment>', `#include <color_fragment>
       vec3 p = resortPoint;
       float eye = length(vViewPosition);
@@ -292,6 +297,7 @@ function snowMaterial(bounds, field, regional = false) {
         diffuseColor.rgb *= mix(mix(stone,alpine,(1.-cliff)*snow),spruce,forests*.96);
       ` : `
         float nearDetail = 1. - smoothstep(28.,140.,eye);
+        float traffic = trackPressure(p.xz) * (1.0-ice);
         float drift = resortNoise(p * vec3(.45,.14,.72)+flutes*.55);
         float shallow = resortNoise(p * vec3(1.66,.53,1.66));
         vec3 finePoint = p * vec3(24.,7.,24.);
@@ -306,7 +312,9 @@ function snowMaterial(bounds, field, regional = false) {
         vec3 powder = vec3(.831,.890,.956) * (snowShape+crust*.13) * (.935+.106*mountainside);
         vec3 packed = vec3(.847,.908,.973) * (snowShape+crust*.08);
         vec3 blueIce = vec3(.591,.725,.833) * (.91+.104*drift+.03*shallow);
-        vec3 snowColor = mix(mix(powder,packed,groom),blueIce,ice*.75);
+        vec3 snowColor = mix(mix(powder,packed,max(groom,traffic*.76)),blueIce,ice*.75);
+        snowColor *= 1.0 - traffic * .073;
+        snowColor += vec3(.15,.20,.26)*smoothstep(.74,.91,grains)*coverage*nearDetail*realism*(1.0-ice*.72);
         vec3 granite = mix(vec3(.073,.083,.098),vec3(.245,.244,.228),cliffBed*.72+flutes*.28);
         granite *= .78 + .3 * cliffBed;
         float canopy = resortNoise(p * vec3(.085,.041,.085));
@@ -329,7 +337,7 @@ function snowMaterial(bounds, field, regional = false) {
           + .0018 * ripple * tracks) * (1. - ice*.77);
       `}
     `).replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-      roughnessFactor *= 1. - ice*.47;
+      roughnessFactor *= 1. - ice*(.47+.20*realism);
     `).replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
       ${regional ? '' : `
         vec3 dx = dFdx(vViewPosition), dz = dFdy(vViewPosition);
@@ -495,7 +503,7 @@ export async function loadMappedGround(scene, config, baseURL) {
       out.grip = 1 - .61 * ice - .28 * powder;
       out.drag = 1 - .32 * ice + .54 * powder;
       out.powder = (.11 + .89 * powder) * (1 - ice) * cover;
-      return out;
+      return compressSnow(x, z, out);
     },
     sampleSnowSurface(x, z, color, normal) {
       const { groomed, ice } = field.at(x, z, fieldSample);

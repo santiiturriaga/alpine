@@ -3,6 +3,7 @@ import { RUNS, WORLD, runPointAt } from './worlddata.js';
 import { heightAt, normalAt } from './terrain.js';
 import { clamp, damp, wrapAngle } from './util.js';
 import { createServiceAsset } from './service-assets.js';
+import { createPatrolPad } from './patrol-flight-assets.js';
 import { WingTrails } from './effects.js';
 
 const stations = [
@@ -17,6 +18,7 @@ const forward = new THREE.Vector3(), side = new THREE.Vector3(), basis = new THR
 const vertical = new THREE.Vector3(0,1,0), trackPoint = new THREE.Vector3();
 const desiredView = new THREE.Vector3();
 const whistler = { heightAt, normalAt, bounds:WORLD };
+const distanceTo = (a,b) => Math.hypot(a.x-b.x,a.z-b.z);
 
 export class Expeditions {
   constructor(scene, grid, { ground = whistler, env, fx, bikes = [], winterVehicles = true, season = () => 'winter' } = {}) {
@@ -44,13 +46,50 @@ export class Expeditions {
             break;
           }
         }
-        this.addVehicle(scene, spec, pose);
+        const helipad = spec.id==='helicopter' && this.helicopterParking(run,spec.metres);
+        this.addVehicle(scene, spec, helipad || pose, spec.id==='helicopter' ? pose : null);
       }
     }
     for (const { id, pose, label } of bikes) {
       this.addVehicle(scene, { ...bikeSpec, destination:id, label:label ?? bikeSpec.label }, this.bikeParking(pose));
     }
     this.wings = winterVehicles ? new WingTrails(scene) : null;
+    const pad = this.fleet.find(v=>v.pad)?.pad;
+    if (pad && env?.walkSurfaceAt) {
+      const walkSurfaceAt = env.walkSurfaceAt.bind(env);
+      env.walkSurfaceAt = (x,z,y) => {
+        const deck=pad.walkAt(x,z);
+        return deck !== null && deck<=y+.65 ? deck : walkSurfaceAt(x,z,y);
+      };
+    }
+  }
+
+  helicopterParking(run,metres) {
+    let best, cost=Infinity;
+    for (let d=metres-45; d<=metres+50; d+=5) {
+      const trail=runPointAt(run,d/run.length);
+      const trailY=this.ground.heightAt(trail.x,trail.z);
+      for (const offset of [-13,13,-16,16,-19,19]) {
+        const x=trail.x+trail.nx*offset, z=trail.z+trail.nz*offset, y=this.ground.heightAt(x,z);
+        if (this.obstructed(x,z,y,7.5)) continue;
+        const heading=Math.atan2(x-trail.x,z-trail.z);
+        const rim=Array.from({length:8},(_,i)=>{
+          const a=heading+Math.PI/8+i*Math.PI/4;
+          return this.ground.heightAt(x+Math.sin(a)*7.2,z+Math.cos(a)*7.2);
+        });
+        const deck=Math.max(y,...rim)+.14;
+        const spread=deck-Math.min(y,...rim);
+        const step=Math.abs(deck-trailY);
+        const pathClear=[.18,.4,.65,.85].every(t=>{
+          const sx=trail.x+(x-trail.x)*t, sz=trail.z+(z-trail.z)*t;
+          return !this.obstructed(sx,sz,this.ground.heightAt(sx,sz),.75);
+        });
+        if (!pathClear) continue;
+        const score=Math.abs(d-metres)*.049+Math.abs(offset)*.075+spread*.85+step*1.8;
+        if (score<cost) { cost=score;best={x,z,heading,trailD:d}; }
+      }
+    }
+    return best;
   }
 
   bikeParking(pose) {
@@ -70,12 +109,14 @@ export class Expeditions {
     return pose;
   }
 
-  addVehicle(scene, spec, pose) {
+  addVehicle(scene, spec, pose, legacyPose) {
     const model = new THREE.Group();
     model.name = spec.label;
-    model.position.set(pose.x,this.ground.heightAt(pose.x,pose.z),pose.z);
+    const pad = spec.id==='helicopter' ? createPatrolPad(scene,pose,this.ground.heightAt) : null;
+    const homeY=pad?.y ?? this.ground.heightAt(pose.x,pose.z);
+    model.position.set(pose.x,homeY,pose.z);
     scene.add(model);
-    const v = { ...spec, model, homeX:pose.x, homeZ:pose.z, homeYaw:pose.heading ?? 0,
+    const v = { ...spec, model, pad, legacyPose, homeX:pose.x, homeY, homeZ:pose.z, homeYaw:pose.heading ?? 0, trailD:pose.trailD ?? spec.metres,
       asset:null, yaw:pose.heading ?? 0, speed:0, clearance:0, cockpit:false };
     this.pose(v,false);
     this.park(v);
@@ -96,7 +137,7 @@ export class Expeditions {
 
   pose(v,flying) {
     const p = v.model.position;
-    if (flying) normal.copy(vertical);
+    if (flying || v.pad?.surfaceAt(p.x,p.z)!=null) normal.copy(vertical);
     else this.ground.normalAt(p.x,p.z,normal);
     forward.set(Math.sin(v.yaw),0,Math.cos(v.yaw)).addScaledVector(normal,-normal.dot(forward)).normalize();
     side.crossVectors(normal,forward).normalize();
@@ -108,6 +149,7 @@ export class Expeditions {
 
   drawNear(pos) {
     for (const v of this.fleet) {
+      if (v.pad) v.pad.group.visible=Math.hypot(v.homeX-pos.x,v.homeZ-pos.z)<360;
       const visible = v === this.active || (this.available(v) && Math.hypot(v.model.position.x-pos.x,v.model.position.z-pos.z) < 340);
       v.model.visible = visible;
       if (visible && !v.asset) {
@@ -125,8 +167,10 @@ export class Expeditions {
 
   unpark(v) {
     if (!v.collider) return;
-    const c = v.collider, cell = this.grid.cells.get(this.grid.key(c.x,c.z));
-    for (const list of [cell,this.grid.circles]) {
+    const c=v.collider, cells=new Set();
+    for (const x of [c.x-c.r,c.x+c.r]) for (const z of [c.z-c.r,c.z+c.r])
+      cells.add(this.grid.cells.get(this.grid.key(x,z)));
+    for (const list of [...cells,this.grid.circles]) {
       const i = list?.indexOf(c) ?? -1;
       if (i !== -1) list.splice(i,1);
     }
@@ -136,16 +180,14 @@ export class Expeditions {
   arrival(id, reset = false) {
     const v = this.fleet.find(entry => (entry.destination ?? entry.id) === id);
     if (!v) return null;
-    if (reset && v !== this.active) {
-      v.model.position.set(v.homeX,this.ground.heightAt(v.homeX,v.homeZ),v.homeZ);
-      v.yaw = v.homeYaw;
-      this.pose(v,false);
-    }
+    if (reset && v !== this.active) this.resetHome(v);
     const p = v.model.position, offset = v.radius + 1.5;
+    if (v.pad && distanceTo(p,v.pad.boarding)<5 && Math.abs(p.y-v.homeY)<.25)
+      return {...v.pad.boarding,holdAtUnload:true,footMode:true};
     for (let i=0; i<16; i++) {
       const angle = v.yaw + Math.PI/2 + i*Math.PI/8;
       const x = p.x + Math.sin(angle)*offset, z = p.z + Math.cos(angle)*offset;
-      if (!this.obstructed(x,z,this.ground.heightAt(x,z),.33)) {
+      if (!this.obstructed(x,z,this.floorAt(v,x,z),.33)) {
         return {x,z,heading:Math.atan2(p.x-x,p.z-z),holdAtUnload:true,footMode:true};
       }
     }
@@ -153,8 +195,18 @@ export class Expeditions {
   }
 
   nearest(pos) {
-    return this.fleet.find(v => this.available(v) && Math.abs(pos.y-v.model.position.y)<4 &&
-      Math.hypot(pos.x-v.model.position.x,pos.z-v.model.position.z)<v.radius+3.4);
+    return this.fleet.find(v => !v.boardBlocked && this.available(v) && Math.abs(pos.y-v.model.position.y)<4 &&
+      distanceTo(pos,v.model.position)<v.radius+3.4);
+  }
+
+  floorAt(v,x,z) { return v.pad?.surfaceAt(x,z) ?? this.ground.heightAt(x,z); }
+
+  resetHome(v) {
+    this.unpark(v);
+    v.model.position.set(v.homeX,v.homeY,v.homeZ);
+    v.yaw=v.homeYaw;
+    this.pose(v,false);
+    this.park(v);
   }
 
   board(v,player) {
@@ -204,10 +256,11 @@ export class Expeditions {
     }
     if (v.asset.mount) player.scene.add(player.model);
     v.speed = v.clearance = 0;
-    v.model.position.y = this.ground.heightAt(v.model.position.x,v.model.position.z);
+    v.model.position.y = this.floorAt(v,v.model.position.x,v.model.position.z);
     this.pose(v,false);
     v.asset.animate?.(0,0,0,0,false);
     v.asset.setOccupied?.(false);
+    v.rescueFocus=null;
     this.park(v);
     this.wings?.clear();
     this.fx?.breakVehicleTrack();
@@ -235,12 +288,20 @@ export class Expeditions {
   controls(v = this.active) {
     if (v?.id === 'wingsuit') return 'A/D bank · Space spread · Shift tuck · C view · E exit';
     if (v?.id === 'bike') return 'W pedal · S brake · A/D steer · Space hop · C view · E exit';
-    if (v?.id === 'helicopter') return 'Space / Shift altitude · W/S travel · C view · E exit';
+    if (v?.id === 'helicopter') return 'Space/Shift altitude · W/S fly · A/D turn · C view · E exit';
     return 'W/S travel · A/D steer · C view · E exit';
   }
 
   update(dt,keys,player,camera,clock) {
     const v = this.active, p = v.model.position;
+    if (v.rescueFocus) {
+      v.speed=player.speed=0;
+      v.bank=damp(v.bank,0,5,dt);
+      this.pose(v,true);
+      v.asset.animate?.(dt);
+      this.updateCamera(v,camera,dt,clock);
+      return;
+    }
     const steering = Number(!!(keys.KeyD||keys.ArrowRight)) - Number(!!(keys.KeyA||keys.ArrowLeft));
     const throttle = Number(!!(keys.KeyW||keys.ArrowUp)) - Number(!!(keys.KeyS||keys.ArrowDown));
     const tuck = !!(keys.ShiftLeft||keys.ShiftRight);
@@ -248,7 +309,7 @@ export class Expeditions {
     const heli = v.id === 'helicopter', glide = v.id === 'wingsuit', bike = v.id === 'bike';
     const up = Number(spread) - Number(tuck);
     const ground = this.ground;
-    const pGround = ground.heightAt(p.x,p.z);
+    const pGround = this.floorAt(v,p.x,p.z);
     const banking = glide ? .66 : heli ? .12 : bike ? .43 * clamp(v.speed/7,.12,1) : .045;
     v.bank = damp(v.bank,steering*banking,glide ? 4.5 : 7,dt);
     if (glide) {
@@ -273,7 +334,7 @@ export class Expeditions {
     const { minX,maxX,minZ,maxZ } = ground.bounds;
     const x = clamp(p.x + Math.sin(v.yaw)*v.speed*dt,minX+8,maxX-8);
     const z = clamp(p.z + Math.cos(v.yaw)*v.speed*dt,minZ+8,maxZ-8);
-    const groundY = ground.heightAt(x,z);
+    const groundY = this.floorAt(v,x,z);
     let altitude = groundY;
     if (heli) altitude = Math.max(groundY,p.y+up*13*dt);
     if (glide) altitude = p.y - dt*(4.7+v.posture*2.7+Math.abs(v.bank)*.9);
@@ -290,7 +351,7 @@ export class Expeditions {
       if (glide) { this.leave(player,true); return; }
       if (bike) { v.verticalSpeed = 0; p.y = pGround; }
     }
-    v.clearance = p.y-ground.heightAt(p.x,p.z);
+    v.clearance = p.y-this.floorAt(v,p.x,p.z);
     if (glide && v.clearance < .4) { this.leave(player,true); return; }
     this.pose(v,(heli||glide||bike) && v.clearance>.6);
     v.model.rotateZ(v.bank);
@@ -325,7 +386,20 @@ export class Expeditions {
     v.snapView = false;
     camera.near = v.cockpit ? .055 : .27;
     const shake = glide ? clamp((v.speed-17)/19,0,1) * (v.cockpit ? .028 : .065) : 0;
-    if (v.cockpit) {
+    const focus=v.rescueFocus;
+    if (focus) {
+      const shotAngle=focus.heading+.90;
+      const distance=focus.length ?? 23;
+      target.set(focus.x,focus.y+2.3,focus.z);
+      target.lerp(p,.49);
+      desiredView.set(target.x+Math.sin(shotAngle)*distance,target.y+distance*.24,target.z+Math.cos(shotAngle)*distance);
+      const span=target.distanceTo(desiredView);
+      const clear=this.env?.clipCameraArm?.(target.x,target.y,target.z,desiredView) ?? span;
+      desiredView.lerp(target,1-clamp(clear/Math.max(.001,span),.3,1));
+      this.chasePoint.lerp(desiredView,snap ? 1 : 1-Math.exp(-dt*4.5));
+      camera.position.copy(this.chasePoint);
+      camera.near=.27;
+    } else if (v.cockpit) {
       v.model.updateMatrixWorld(true);
       view.copy(v.asset.eye || vertical).applyMatrix4(v.model.matrixWorld);
       view.y += Math.sin(clock*33)*shake;
@@ -347,7 +421,7 @@ export class Expeditions {
     camera.up.set(0,1,0);
     camera.lookAt(target);
     if (v.cockpit && glide) camera.rotateZ(-v.bank*.14);
-    const fov = v.cockpit ? (glide ? 85 : 77) : glide ? 79 : 69;
+    const fov = focus ? 62 : v.cockpit ? (glide ? 85 : 77) : glide ? 79 : 69;
     camera.fov = snap ? fov : damp(camera.fov,fov,5,dt);
     camera.updateProjectionMatrix();
   }

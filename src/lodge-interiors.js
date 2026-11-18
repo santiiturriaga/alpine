@@ -6,7 +6,7 @@ import { box, beam, part, mergedMesh, mergeParts } from './scenery.js';
 import { makeCanvas, canvasTexture, lerp, mulberry32 } from './util.js';
 import { surfaceMaterial } from './materials.js';
 import { makePeak2PeakBadge } from './lift-stations.js';
-import { LODGE_FRAME, LODGE_CAFE, LODGE_TERRACE } from './roundhouse-site.js';
+import { LODGE_FRAME, LODGE_CAFE, LODGE_TERRACE, LODGE_ANNEX, terraceStairHeight } from './roundhouse-site.js';
 
 // Only these mapped village buildings are replaced with open-door shells.
 // Furnishings and room plans are an interpretation; mapped anchors are retained.
@@ -46,11 +46,11 @@ function world(room, x, z) {
   const c = Math.cos(room.yaw), s = Math.sin(room.yaw);
   return { x: room.x + x * c + z * s, z: room.z - x * s + z * c };
 }
-function collider(grid, room, x, z, w, d, type = 'lodge') {
+function collider(grid, room, x, z, w, d, type = 'lodge', top = type === 'furniture' ? 2.35 : room.h + .35) {
   const p = world(room, x, z);
   // ColliderGrid uses a planar positive-angle convention opposite Object3D yaw.
   grid.addBox(p.x, p.z, w / 2, d / 2, -room.yaw, type,
-    { room: room.id, minY: room.y - .55, maxY: room.y + (type === 'furniture' ? 2.35 : room.h + .35) });
+    { room: room.id, minY: room.y - .55, maxY: room.y + top });
 }
 function mesh(parent, parts, material) {
   if (!parts.length) return;
@@ -239,24 +239,20 @@ function buildRoundhouseBalcony(scene,grid,base) {
       metal.push(box(.09,.7,.67,'#515c58',[x+side*.7,.35,27.25]));
     }
     details.push(box(.1,.12,.1,'#ebe4cf',[x+.5,.92,27.25]));
-    collider(grid,room,x,27.25,2.18,2.35,'furniture');
+    collider(grid,room,x,27.25,2.18,2.35,'furniture',1);
   }
   // Side rails and the long outer rail are physical barriers at deck height.
-  collider(grid,room,1.6,29.74,44.2,.18,'lodge');
-  collider(grid,room,28.9,29.74,3.2,.18,'lodge');
-  collider(grid,room,-20.45,27.35,.18,5.15,'lodge');
-  collider(grid,room,30.45,27.35,.18,5.15,'lodge');
+  collider(grid,room,1.6,29.71,44.2,.16,'lodge',.99);
+  collider(grid,room,28.9,29.71,3.2,.16,'lodge',.99);
+  collider(grid,room,-20.45,27.29,.14,4.88,'lodge',.99);
+  collider(grid,room,30.45,27.29,.14,4.88,'lodge',.99);
   for(const z of [26,28.5])for(const x of [-20.4,30.4])wood.push(box(.13,1.0,.13,'#654934',[x,.51,z]));
   mesh(group,wood,surfaceMaterial('timber',{vertexColors:true}));mesh(group,metal);mesh(group,details);
   decks.push({ ...room, floorAt(x,z){
     const p=transform(room,x,z);
-    if(p.x>=-20.5 && p.x<=30.5 && p.z>=24.77 && p.z<=29.85)return room.y;
-    const {stairX,stairWidth,stairTop,stairBottom,steps,floor}=LODGE_TERRACE;
-    if(Math.abs(p.x-stairX)<=stairWidth/2 && p.z>=29.7 && p.z<=stairBottom){
-      const t=(stairBottom-p.z)/(stairBottom-stairTop);
-      return base+Math.min(1,(Math.floor(t*steps)+1)/steps)*floor;
-    }
-    return null;
+    if(p.x>=-20.5 && p.x<=30.5 && p.z>=24.77 && p.z<=29.925)return room.y;
+    const stair=terraceStairHeight(p.x,p.z);
+    return stair===null ? null : base+stair;
   }});
   for(const [x,z,heading] of [[-12.3,28.7,0],[-11.2,28.6,2.9],[5.7,28.6,.6],[6.9,28.6,3.5],[20.9,28.6,0]])socialSlots.push({...world(room,x,z),y:room.y,heading:room.yaw+heading,lodge:room.id,kind:'social'});
 }
@@ -392,6 +388,14 @@ export function buildLodgeInteriors(scene, grid) {
   const diningCenter=world(roundhouse,4.6,18.5);
   buildRoom(scene,grid,{...roundhouse,...diningCenter,id:'roundhouse-dining',name:'Roundhouse Mountain Market',kind:'dining',y:base+LODGE_TERRACE.floor,w:38.8,d:17.0,h:4.70,doorX:16.2,doorWidth:2.6,frontWindows:true},false);
   buildRoundhouseBalcony(scene,grid,base);
+  const annex = LODGE_ANNEX;
+  decks.push({ floorAt(x,z) {
+    const p=transform(LODGE_FRAME,x,z);
+    const inside=Math.abs(p.x-annex.x)<=annex.width/2 && Math.abs(p.z-annex.z)<=annex.depth/2;
+    const fromDoor=p.z-annex.z-annex.depth/2;
+    const landing=fromDoor>=0 && fromDoor<=1.44 && Math.abs(p.x-annex.doorX)<=(annex.doorWidth+.45)/2;
+    return inside || landing ? base+annex.floor : null;
+  }});
   const rendezvous = { id: 'rendezvous', name: 'Rendezvous Lodge', kind: 'cafe', ...MOUNTAIN.rendezvous, yaw: .45, w: 35, d: 22 };
   const corners = [-17.5, 0, 17.5].flatMap(x => [-11, 0, 11].map(z => world(rendezvous, x, z)));
   const y = Math.max(...corners.map(p => heightAt(p.x, p.z))) + .25;
@@ -402,6 +406,10 @@ export function buildLodgeInteriors(scene, grid) {
   }
   return {
     rooms,
+    stairTreadAt(x,z) {
+      const p=transform(LODGE_FRAME,x,z), tread=terraceStairHeight(p.x,p.z,true);
+      return tread===null ? null : base+tread;
+    },
     serviceAt(x,z,y) {
       const room=this.interiorAt(x,z,y);
       if(!room)return null;

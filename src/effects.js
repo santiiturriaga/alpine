@@ -5,6 +5,7 @@ import { WORLD } from './worlddata.js';
 
 export const SUN_DIR = new THREE.Vector3(-0.56, 0.415, 0.715).normalize();
 const middayDirection=SUN_DIR.clone(), lowSunDirection=new THREE.Vector3(-.89,.212,.403).normalize();
+const moonDirection = new THREE.Vector3(.55,.48,-.68).normalize();
 
 /* ═══════════════════════════════════════════════════════════════
    LIGHT + SKY
@@ -39,7 +40,13 @@ export function createLighting(scene) {
 
   return { sun, hemi, fill,
     setClimate(palette) {
-      SUN_DIR.copy(middayDirection).lerp(lowSunDirection,palette.late).normalize();
+      if (palette.cycle) {
+        const azimuth = (palette.hour - 12) * Math.PI / 12 + .47;
+        SUN_DIR.set(-Math.sin(azimuth), Math.max(.035, palette.sunArc * .65), Math.cos(azimuth))
+          .normalize().lerp(moonDirection, palette.darkness).normalize();
+      } else {
+        SUN_DIR.copy(middayDirection).lerp(lowSunDirection, palette.late).lerp(moonDirection, palette.darkness).normalize();
+      }
       sun.color.copy(palette.lightColor); sun.intensity = palette.sunIntensity;
       hemi.color.copy(palette.hemiSky); hemi.groundColor.copy(palette.hemiGround);
       hemi.intensity = palette.hemiIntensity;
@@ -104,6 +111,8 @@ export function createSky(scene) {
       uCloudLight: { value: new THREE.Color('#e8f2fa') },
       uCloud: { value: .52 },
       uNight: { value: 0 },
+      uMoon: { value: moonDirection },
+      uMoonStrength: { value: 0 },
       uSunStrength: { value: 1 },
     },
     vertexShader: /* glsl */`
@@ -128,6 +137,8 @@ export function createSky(scene) {
       uniform vec3 uCloudLight;
       uniform float uCloud;
       uniform float uNight;
+      uniform vec3 uMoon;
+      uniform float uMoonStrength;
       uniform float uSunStrength;
 
       float skyHash(vec2 p) {
@@ -164,6 +175,8 @@ export function createSky(scene) {
         col = mix(col,uHorizon,horizon*.9);
         float sd = max(dot(d, normalize(uSun)), 0.0);
         col += uSunColor*uSunStrength*(smoothstep(.99993,.999986,sd)*5.4 + pow(sd,132.0)*.23 + pow(sd,14.0)*.16);
+        float md = max(dot(d, uMoon), 0.0);
+        col += vec3(.66,.77,.98)*uMoonStrength*(smoothstep(.999968,.999984,md)*1.75 + pow(md,150.0)*.041);
         col = mix(col, uHorizon, 1.0-smoothstep(-.12,0.0,d.y));
         if (d.y > .008) {
           vec2 wind=vec2(uTime*.007,-uTime*.0028);
@@ -207,6 +220,7 @@ export function createSky(scene) {
       }
       skyMat.uniforms.uCloud.value = palette.cloud;
       skyMat.uniforms.uNight.value = palette.night;
+      skyMat.uniforms.uMoonStrength.value = palette.darkness;
       skyMat.uniforms.uSunStrength.value = palette.sunStrength;
     },
     update(dt, camera) {

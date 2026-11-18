@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { checkSkierName, onProfileChange, skierName, skiUnits } from './skier-profile.js';
 import { createSkier } from './skier.js';
 
 // A shared WSS broker works from a static Pages origin. Rooms outlive the
@@ -8,7 +9,7 @@ const now = () => performance.now();
 const bounded = (v, limit) => Number.isFinite(v) && Math.abs(v) <= limit;
 const clamp = THREE.MathUtils.clamp;
 const ridges = ['Cedar','Raven','Hemlock','Boulder','Marmot','Alder','Glacier','Spruce'];
-const callsign = id => ridges[parseInt(id.slice(0,2),16) % ridges.length] + ' ' + id.slice(-4).toUpperCase();
+const defaultCallsign = id => ridges[parseInt(id.slice(0,2),16) % ridges.length] + ' ' + id.slice(-4).toUpperCase();
 const colors = ['#ad4939','#3b7190','#3d6e54','#ce933e','#404348'];
 const decimals = (v, scale) => Math.round(v * scale) / scale;
 // Field 16 stays a strictly increasing integer for older clients. The prefix
@@ -18,6 +19,8 @@ const movingInterval = 135;
 const playbackDelay = 270;
 const predictionLimit = 92;
 const historyLimit = 12;
+const nameRefreshInterval = 3800;
+const labelHeight = 56;
 const lerp = THREE.MathUtils.lerp;
 
 function validPose(s) {
@@ -68,17 +71,62 @@ function recordSnapshot(remote, pose, heard) {
   if (remote.history.length > historyLimit) remote.history.shift();
 }
 
+function makeNametag() {
+  const canvas = document.createElement('canvas');
+  canvas.height = labelHeight;
+  const ctx = canvas.getContext('2d');
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const material = new THREE.SpriteMaterial({ map:texture, sizeAttenuation:false, depthWrite:false, toneMapped:false });
+  const sprite = new THREE.Sprite(material);
+  sprite.visible = false;
+  sprite.name = 'Skier nametag';
+  sprite.center.y = 0;
+  let currentName;
+
+  return {
+    sprite,
+    draw(name, position, camera) {
+      if (currentName !== name) {
+        currentName = name;
+        const font = '600 33px system-ui, sans-serif';
+        ctx.font = font;
+        canvas.width = Math.ceil(ctx.measureText(name).width) + 38;
+        ctx.font = font;
+        ctx.beginPath();
+        ctx.roundRect(1, 1, canvas.width - 2, labelHeight - 2, 13);
+        ctx.fillStyle = 'rgba(11, 28, 40, .92)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(214, 236, 245, .55)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.fillStyle = '#f4fbff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(name, canvas.width / 2, labelHeight / 2);
+        texture.needsUpdate = true;
+      }
+      const height = 48 / (camera.projectionMatrix.elements[5] * Math.max(1, window.innerHeight));
+      sprite.scale.set(height * canvas.width / labelHeight, height, 1);
+      sprite.position.copy(position).y += 1.98;
+      sprite.visible = true;
+    },
+  };
+}
+
 export function createMultiplayer(scene, resort, getPlayer) {
   const id = Array.from(crypto.getRandomValues(new Uint8Array(8)), n => n.toString(16).padStart(2,'0')).join('');
   const channel = 'alpine-descent/santiiturriaga/v1/' + (location.hostname.endsWith('github.io') ? 'live' : 'preview') + '/' + resort;
   const topic = channel + '/' + id;
   const radioPrefix=channel+'/patrol/';
+  const namePrefix = channel + '/name/';
   let patrol='idle', assist='', radioAt=-Infinity, lastRadio='';
   const peers = new Map(), pool = [];
   const online = document.getElementById('lobby-status'), table = document.getElementById('lobby-scores');
   const toggle = document.getElementById('lobby-toggle');
   let client, loading = false, connected = false, enabled = true, generation = 0;
   let sentAt = -Infinity, lastTable = 0, sequence = 0, recentPose, fastest = 0;
+  let nameAt = -Infinity, sentName;
   try { enabled = localStorage.getItem('alpine.multiplayer') !== 'off'; } catch {}
   const local = getPlayer();
   const target = new THREE.Vector3(), nextTarget = new THREE.Vector3();
@@ -88,21 +136,27 @@ export function createMultiplayer(scene, resort, getPlayer) {
   const rows = document.createElement('tbody');
   table.append(rows);
 
+  const callsign = (key) => (key === id ? skierName() : peers.get(key)?.name) || defaultCallsign(key);
+
+  function releaseActor(actor) {
+    actor.frame.visible = false;
+    actor.nametag.sprite.visible = false;
+    pool.push(actor);
+  }
   function remove(id) {
     const p = peers.get(id);
-    if (p?.actor) {
-      p.actor.frame.visible = false;
-      pool.push(p.actor);
-    }
+    if (p?.actor) releaseActor(p.actor);
     peers.delete(id);
   }
   function updateTable() {
     const list = recentPose ? [[id,recentPose], ...Array.from(peers, ([key,p]) => [key,p.pose])] : [];
     list.sort((a,b) => b[1][12] - a[1][12] || b[1][13] - a[1][13] || a[0].localeCompare(b[0]));
     const fragment = document.createDocumentFragment();
+    const units = skiUnits();
     for (const [key,s] of list) {
       const row = document.createElement('tr');
-      for (const value of [callsign(key) + (key===id?' · you':''), s[12], s[13] + ' m', s[14] + ' km/h']) {
+      for (const value of [callsign(key) + (key===id?' · you':''), s[12],
+        `${Math.round(s[13] * units.lengthFactor)} ${units.small}`, `${Math.round(s[14] * units.speedFactor)} ${units.speed}`]) {
         const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
       }
       fragment.append(row);
@@ -113,11 +167,17 @@ export function createMultiplayer(scene, resort, getPlayer) {
     toggle.textContent = enabled ? 'Ski solo' : 'Join multiplayer';
   }
   function onMessage(path, bytes) {
+    if (path.startsWith(namePrefix)) {
+      const member = peers.get(path.slice(namePrefix.length));
+      if (!member || bytes.length > 100) return;
+      member.name = checkSkierName(bytes.toString()) ?? '';
+      return;
+    }
     if(path.startsWith(radioPrefix)){
       const sender=path.slice(radioPrefix.length),member=peers.get(sender);
       if(!member || bytes.length>72)return;
       const [stage,helper]=bytes.toString().split('/');
-      if(!['idle','search','evacuate','delivered'].includes(stage) || helper && !/^[a-f0-9]{16}$/.test(helper))return;
+      if(!['idle','search','tree','ledge','evacuate','delivered'].includes(stage) || helper && !/^[a-f0-9]{16}$/.test(helper))return;
       member.patrol=stage;member.assist=helper||'';
       return;
     }
@@ -131,7 +191,7 @@ export function createMultiplayer(scene, resort, getPlayer) {
     const prev = peers.get(key);
     if (prev && prev.pose[16] >= pose[16]) return;
     if (!prev && peers.size >= 256) return;
-    if (!prev) sentAt = -Infinity;
+    if (!prev) sentAt = nameAt = -Infinity;
     const remote = prev ?? {};
     recordSnapshot(remote, pose, now());
     if (!prev) peers.set(key, remote);
@@ -149,9 +209,9 @@ export function createMultiplayer(scene, resort, getPlayer) {
       });
       const c = client;
       c.on('connect', () => {
-        c.subscribe([channel + '/+',radioPrefix+'+'], {qos:0}, err => {
+        c.subscribe([channel + '/+',radioPrefix+'+',namePrefix+'+'], {qos:0}, err => {
           if (c !== client) return;
-          connected = !err; sentAt = -Infinity; lastRadio = ''; updateTable();
+          connected = !err; sentAt = nameAt = -Infinity; lastRadio = ''; updateTable();
         });
       });
       c.on('message', (path, bytes) => { if (client === c) onMessage(path, bytes); });
@@ -187,8 +247,9 @@ export function createMultiplayer(scene, resort, getPlayer) {
   function actorFor() {
     if (pool.length) return pool.pop();
     const frame = new THREE.Group(), rig = createSkier({accessories:false});
-    frame.name = 'Online skier'; frame.add(rig.group); scene.add(frame);
-    return {frame,rig};
+    const nametag = makeNametag();
+    frame.name = 'Online skier'; frame.add(rig.group); scene.add(frame, nametag.sprite);
+    return {frame,rig,nametag};
   }
   function update(dt, trickScore, outfit, vehicle, interactive=true) {
     const time = now(), p = local;
@@ -217,6 +278,12 @@ export function createMultiplayer(scene, resort, getPlayer) {
         Math.round(p.stats.vertical||0),fastest,jacket,sequence];
       if (connected) client.publish(topic, JSON.stringify(recentPose), {qos:0,retain:false});
     }
+    const name = skierName();
+    if (connected && (name !== sentName || time - nameAt >= nameRefreshInterval)) {
+      // Keep display names independent of the pose schema and its ordering.
+      client.publish(namePrefix + id, name, {qos:0,retain:false});
+      nameAt = time; sentName = name;
+    }
     let visible = 0;
     for (const [key, remote] of peers) {
       if (time-remote.heard > 14000) { remove(key); continue; }
@@ -243,18 +310,20 @@ export function createMultiplayer(scene, resort, getPlayer) {
       }
       const near = target.distanceToSquared(p.pos) < 340**2 && visible < 14;
       if (!near || (s[10]&8)) {
-        if (remote.actor) { remote.actor.frame.visible=false; pool.push(remote.actor); remote.actor=null; }
+        if (remote.actor) { releaseActor(remote.actor); remote.actor=null; }
         remote.dx = undefined;
         continue;
       }
       visible++;
       const fresh = !remote.actor;
-      const {frame,rig} = remote.actor ||= actorFor();
+      const {frame,rig,nametag} = remote.actor ||= actorFor();
       frame.visible = true; frame.name = callsign(key);
       orientation.fromArray(s,3).normalize().slerp(nextOrientation.fromArray(next,3).normalize(),mix);
       const snap = fresh || remote.actorSegment !== remote.segment || target.distanceToSquared(frame.position) > 28**2;
       remote.actorSegment = remote.segment;
       frame.position.copy(target); frame.quaternion.copy(orientation); frame.updateMatrix();
+      if (target.distanceToSquared(p.pos) < 85**2 && p.camera) nametag.draw(frame.name, target, p.camera);
+      else nametag.sprite.visible = false;
       const remoteSpeed = lerp(s[7],next[7],mix);
       const dx=p.pos.x-frame.position.x, dz=p.pos.z-frame.position.z;
       const closeHeight=Math.abs(p.pos.y-frame.position.y)<1.12;
@@ -281,6 +350,7 @@ export function createMultiplayer(scene, resort, getPlayer) {
     }
     if (time-lastTable > 600 && table.closest('dialog')?.open) { lastTable=time; updateTable(); }
   }
+  onProfileChange((event) => { if (event.type === 'preferences') updateTable(); });
   updateTable();
   return {update, peers, get connected(){return connected;}, id, callsign,
     patrolRadio(stage, helping=''){patrol=stage;assist=helping;}};

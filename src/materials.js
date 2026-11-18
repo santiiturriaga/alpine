@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { WORLD } from './worlddata.js';
 import { climateUniforms } from './climate-state.js';
+import { bindSnowTraffic, snowTrafficGLSL } from './snow-traffic.js';
 
 const noise = /* glsl */ `
   varying vec3 surfacePoint;
@@ -48,10 +49,11 @@ const surfaces = {
       float distanceToEye = length(vViewPosition);
       vec2 pisteUv = (p.xz - pisteLimits.xy) / pisteLimits.zw;
       vec4 snowMix = texture2D(pisteCoverage, pisteUv);
-      float sunFromTerrain = mix(.24, 1.0, texture2D(mountainShade,pisteUv).r);
+      float sunFromTerrain = mix(1.0, mix(.24, 1.0, texture2D(mountainShade,pisteUv).r), climateTerrainSun);
       float groomed = smoothstep(.21,.63,snowMix.r);
       float ice = smoothstep(.22,.53,snowMix.b);
-      float loose = smoothstep(.23,.77,snowMix.g)*(1.0-ice);
+      float traffic = trackPressure(p.xz) * (1.0-ice);
+      float loose = smoothstep(.23,.77,snowMix.g)*(1.0-ice)*(1.0-.76*traffic);
       float detail = 1.0 - smoothstep(23.0, 125.0, distanceToEye);
       vec2 plazaUv = (p.xz - plazaLimits.xy) / plazaLimits.z;
       vec2 bowlUv = (p.xz - bowlLimits.xy) / bowlLimits.z;
@@ -130,7 +132,7 @@ const surfaces = {
         relief += .023 * visiblePillows * pillows;
         diffuseColor.rgb *= 1.0 - visiblePillows * (.039 * (1.0 - pillows) + .023 * (1.0 - grain));
       }
-      diffuseColor.rgb *= 1.0 - marks * .14;
+      diffuseColor.rgb *= 1.0 - marks * .14 - traffic * (.039 + .029*crust);
       diffuseColor.rgb *= 1.0 - (1.0-.72*groomed) * (max(0.0, .68 - drift) * .17
         + max(0.0, .77 - crust) * .095 * detail - (scoured - .5) * .08);
       diffuseColor.rgb *= mix(vec3(.93,.966,1.0),vec3(1.0),groomed);
@@ -155,7 +157,12 @@ const surfaces = {
         * (1.0-.84*ice) * (1.0-.64*loose) * (1.0-.68*smoothstep(.03,.35,marks))
         * (.48+.52*scoured);
       float groove = visibleGrooves > .001 ? .5+.5*cos(groovePhase*6.28318531) : .5;
-      diffuseColor.rgb *= 1.0 - .091*visibleGrooves*groove;
+      diffuseColor.rgb *= 1.0 - .091*visibleGrooves*groove*(1.0-.76*traffic);
+      if (climateRealism > .5 && detail > .001) {
+        float crystals = smoothstep(.735,.905,grain) * microCoverage * detail * cover;
+        float flash = pow(smoothstep(.82,.99,abs(dot(normalize(vNormal),normalize(vViewPosition)))),3.0);
+        diffuseColor.rgb += vec3(.17,.21,.27) * crystals * (.25 + .75*flash) * (1.0-.71*ice);
+      }
       vec3 summerFloor = mix(vec3(.075,.112,.035),vec3(.18,.225,.075),scoured);
       vec3 fallFloor = mix(vec3(.14,.079,.024),vec3(.29,.19,.062),scoured);
       vec3 meadow = mix(summerFloor,fallFloor,climateAutumn);
@@ -169,7 +176,7 @@ const surfaces = {
         + exposed * (.11*fracture+.07*drift);
     `,
     normal: 'normal = surfaceNormal(-vViewPosition, normal, relief * smoothstep(.055,.27,abs(dot(normal, normalize(vViewPosition)))));',
-    roughness: 'roughnessFactor = mix(mix(.94,.68,groomed*.80 + crust*.16*detail), .21, polished*.88);',
+    roughness: 'roughnessFactor = mix(mix(.94,.68,groomed*.80 + crust*.16*detail + traffic*.18), mix(.21,.115,climateRealism), polished*.88);',
   },
   mountain: {
     color: /* glsl */ `
@@ -291,6 +298,8 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
     shader.uniforms.climateAutumn = climateUniforms.autumn;
     shader.uniforms.climateSpring = climateUniforms.spring;
     shader.uniforms.climateWetness = climateUniforms.wetness;
+    shader.uniforms.climateRealism = climateUniforms.realism;
+    shader.uniforms.climateTerrainSun = climateUniforms.terrainSun;
     const pisteUniforms = kind === 'snow' ? 'uniform sampler2D pisteCoverage; uniform sampler2D mountainShade; uniform sampler2D pisteGrooming; uniform vec4 pisteLimits; uniform sampler2D plazaSnow; uniform vec3 plazaLimits; uniform sampler2D bowlSnow; uniform vec3 bowlLimits; uniform sampler2D villageSnow; uniform vec3 villageLimits; uniform vec4 roomCutout; uniform vec2 roomYaw;\n' : '';
     // Only the few terrain tiles under the skier compile this cutout. The rest
     // of the mountain keeps its original shader and does no ski-footprint work.
@@ -307,6 +316,7 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
       }
     ` : '';
     if (kind === 'snow') {
+      bindSnowTraffic(shader);
       shader.uniforms.pisteCoverage = { value: snowMaps.pisteMap };
       shader.uniforms.mountainShade = { value: snowMaps.mountainShade };
       shader.uniforms.pisteGrooming = { value: snowMaps.groomingMap };
@@ -332,7 +342,7 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
         surfacePoint=(modelMatrix*surfaceWorld).xyz;
       `);
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float climateSnowpack; uniform float climateSnowline; uniform float climateAutumn; uniform float climateSpring; uniform float climateWetness;\n' + noise + pisteUniforms + skiUniforms)
+      .replace('#include <common>', '#include <common>\nuniform float climateSnowpack; uniform float climateSnowline; uniform float climateAutumn; uniform float climateSpring; uniform float climateWetness; uniform float climateTerrainSun; uniform float climateRealism;\n' + noise + pisteUniforms + skiUniforms + (kind === 'snow' ? snowTrafficGLSL : ''))
       .replace('#include <color_fragment>', '#include <color_fragment>\n' + (skiSnow
         ? skiSnow.mode === 0
           ? 'if (inSkiSnow(surfacePoint.xz, skiSnowFeet[0], skiSnowScale[0]) || inSkiSnow(surfacePoint.xz, skiSnowFeet[1], skiSnowScale[1])) discard;\n'

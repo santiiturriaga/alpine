@@ -95,7 +95,6 @@ export function buildAlpineChairStation(scene, grid, def, pointIndex) {
     const sx=sign*(def.seats>=6?3.95:3.5);
     machinery.push(box(.57,3.75,.55,'#61696e',[sx,1.75,-3.79]),box(1.01,.4,1.27,'#929696',[sx,.12,-3.79]));
     machinery.push(box(.39,3.65,.42,'#626e76',[sx,1.73,3.68]));
-    machinery.push(box(.25,.24,10.2,'#65737b',[sign*1.9,2.85,0]));
     shelter.push(box(.047,.32,13.24,'#92323a',[sign*3.35,4.82,-.37]));
     for(const z of [-3.79,3.68]){
       const px=x+sx*Math.cos(yaw)+z*Math.sin(yaw);
