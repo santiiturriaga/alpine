@@ -1,0 +1,74 @@
+{
+  "id": "stevens-pass",
+  "name": "Stevens Pass",
+  "origin": [-121.092, 47.7441],
+  "crs": "EPSG:32610",
+  "bounds": {"minX": -2400, "maxX": 2800, "minZ": -950, "maxZ": 3350},
+  "terrainStep": 10,
+  "backdropBounds": {"minX": -22400, "maxX": 22400, "minZ": -22400, "maxZ": 35200},
+  "backdropStep": 80,
+  "elevationSources": [
+    "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/historical/n48w122/USGS_13_n48w122_20250813.tif",
+    "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/historical/n48w121/USGS_13_n48w121_20250813.tif"
+  ],
+  "coverSource": "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N45W123_Map.tif",
+  "osmFile": "stevens-area.osm",
+  "osmUrl": "https://www.openstreetmap.org/api/0.6/map?bbox=-121.126,47.713,-121.053,47.75",
+  "startLift": "skyline-express",
+  "beginnerLift": "daisy",
+  "startRun": "skyline",
+  "beginnerRun": "easy-street",
+  "mountainStats": {"baseElevationFt": 4061, "summitElevationFt": 5845, "skiableAcres": 1125, "officialNamedTrails": 52},
+  "liftOverrides": {
+    "6363087": {"verticalFeet": 444, "ridersPerHour": 860, "detachable": false},
+    "6389411": {"verticalFeet": 708, "ridersPerHour": 1680, "detachable": false},
+    "6432372": {"verticalFeet": 789, "ridersPerHour": 2400, "detachable": true},
+    "6518841": {"verticalFeet": 813, "ridersPerHour": 2400, "detachable": true, "manufacturer": "Doppelmayr"},
+    "6521234": {"verticalFeet": 1202, "ridersPerHour": 2200, "detachable": true},
+    "26982638": {"verticalFeet": 310, "ridersPerHour": 1800, "detachable": false, "manufacturer": "Doppelmayr"},
+    "26982784": {"verticalFeet": 831, "ridersPerHour": 1800, "detachable": false, "manufacturer": "Skytrac"},
+    "26982800": {"verticalFeet": 682, "ridersPerHour": 1200, "detachable": false, "sharedLine": "double-diamond-southern-cross"},
+    "26982809": {"verticalFeet": 1773, "ridersPerHour": 1200, "detachable": false, "sharedLine": "double-diamond-southern-cross"},
+    "26982833": {"verticalFeet": 1345, "ridersPerHour": 2200, "detachable": true},
+    "257777875": {"id": "beginner-carpet-lower", "name": "Beginner Carpet (Lower)"},
+    "1020119689": {"id": "beginner-carpet-upper", "name": "Beginner Carpet (Upper)"},
+    "1350043174": {"id": "rope-tow", "name": "Rope Tow", "parallelWay": "1350043175"},
+    "1350043175": {"skip": true}
+  },
+  "defaultSection": "Front Side",
+  "runSections": {
+    "Aquarius": "Mill Valley", "Aquarius Face": "Mill Valley", "Borealis": "Mill Valley",
+    "Corona Bowl": "Mill Valley", "Gemini": "Mill Valley", "Lower Aquarius": "Mill Valley",
+    "Lower Gemini": "Mill Valley", "Lower Voltage": "Mill Valley", "Orion": "Mill Valley",
+    "Outer Limits": "Mill Valley", "Pegasus": "Mill Valley", "Shooting Star": "Mill Valley",
+    "Southdivide": "Mill Valley"
+  },
+  "runOverrides": {
+    "103026692": {"name": "Hog Wild"},
+    "103026698": {"name": "Hagen Hill"},
+    "386640013": {"name": "Outer Limits"},
+    "386644640": {"difficulty": "double"},
+    "386644888": {"difficulty": "double"},
+    "992722424": {"difficulty": "black"},
+    "992725220": {"name": "Hoot 'N Holler"},
+    "1351148601": {"difficulty": "blue"},
+    "1360812475": {"difficulty": "double"}
+  },
+  "runSupplements": [
+    "386638941", "386643147", "386644640", "386644888", "386647505", "386647555",
+    "386647632", "992722424", "1144609744", "1350600826"
+  ],
+  "landmarks": [
+    {"id": "clock-tower", "name": "Clock Tower", "node": "12500358706", "kind": "clock"},
+    {"id": "cowboy-mountain", "name": "Cowboy Mountain", "node": "356544668", "kind": "peak"},
+    {"id": "big-chief-mountain", "name": "Big Chief Mountain", "node": "356544300", "kind": "peak"},
+    {"id": "jim-hill-mountain", "name": "Jim Hill Mountain", "node": "4102485962", "kind": "peak"},
+    {"id": "arrowhead-mountain", "name": "Arrowhead Mountain", "node": "4102486669", "kind": "peak"},
+    {"id": "lichtenberg-mountain", "name": "Lichtenberg Mountain", "lonLat": [-121.09093, 47.78789], "kind": "peak"},
+    {"id": "bulls-tooth", "name": "Bulls Tooth", "lonLat": [-121.0034297, 47.6817802], "gnisId": "1517088", "kind": "peak"},
+    {"id": "the-cradle", "name": "The Cradle", "lonLat": [-121.0323157, 47.5609482], "gnisId": "1527030", "kind": "peak"},
+    {"id": "mount-daniel", "name": "Mount Daniel", "lonLat": [-121.1720401, 47.5626131], "gnisId": "1518479", "kind": "peak"},
+    {"id": "mount-hinman", "name": "Mount Hinman", "lonLat": [-121.2146464, 47.5687993], "gnisId": "1520820", "kind": "peak"},
+    {"id": "mount-stuart", "name": "Mount Stuart", "lonLat": [-120.9031444, 47.4751179], "gnisId": "1526641", "kind": "peak"}
+  ]
+}

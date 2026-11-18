@@ -3,9 +3,9 @@ import {
   clamp, makeCanvas, canvasTexture, makeRadialTexture, mulberry32,
 } from './util.js';
 import {
-  RUNS, CRYSTALS, KICKERS, SECRETS, runPointAt,
+  RUNS, CRYSTALS, FINISHES, runPointAt, runFromSource,
 } from './worlddata.js';
-import { heightAt, normalAt } from './terrain.js';
+import { heightAt } from './terrain.js';
 
 /* ═══════════════════════════════════════════════════════════════
    COLLECTIBLES
@@ -15,11 +15,11 @@ import { heightAt, normalAt } from './terrain.js';
 
 const GOLD = new THREE.Color(1.0, 0.73, 0.23);
 const CRYSTAL_COLORS = {
-  wildcard: 0x8caeff,
-  crystal: 0x8fe7ff,
-  bearhollow: 0xffc36a,
-  bushrat: 0x7dffb0,
-  dusty: 0xffd9a1,
+  0: 0x8caeff,
+  1: 0x8fe7ff,
+  2: 0xffc36a,
+  3: 0x7dffb0,
+  4: 0xffd9a1,
 };
 
 const _mat = new THREE.Matrix4();
@@ -31,16 +31,21 @@ const _axisY = new THREE.Vector3(0, 1, 0);
 const _axisX = new THREE.Vector3(1, 0, 0);
 
 export class Collectibles {
-  constructor(scene, fx) {
+  constructor(scene, fx, pack=null) {
     this.scene = scene;
     this.fx = fx;
+    this.runs=pack?.runs??RUNS;
+    this.stashes=pack?.crystals??CRYSTALS;
+    this.coinStep=Math.max(1,Math.round(pack?.coinStep??26));
+    this.finishes=pack?.finishes??(pack?[]:FINISHES);
+    this.heightAt=pack?.heightAt??heightAt;
     this.rand = mulberry32(442291);
     this.coins = [];
     this.crystals = [];
     this.coinCount = 0;
     this.crystalCount = 0;
     this.totalCoins = 0;
-    this.totalCrystals = CRYSTALS.length;
+    this.totalCrystals = this.stashes.length;
     this.onCoin = null;
     this.onCrystal = null;
     this.lastCoin = null;
@@ -54,10 +59,10 @@ export class Collectibles {
 
   buildCoins() {
     const rand = this.rand;
-    for (const run of RUNS) {
+    for (const run of this.runs) {
       const samples = run.samples;
-      if (!samples?.length) continue;
-      const step = run.hidden ? 5 : 10;
+      if (!run.named || !samples?.length || run.length < 430) continue;
+      const step = this.coinStep;
       const coinsOnRun = Math.floor((samples.length - 12) / step);
       if (coinsOnRun < 2) continue;
       for (let n = 0; n < coinsOnRun; n++) {
@@ -68,7 +73,7 @@ export class Collectibles {
           + (rand() - 0.5) * 1.8;
         const x = p.x + p.nx * lateral;
         const z = p.z + p.nz * lateral;
-        const gy = heightAt(x, z);
+        const gy = this.heightAt(x, z);
         this.coins.push({
           x, y: gy + 0.95 + (n % 4 === 0 ? 0.22 : 0), z, groundY: gy,
           run: run.id, hidden: !!run.hidden, air: false,
@@ -78,38 +83,15 @@ export class Collectibles {
       }
     }
 
-    // Air coins over each kicker, strung along the natural jump arc.
-    for (const k of KICKERS) {
-      const p = runPointAt(k.run, k.t);
-      if (!p) continue;
-      const run = RUNS.find(r => r.id === k.run);
-      const lateral = (rand() - 0.5) * (k.width * 0.24);
-      for (let i = 0; i < 7; i++) {
-        const d = 4 + i * 4.6;
-        const x = p.x + p.tx * d + p.nx * lateral;
-        const z = p.z + p.tz * d + p.nz * lateral;
-        const gy = heightAt(x, z);
-        const arc = Math.sin((i + 1) / 8 * Math.PI) * (4.4 + k.height * 1.25);
-        this.coins.push({
-          x, y: gy + 1.1 + arc, z, groundY: gy,
-          run: run?.id || k.run, hidden: false, air: true,
-          collected: false, phase: rand() * Math.PI * 2,
-          value: 25,
-        });
-      }
-    }
-
-    // A few celebratory coins at the two finish arches.
-    for (const id of ['franz', 'catskinner']) {
-      const p = runPointAt(id, 0.955);
+    for (const finish of this.finishes) {
+      const p = runPointAt(this.runs.find(r=>r.id===finish.run)??runFromSource(finish.run), 0.955);
       if (!p) continue;
       for (let i = -1; i <= 1; i++) {
-        const x = p.x + p.nx * i * 3.0;
-        const z = p.z + p.nz * i * 3.0;
-        const gy = heightAt(x, z);
+        const x = p.x + p.nx * i * 3;
+        const z = p.z + p.nz * i * 3;
+        const gy = this.heightAt(x, z);
         this.coins.push({
           x, y: gy + 1.05, z, groundY: gy,
-          run: id, hidden: false, air: false,
           collected: false, phase: rand() * Math.PI * 2, value: 15,
         });
       }
@@ -119,13 +101,12 @@ export class Collectibles {
   }
 
   buildCrystals() {
-    for (const spec of CRYSTALS) {
-      const p = runPointAt(spec.run, spec.t);
+    for (const spec of this.stashes) {
+      const p = runPointAt(this.runs.find(r=>r.id===spec.run), spec.t);
       if (!p) continue;
-      const run = RUNS.find(r => r.id === spec.run);
       const x = p.x + p.nx * 0.5;
       const z = p.z + p.nz * 0.5;
-      const gy = heightAt(x, z);
+      const gy = this.heightAt(x, z);
       const color = CRYSTAL_COLORS[spec.id] || 0x8fe7ff;
       this.crystals.push({
         ...spec,
@@ -239,6 +220,7 @@ export class Collectibles {
       group.add(beam);
 
       const light = new THREE.PointLight(c.color, 2.4, 26, 2);
+      light.visible=false;
       light.position.y = 1.2;
       group.add(light);
 
@@ -257,6 +239,7 @@ export class Collectibles {
     if (c.collected) {
       _mat.compose(_pos.set(c.x, c.y, c.z), _quat.identity(), _scale.set(0, 0, 0));
       this.coinMesh.setMatrixAt(i, _mat);
+      this.rimMesh.setMatrixAt(i, _mat);
       if (i < this.glints.count) this.glints.setMatrixAt(i, _mat);
       return;
     }
@@ -268,7 +251,7 @@ export class Collectibles {
     this.coinMesh.setMatrixAt(i, _mat);
     this.rimMesh.setMatrixAt(i, _mat);
     if (i < this.glints.count) {
-      const gy = c.groundY ?? heightAt(c.x, c.z);
+      const gy = c.groundY ?? this.heightAt(c.x, c.z);
       _quat.setFromAxisAngle(_axisX, -Math.PI / 2);
       _pos.set(c.x, gy + 0.08, c.z);
       _scale.set(1.25, 1.25, 1);

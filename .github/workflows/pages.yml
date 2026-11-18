@@ -43,10 +43,11 @@ jobs:
       - name: Stage the static game
         run: |
           mkdir -p _site
-          cp index.html styles.css _site/
-          cp -r src vendor _site/
+          cp index.html *.css _site/
+          cp -r src vendor data assets _site/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
       - id: deployment
         uses: actions/deploy-pages@v4
+

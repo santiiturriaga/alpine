@@ -1,0 +1,104 @@
+{
+  "id": "snoqualmie",
+  "name": "The Summit at Snoqualmie",
+  "sourceAreas": ["Three Summits", "Summit West", "Alpental"],
+  "sourceRegion": "US-WA",
+  "origin": [-121.4123, 47.408],
+  "crs": "EPSG:32610",
+  "bounds": {"minX": -3500, "maxX": 2000, "minZ": -5050, "maxZ": 3400},
+  "terrainStep": 10,
+  "backdropBounds": {"minX": -19200, "maxX": 19200, "minZ": -17600, "maxZ": 19200},
+  "backdropStep": 80,
+  "elevationSources": [
+    "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/historical/n48w122/USGS_13_n48w122_20250813.tif"
+  ],
+  "coverSource": "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N45W123_Map.tif",
+  "osmFile": "snoqualmie-area.osm",
+  "osmUrl": "https://www.openstreetmap.org/api/0.6/map?bbox=-121.455,47.378,-121.386,47.455",
+  "startLift": "central-express",
+  "beginnerLift": "little-thunder",
+  "startRun": "alpine",
+  "beginnerRun": "little-thunder",
+  "startBikeLift": "silver-fir-express",
+  "startBikeRun": "green-party-2",
+  "summerLifts": ["silver-fir-express", "pacific-crest"],
+  "mountainStats": {"skiableAcres": 1994, "verticalFeet": 2280, "officialLifts": 25},
+  "sectionBands": [
+    {"name": "Alpental", "maxZ": -2340},
+    {"name": "Summit West", "maxZ": -670},
+    {"name": "Summit Central", "maxZ": 1350}
+  ],
+  "defaultSection": "Summit East",
+  "runSections": {
+    "Alpental Goat Trail": "Alpental", "Central to West Upper Crossover": "Summit Central",
+    "East Crossover": "Summit East", "East to Central": "Summit East", "Mountaineers": "Summit West",
+    "Wayback": "Summit Central", "West to Central Lower": "Summit West", "West to Central Upper": "Summit West"
+  },
+  "liftOverrides": {
+    "26352818": {"section": "Summit West", "detachable": false},
+    "26352830": {"section": "Summit West", "detachable": false},
+    "26352850": {"section": "Summit West", "detachable": false},
+    "26353298": {"section": "Summit Central", "detachable": false},
+    "26353308": {"section": "Summit Central", "detachable": false},
+    "26353320": {"section": "Summit Central", "detachable": false},
+    "26353346": {"section": "Summit Central", "detachable": true},
+    "26353482": {"name": "Silver Fir Express", "section": "Summit Central", "detachable": true},
+    "26353539": {"section": "Summit Central", "detachable": false},
+    "26353568": {"section": "Summit Central", "detachable": false},
+    "26353661": {"section": "Summit West", "detachable": false},
+    "26353677": {"section": "Summit West", "detachable": false},
+    "31246070": {"name": "St. Bernard", "section": "Alpental", "detachable": false},
+    "31246073": {"section": "Alpental", "detachable": true},
+    "31246074": {"section": "Alpental", "detachable": false, "manufacturer": "Doppelmayr", "verticalFeet": 1100, "ridersPerHour": 1395, "speed": 2.54},
+    "130202843": {"section": "Summit East", "detachable": false},
+    "130202876": {"section": "Summit East", "detachable": false},
+    "257784074": {"skip": true},
+    "257784426": {"name": "Alpental Magic", "section": "Alpental"},
+    "395201837": {"section": "Summit East", "detachable": false},
+    "1208396232": {"section": "Alpental", "detachable": false, "manufacturer": "Doppelmayr"},
+    "1326369682": {"section": "Alpental", "detachable": false, "manufacturer": "Doppelmayr", "verticalFeet": 1345}
+  },
+  "runOverrides": {
+    "126248368": {"name": "St. Bernard"},
+    "893959979": {"name": "Adrenaline"},
+    "130422110": {"difficulty": "green"},
+    "399150129": {"difficulty": "green"},
+    "130202874": {"difficulty": "black"},
+    "1326369667": {"difficulty": "black"},
+    "1326369669": {"difficulty": "black"}
+  },
+  "runSupplements": [
+    "127125770", "130428426", "130432051", "130432055", "130432057", "130432058", "130432059",
+    "386649855", "388130568", "388130571", "388130573", "388130574", "388130575", "388130576",
+    "388130577", "388130578", "388130579", "388130580", "388130581", "388130582", "388130584",
+    "388130585", "388140114", "388140115", "388149036", "388149037", "388149039", "388149040",
+    "388149041", "388149042", "388149044", "388149045", "388149049", "388149052", "388149053",
+    "399150131", "892522244", "893957295", "1172669108", "1172669109", "1356797369", "1356797478",
+    "1356797479", "1357555937", "1357555939", "1357894017", "1357896474", "1486548647"
+  ],
+  "summerRoutes": [
+    {"name": "Green Party", "kind": "bike", "section": "Summit Central", "difficulty": "green", "ways": ["1562313694", "1562313695", "1562313697", "1568066576", "1577301311", "1577301312"]},
+    {"name": "Wapiti", "kind": "bike", "section": "Summit Central", "difficulty": "blue", "ways": ["1568068250"]},
+    {"name": "Lower Bermy Loamax", "kind": "bike", "section": "Summit Central", "difficulty": "blue", "ways": ["1577301309"]},
+    {"name": "Bouncy House", "kind": "bike", "section": "Summit Central", "difficulty": "blue", "ways": ["1562313696", "1577301310"]},
+    {"name": "My Little Friend", "kind": "bike", "section": "Summit Central", "difficulty": "black", "ways": ["1562313698"]}
+  ],
+  "landmarks": [
+    {"id": "denny-mountain", "name": "Denny Mountain", "node": "349018502", "kind": "peak"},
+    {"id": "guye-peak", "name": "Guye Peak", "node": "9994153173", "kind": "peak"},
+    {"id": "snoqualmie-mountain", "name": "Snoqualmie Mountain", "node": "356546473", "kind": "peak"},
+    {"id": "mount-hyak", "name": "Mount Hyak", "node": "356545291", "kind": "peak"},
+    {"id": "the-tooth", "name": "The Tooth", "node": "5818668986", "kind": "peak"}
+  ],
+  "references": [
+    "https://www.summitatsnoqualmie.com/trail-maps",
+    "https://www.summitatsnoqualmie.com/mountain-report",
+    "https://www.summitatsnoqualmie.com/alpental/mountain-report",
+    "https://www.summitatsnoqualmie.com/activities/biking/bike-park-guide",
+    "https://www.summitatsnoqualmie.com/activities/scenic-lift-rides",
+    "https://www.summitatsnoqualmie.com/alpental/new-international-triple-chairlift",
+    "https://www.summitatsnoqualmie.com/alpental/new-edelweiss-chairlift",
+    "https://www.peakrankings.com/content/summit-at-snoqualmie",
+    "https://www.peakrankings.com/content/alpental"
+  ]
+}

@@ -1,0 +1,82 @@
+// A local player's inventory. Race rewards, finds and slope coins all use
+// the same currency. Purchases and the resulting equipped pair save together.
+const key='alpine.outfitter.v1';
+export const SKIS={
+  'all-mountain':{name:'All-mountain',price:0,description:'Balanced edges and a forgiving flex.',grip:1,drag:1,speed:1,pop:1,color:'#b75c42'},
+  carver:{name:'Slalom carver',price:18,description:'Quicker edge engagement on hard snow.',grip:1.24,drag:1.02,speed:.98,pop:.98,color:'#236894'},
+  powder:{name:'Powder 112',price:24,description:'Wide shovels and less drag through soft snow.',grip:.90,drag:.83,speed:1.03,pop:1.04,color:'#7e995a'},
+  park:{name:'Twin-tip park',price:21,description:'More pop and a shorter, softer sidecut.',grip:.96,drag:1.07,speed:.96,pop:1.24,color:'#d59a43'},
+};
+const colors={jacket:[['Clay','#ad4939'],['Alpine blue','#3b7190'],['Spruce','#3d6e54'],['Ochre','#ce933e'],['Graphite','#404348']],
+  pants:[['Slate','#323e48'],['Sand','#a89a81'],['Navy','#24364a']],helmet:[['Chalk','#d6d6d1'],['Charcoal','#333a40'],['Copper','#9a6852']],
+  backpack:[['Charcoal','#363d40'],['Cedar','#694e42'],['Ochre','#bc8340']]};
+const stickers={none:'No decal',peak:'Peak contour',maple:'Maple leaf',snowflake:'Snow crystal'};
+const defaultOutfit=Object.fromEntries(Object.entries(colors).map(([slot,palette])=>[slot,palette[0][1]]));
+const money=n=>Number.isSafeInteger(n)&&n>=0?n:0;
+function read() {
+  let data={};try{data=JSON.parse(localStorage.getItem(key)||'{}')||{};}catch{}
+  const owned=new Set(['all-mountain',...(Array.isArray(data.owned)?data.owned.filter(s=>Object.hasOwn(SKIS,s)):[])]);
+  const outfit={...defaultOutfit};
+  for(const [slot,palette] of Object.entries(colors))if(palette.some(([,hex])=>hex===data.outfit?.[slot]))outfit[slot]=data.outfit[slot];
+  return {balance:money(data.balance),owned:[...owned],skis:owned.has(data.skis)?data.skis:'all-mountain',outfit,
+    sticker:Object.hasOwn(stickers,data.sticker)?data.sticker:'none',finds:Array.isArray(data.finds)?[...new Set(data.finds.filter(s=>typeof s==='string'))]:[]};
+}
+const element=(tag,cls,text='')=>{const e=document.createElement(tag);if(cls)e.className=cls;e.textContent=text;return e;};
+
+export class Outfitter {
+  constructor(player,close) {
+    this.player=player;this.state=read();this.dialog=document.getElementById('outfitter');
+    this.dialog.querySelector('[data-shop-close]').onclick=close;
+    this.dialog.addEventListener('cancel',e=>{e.preventDefault();close();});
+    this.notices=this.dialog.querySelector('output');
+    window.addEventListener('storage',e=>{if(e.key===key){this.state=read();this.equip();if(this.dialog.open)this.render();}});
+    this.equip();
+  }
+  equip() {
+    const s=this.state;
+    this.player.tuning=SKIS[s.skis];
+    this.player.rig.setAppearance?.({...s.outfit,skis:s.skis,sticker:s.sticker});
+  }
+  save(){try{localStorage.setItem(key,JSON.stringify(this.state));}catch{}}
+  credit(amount){if(!Number.isSafeInteger(amount)||amount<=0)return;this.state.balance+=amount;this.save();}
+  spend(amount) {
+    if(!Number.isSafeInteger(amount)||amount<=0||this.state.balance<amount)return false;
+    this.state.balance-=amount;
+    this.save();
+    return true;
+  }
+  find(id,reward) {if(this.state.finds.includes(id))return false;this.state.finds.push(id);this.credit(reward);return true;}
+  open(){this.notices.textContent='';this.render();this.dialog.showModal();}
+  render(){
+    const s=this.state,dialog=this.dialog;
+    dialog.querySelector('[data-balance]').textContent=`${s.balance} mountain coins`;
+    const list=dialog.querySelector('[data-skis]');list.replaceChildren();
+    for(const [id,item] of Object.entries(SKIS)){
+      const owned=s.owned.includes(id),active=s.skis===id,card=element('article','gear-card');
+      card.style.setProperty('--topsheet',item.color);
+      const heading=element('strong',null,item.name),stats=element('small',null,`Edge ${Math.round(item.grip*100)} · Glide ${Math.round(100/item.drag)} · Pop ${Math.round(item.pop*100)}`);
+      const button=element('button',null,active?'Equipped':owned?'Equip':`Buy · ${item.price} coins`);
+      button.disabled=active||(!owned&&s.balance<item.price);button.dataset.ski=id;
+      button.onclick=()=>{
+        if(!s.owned.includes(id)){
+          if(s.balance<item.price)return;
+          s.balance-=item.price;s.owned.push(id);
+        }
+        s.skis=id;this.equip();this.save();this.render();this.notices.textContent=`${item.name} equipped.`;
+      };
+      card.append(heading,element('p',null,item.description),stats,button);list.append(card);
+    }
+    const fields=dialog.querySelector('[data-apparel]');fields.replaceChildren();
+    for(const [slot,palette] of Object.entries(colors)){
+      const label=element('label',null,slot[0].toUpperCase()+slot.slice(1)),select=element('select');
+      select.dataset.slot=slot;for(const [name,hex] of palette)select.add(new Option(name,hex));
+      select.value=s.outfit[slot];select.onchange=()=>{s.outfit[slot]=select.value;this.equip();this.save();};
+      label.append(select);fields.append(label);
+    }
+    const badge=element('select');for(const [id,label] of Object.entries(stickers))badge.add(new Option(label,id));
+    badge.value=s.sticker;badge.onchange=()=>{s.sticker=badge.value;this.equip();this.save();};
+    badge.dataset.slot='sticker';const label=element('label',null,'Helmet & pack');label.append(badge);fields.append(label);
+    const finds=dialog.querySelector('[data-finds]');finds.replaceChildren();
+    for(const find of this.catalog||[]){const li=element('li',s.finds.includes(find.id)?'collected':'',s.finds.includes(find.id)?find.title:find.hint);finds.append(li);}
+  }
+}

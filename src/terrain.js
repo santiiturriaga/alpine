@@ -1,96 +1,598 @@
 import * as THREE from 'three';
 import {
-  WORLD, RUNS, KICKERS, CLIFFS, initWorldData, runPointAt, MOUNTAIN,
+  WORLD, RUNS, MOUNTAIN, initWorldData,
 } from './worlddata.js';
 import {
-  clamp, lerp, smoothstep, noise, noise2, gaussian, makeCanvas, canvasTexture,
-  mulberry32,
+  clamp, lerp, smoothstep, noise, noise2, makeCanvas, mulberry32,
 } from './util.js';
 
-/* ═══════════════════════════════════════════════════════════════
-   TERRAIN
-   A hand-shaped height field: two resort massifs, a deep valley,
-   groomed run corridors, wind lips, booters, and cliff bands.
-   ═══════════════════════════════════════════════════════════════ */
+import { regionBounds, blackTuskBounds } from '../data/geography.js';
+import { surfaceMaterial } from './materials.js';
+import { climateUniforms } from './climate-state.js';
+import { coniferGeometry, coniferMaterial } from './conifers.js';
+import { ForestCell, makeForestCrowns, preloadForestCrowns } from './forest-lod.js';
+import { createSkiSnowSurface, SKI_SNOW_FOOTPRINT } from './ski-snow-surface.js';
+import { prepareValleyLakes, valleyLakeAt } from './valley-scenery.js';
+import { createStationGrading } from './station-sites.js';
+import { gradeGlacierCave } from './glacier-cave.js';
 
 export const terrain = {
+  heightAt,
   mesh: null,
   heights: null,
   n: 0,
   cell: 0,
   mask: null,
   maskN: 0,
-  snowMap: null,
-  snowNormal: null,
   get minX() { return WORLD.minX; },
   get maxX() { return WORLD.maxX; },
   get minZ() { return WORLD.minZ; },
   get maxZ() { return WORLD.maxZ; },
 };
 
-let heights, n, cell, mask, maskN, maskCell;
+let heights, landCover, n, cell, mask, maskN, snowField;
+let gradedHeights, gradeStation;
 
-function baseHeight(x, z) {
-  // Valley floor, rising gently toward the peaks.
-  let h = 618 + 132 * smoothstep(0, 1, (2020 - z) / 4100);
-  h += 34 * noise.fbm(x * 0.0013 + 12.3, z * 0.0013 - 4.1, 3);
+async function loadGrid(file, bounds) {
+  const response = await fetch(new URL(`../data/${file}`, import.meta.url));
+  if (!response.ok) throw new Error(`Could not load ${file} (${response.status})`);
+  const view = new DataView(await response.arrayBuffer());
+  const length = bounds.grid ** 2;
+  if (view.byteLength !== length * 3) throw new Error(`Invalid terrain grid ${file}`);
 
-  // ── Whistler massif ───────────────────────────────────────────
-  const wx = 1380 + 0.052 * (-z - 400);
-  const whZ = z > -900
-    ? 1515 * Math.exp(-Math.pow((z + 900) / 1760, 2))
-    : 1515 * Math.exp(-Math.pow((z + 900) / 840, 2));
-  const whWidth = x < wx ? 980 : 680;
-  const wd = (x - wx) / whWidth;
-  h += whZ * Math.exp(-wd * wd);
+  const heights = new Float32Array(length);
+  const cover = new Uint8Array(length);
+  for (let i = 0; i < length; i++) {
+    heights[i] = view.getUint16(i * 3, true) / 10;
+    cover[i] = view.getUint8(i * 3 + 2);
+  }
+  return { heights, cover };
+}
 
-  // ── Blackcomb massif ──────────────────────────────────────────
-  const bx = -1418 + 0.058 * (-z - 420);
-  const bhZ = z > -860
-    ? 1665 * Math.exp(-Math.pow((z + 860) / 1690, 2))
-    : 1665 * Math.exp(-Math.pow((z + 860) / 830, 2));
-  const bhWidth = x > bx ? 1010 : 690;
-  const bd = (x - bx) / bhWidth;
-  h += bhZ * Math.exp(-bd * bd);
+// Keep the gameplay collision grid and the drawn triangles on the same surface.
+function triangleHeight(data, n, gx, gz) {
+  const ix = Math.min(n - 2, Math.floor(gx)), iz = Math.min(n - 2, Math.floor(gz));
+  const tx = gx - ix, tz = gz - iz;
+  const i = iz * n + ix;
+  if (tx + tz <= 1) {
+    return data[i] * (1 - tx - tz) + data[i + 1] * tx + data[i + n] * tz;
+  }
+  return data[i + n + 1] * (tx + tz - 1) + data[i + 1] * (1 - tz) + data[i + n] * (1 - tx);
+}
 
-  // ── Little ridges & shoulders ─────────────────────────────────
-  // 7th Heaven shoulder on Blackcomb
-  const d7 = Math.pow((x + 505) / 470, 2) + Math.pow((z + 680) / 420, 2);
-  h += 300 * Math.exp(-d7) * (1 - smoothstep(300, 900, z));
-  // Flute / Symphony ridge west of Whistler Peak
-  const df = Math.pow((x - 690) / 330, 2) + Math.pow((z + 1190) / 350, 2);
-  h += 265 * Math.exp(-df);
-  // Small mid-valley shoulder that separates the lower runs
-  const dm = Math.pow((x - 10) / 520, 2) + Math.pow((z - 650) / 650, 2);
-  h += 55 * Math.exp(-dm);
+function worldIndex(x, z, bounds) {
+  return [
+    clamp((x - bounds.minX) / (bounds.maxX - bounds.minX), 0, 1) * (bounds.grid - 1),
+    clamp((z - bounds.minZ) / (bounds.maxZ - bounds.minZ), 0, 1) * (bounds.grid - 1),
+  ];
+}
 
-  // ── Benches, bowls and wind-scoured pockets ───────────────────
-  const bowl = (cx, cz, rx, rz, depth) =>
-    depth * Math.exp(-(Math.pow((x - cx) / rx, 2) + Math.pow((z - cz) / rz, 2)));
-  h -= bowl(1010, -360, 330, 520, 85);     // Whistler Bowl apron
-  h -= bowl(430, 220, 420, 560, 60);       // Harmony Bowl
-  h -= bowl(-1050, -360, 430, 580, 95);    // Blackcomb chutes
-  h -= bowl(-450, 420, 330, 420, 40);      // lower glade pocket
+export function landCoverAt(x, z) {
+  if (!landCover) return 0;
+  const [gx, gz] = worldIndex(x, z, WORLD);
+  return landCover[Math.round(gz) * n + Math.round(gx)];
+}
 
-  // ── Big organic ridges & gullies ──────────────────────────────
-  const alpine = smoothstep(950, 1950, h);
-  h += noise.ridged(x * 0.00172 + 3.7, z * 0.00172 - 8.2, 3) * 58 * alpine;
-  h += noise2.fbm(x * 0.0036 - 5.1, z * 0.0036 + 1.8, 4) * (7 + 18 * alpine);
-  h += noise.fbm(x * 0.012 + 2.0, z * 0.012 - 3.0, 3) * 3.4;
+export function treeCoverAt(x, z) {
+  if (landCoverAt(x, z) === 10) return 1;
+  let count = 0;
+  for (const [dx, dz] of [[-22, 0], [22, 0], [0, -22], [0, 22]]) {
+    count += Number(landCoverAt(x + dx, z + dz) === 10);
+  }
+  return count / 5;
+}
 
-  // Sastrugi / wind texture on the high alpine
-  h += noise.ridged(x * 0.021, z * 0.021, 2) * 2.2 * alpine;
+function buildSnowField() {
+  const data = new Uint8Array(maskN * maskN * 4);
+  for (let j = 0; j < maskN; j++) {
+    const z = WORLD.minZ + (j + .5) * WORLD.sizeZ / maskN;
+    for (let i = 0; i < maskN; i++) {
+      const x = WORLD.minX + (i + .5) * WORLD.sizeX / maskN;
+      const index = j * maskN + i, key = 4 * index;
+      const piste = mask[index];
+      const h = triangleHeight(heights, n, ...worldIndex(x, z, WORLD));
+      const drift = .5 + .5 * noise.fbm(x * .034, z * .027, 3);
+      const scoured = noise2.fbm(x * .062 + z * .019, z * .024 - x * .009, 3);
+      const wind = .5 + .5 * noise.fbm(x * .012 + 12, z * .014, 2);
+      const crossing = Math.hypot(x - 481, z - 4855);
+      const pad = 1 - smoothstep(23, 99, crossing);
+      const powder = (.26 + .74 * smoothstep(.21, .78, drift)) * (1 - .88 * smoothstep(.18, .72, piste)) * (1 - pad);
+      const scale = smoothstep(745, 1210, h) * (1 - pad) * (1 - .61 * powder);
+      const ice = smoothstep(.33, .63, scoured + .185 * piste + .15 * wind)
+        * smoothstep(.06, .71, .55 * piste + .67 * wind) * scale;
+      data[key] = Math.round(255 * piste);
+      data[key + 1] = Math.round(255 * powder);
+      data[key + 2] = Math.round(255 * ice);
+      data[key + 3] = landCoverAt(x, z) === 10 ? Math.round(255 * (1 - smoothstep(.13,.65,piste))) : 0;
+    }
+  }
+  return data;
+}
 
-  // ── Base area terraces ────────────────────────────────────────
-  const dv = Math.sqrt(Math.pow((x - 250) / 620, 2) + Math.pow((z - 1980) / 540, 2));
-  const wv = 1 - smoothstep(0.67, 1.06, dv);
-  if (wv > 0) h = lerp(h, 660 + (z - 1980) * 0.012 + 2.5 * noise.fbm(x * 0.01, z * 0.01, 2), wv * 0.94);
+function buildMountainShade() {
+  const size = 385, shade = new Uint8Array(size * size);
+  // The sun vector's horizontal bearing in easting/southing coordinates.
+  const horizontal = Math.hypot(.56, .715);
+  const dx = -.56 / horizontal, dz = .715 / horizontal, slope = .415 / horizontal;
+  const distances = [28, 45, 70, 110, 165, 235, 335, 460, 625, 840, 1120, 1500, 1950, 2450, 3100];
+  const sample = (x, z) => triangleHeight(heights, n, ...worldIndex(x,z,WORLD));
+  for (let j = 0; j < size; j++) {
+    const z = WORLD.minZ + (j + .5) * WORLD.sizeZ / size;
+    for (let i = 0; i < size; i++) {
+      const x = WORLD.minX + (i + .5) * WORLD.sizeX / size;
+      const local = sample(x,z);
+      let obstruction = -1;
+      for (const distance of distances) {
+        const tx = x + distance * dx, tz = z + distance * dz;
+        if (tx < WORLD.minX || tx > WORLD.maxX || tz < WORLD.minZ || tz > WORLD.maxZ) break;
+        obstruction = Math.max(obstruction, (sample(tx,tz)-local)/distance - slope);
+      }
+      shade[j * size + i] = Math.round(255 * (1 - smoothstep(-.018, .041, obstruction)));
+    }
+  }
+  const map = new THREE.DataTexture(shade,size,size,THREE.RedFormat);
+  map.minFilter = map.magFilter = THREE.LinearFilter;
+  map.needsUpdate = true;
+  return map;
+}
 
-  const dc = Math.sqrt(Math.pow((x - 790) / 350, 2) + Math.pow((z - 2050) / 300, 2));
-  const wc = 1 - smoothstep(0.6, 1.04, dc);
-  if (wc > 0) h = lerp(h, 700 + (z - 2050) * 0.014, wc * 0.92);
+// Use the same linear interpolation as the shader's surface sampler.
+export function surfaceAt(x, z, out = {}) {
+  if (!snowField) {
+    out.id = 'packed'; out.grip = 1; out.drag = 1; out.powder = .12;
+    return out;
+  }
+  const u = clamp((x - WORLD.minX) / WORLD.sizeX * maskN - .5, 0, maskN - 1);
+  const v = clamp((z - WORLD.minZ) / WORLD.sizeZ * maskN - .5, 0, maskN - 1);
+  const ix = Math.min(maskN - 2, Math.floor(u)), iz = Math.min(maskN - 2, Math.floor(v));
+  const tx = u - ix, tz = v - iz;
+  const i = 4 * (iz * maskN + ix), row = 4 * maskN;
+  const channel = (k) => lerp(lerp(snowField[i + k], snowField[i + 4 + k], tx),
+    lerp(snowField[i + row + k], snowField[i + row + 4 + k], tx), tz) / 255;
+  const pack = climateUniforms.snowpack.value;
+  const alpine = pack < .80 ? smoothstep(-145,115,heightAt(x,z)-climateUniforms.snowline.value) : 1;
+  const groomed = smoothstep(.21,.63,channel(0));
+  const cover = Math.max(.90*groomed,smoothstep(.25,.79,Math.max(pack,alpine)));
+  if (cover < .28) {
+    out.id='ground';out.grip=1;out.drag=3;out.powder=0;
+    return out;
+  }
+  const ice = smoothstep(.22, .53, channel(2));
+  const powder = smoothstep(.23, .77, channel(1)) * (1 - ice);
+  out.id = ice > .52 ? 'ice' : powder > .47 ? 'powder' : 'packed';
+  out.grip = 1 - .61 * ice - .27 * powder;
+  out.drag = 1 - .31 * ice + .53 * powder;
+  out.powder = (.11 + powder * .88) * (1 - ice) * cover;
+  return out;
+}
 
-  return h;
+function makePatches(n, attributes, material, skipCell = () => false, patch = 64) {
+  const terrain = new THREE.Group();
+  for (let z0 = 0; z0 < n - 1; z0 += patch) {
+    for (let x0 = 0; x0 < n - 1; x0 += patch) {
+      const w = Math.min(patch, n - 1 - x0) + 1;
+      const h = Math.min(patch, n - 1 - z0) + 1;
+      const indices = [];
+      for (let z = 0; z < h - 1; z++) {
+        for (let x = 0; x < w - 1; x++) {
+          if (skipCell(x0 + x, z0 + z)) continue;
+          const a = z * w + x;
+          indices.push(a, a + w, a + 1, a + 1, a + w, a + w + 1);
+        }
+      }
+      if (!indices.length) continue;
+      const geometry = new THREE.BufferGeometry();
+      for (const [name, array, stride] of attributes) {
+        const vertex = new Float32Array(w * h * stride);
+        for (let z = 0; z < h; z++) {
+          const first = ((z0 + z) * n + x0) * stride;
+          vertex.set(array.subarray(first, first + w * stride), z * w * stride);
+        }
+        geometry.setAttribute(name, new THREE.BufferAttribute(vertex, stride));
+      }
+      geometry.setIndex(new THREE.BufferAttribute(new Uint16Array(indices), 1));
+      if (!geometry.hasAttribute('normal')) geometry.computeVertexNormals();
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.receiveShadow = true;
+      terrain.add(mesh);
+    }
+  }
+  return terrain;
+}
+
+const terrainTile = 32;
+const detailStep = 4;
+let detailTiles = new Map();
+
+function smoothTerrainRow(i, t) {
+  const a = heights[i - 1], b = heights[i], c = heights[i + 1], d = heights[i + 2];
+  return b + .5 * t * ((c - a) + t * (2 * a - 5 * b + 4 * c - d + t * (3 * (b - c) + d - a)));
+}
+
+function detailVertex(gx, gz) {
+  const detail = originalDetailVertex(gx, gz);
+  const x = WORLD.minX + gx * cell;
+  const z = WORLD.minZ + gz * WORLD.sizeZ / (n - 1);
+  const graded = gradeStation(x, z, detail);
+  // Use the same shared edge as the low-resolution tile at LOD seams.
+  const edge = Math.min(gx % terrainTile, terrainTile - gx % terrainTile,
+    gz % terrainTile, terrainTile - gz % terrainTile);
+  return edge < 1 ? lerp(triangleHeight(gradedHeights, n, gx, gz), graded, smoothstep(0, 1, edge)) : graded;
+}
+
+function originalDetailVertex(gx, gz) {
+  const base = triangleHeight(heights, n, gx, gz);
+  const distX = gx % terrainTile, distZ = gz % terrainTile;
+  const edge = Math.min(distX, terrainTile - distX, distZ, terrainTile - distZ);
+  const ix = Math.floor(gx), iz = Math.floor(gz);
+  if (edge < 1e-7 || ix < 1 || iz < 1 || ix >= n - 2 || iz >= n - 2) return base;
+  const tx = gx - ix, tz = gz - iz, i = iz * n + ix;
+  const a = smoothTerrainRow(i - n, tx), b = smoothTerrainRow(i, tx);
+  const c = smoothTerrainRow(i + n, tx), d = smoothTerrainRow(i + 2 * n, tx);
+  const smooth = b + .5 * tz * ((c - a) + tz * (2 * a - 5 * b + 4 * c - d + tz * (3 * (b - c) + d - a)));
+  const h0 = Math.min(heights[i], heights[i + 1], heights[i + n], heights[i + n + 1]);
+  const h1 = Math.max(heights[i], heights[i + 1], heights[i + n], heights[i + n + 1]);
+  return base + clamp(clamp(smooth, h0, h1) - base, -1.6, 1.6) * smoothstep(0, 2, edge);
+}
+
+function makeTerrainDetail(mesh, material) {
+  const terrain = new THREE.Group();
+  terrain.name = 'Resort terrain';
+  terrain.add(mesh);
+  const tiles = mesh.children;
+  const tileCount = (n - 1) / terrainTile;
+  const spacingZ = WORLD.sizeZ / (n - 1);
+  const verts = terrainTile * detailStep + 1;
+  const detailWidth = verts - 1;
+  const indices = new Uint16Array(detailWidth * detailWidth * 6);
+  let offset = 0;
+  for (let j = 0; j < detailWidth; j++) {
+    for (let i = 0; i < detailWidth; i++) {
+      const a = j * verts + i;
+      indices.set([a, a + verts, a + 1, a + 1, a + verts, a + verts + 1], offset);
+      offset += 6;
+    }
+  }
+
+  function buildTile(ix, iz) {
+    const original = tiles[iz * tileCount + ix];
+    const values = new Float32Array(verts ** 2);
+    const positions = new Float32Array(values.length * 3);
+    const normals = new Float32Array(positions.length), colors = new Float32Array(positions.length);
+    const color = original.geometry.attributes.color.array;
+    const baseNormal = original.geometry.attributes.normal.array;
+    const x0 = ix * terrainTile, z0 = iz * terrainTile;
+    const coarseWidth = terrainTile + 1;
+
+    const interpolate = (attribute, index, channel, u, v) =>
+      lerp(lerp(attribute[index + channel], attribute[index + channel + 3], u),
+        lerp(attribute[index + channel + coarseWidth * 3], attribute[index + channel + (coarseWidth + 1) * 3], u), v);
+
+    for (let j = 0; j < verts; j++) {
+      const gz = z0 + j / detailStep;
+      for (let i = 0; i < verts; i++) {
+        const gx = x0 + i / detailStep, k = j * verts + i;
+        const y = detailVertex(gx, gz);
+        values[k] = y;
+        positions.set([WORLD.minX + gx * cell, y, WORLD.minZ + gz * spacingZ], k * 3);
+      }
+    }
+
+    for (let j = 0; j < verts; j++) {
+      for (let i = 0; i < verts; i++) {
+        const k = j * verts + i;
+        const u = i / detailStep, v = j / detailStep;
+        const x = Math.min(terrainTile - 1, Math.floor(u)), z = Math.min(terrainTile - 1, Math.floor(v));
+        const p = (z * coarseWidth + x) * 3;
+        const mix = smoothstep(0, 4, Math.min(i, j, detailWidth - i, detailWidth - j));
+        const dx = (values[k - Math.min(i, 1)] - values[k + Math.min(detailWidth - i, 1)]) * detailStep / (2 * cell);
+        const dz = (values[k - Math.min(j, 1) * verts] - values[k + Math.min(detailWidth - j, 1) * verts]) * detailStep / (2 * spacingZ);
+        const inv = 1 / Math.hypot(dx, 1, dz);
+        normals[k * 3] = lerp(interpolate(baseNormal, p, 0, u - x, v - z), dx * inv, mix);
+        normals[k * 3 + 1] = lerp(interpolate(baseNormal, p, 1, u - x, v - z), inv, mix);
+        normals[k * 3 + 2] = lerp(interpolate(baseNormal, p, 2, u - x, v - z), dz * inv, mix);
+        for (let ch = 0; ch < 3; ch++) colors[k * 3 + ch] = interpolate(color, p, ch, u - x, v - z);
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    const detail = new THREE.Mesh(geometry, material);
+    detail.receiveShadow = true;
+    detail.name = 'Detailed snow surface';
+    terrain.add(detail);
+    original.visible = false;
+    return { values, detail, original };
+  }
+
+  function updateDetail(...centers) {
+    const needed = new Set();
+    for (const center of centers) {
+      const [gx, gz] = worldIndex(center.x, center.z, WORLD);
+      const ix = Math.min(tileCount - 1, Math.floor(gx / terrainTile));
+      const iz = Math.min(tileCount - 1, Math.floor(gz / terrainTile));
+      needed.add(iz * tileCount + ix);
+      const edgeX = gx - ix * terrainTile, edgeZ = gz - iz * terrainTile;
+      if (edgeX < 5 && ix > 0) needed.add(iz * tileCount + ix - 1);
+      if (edgeX > terrainTile - 5 && ix < tileCount - 1) needed.add(iz * tileCount + ix + 1);
+      if (edgeZ < 5 && iz > 0) needed.add((iz - 1) * tileCount + ix);
+      if (edgeZ > terrainTile - 5 && iz < tileCount - 1) needed.add((iz + 1) * tileCount + ix);
+    }
+    for (const key of needed) {
+      if (!detailTiles.has(key)) detailTiles.set(key, buildTile(key % tileCount, Math.floor(key / tileCount)));
+    }
+    for (const [key, tile] of detailTiles) {
+      if (needed.has(key)) continue;
+      terrain.remove(tile.detail);
+      tile.detail.geometry.dispose();
+      tile.original.visible = true;
+      detailTiles.delete(key);
+    }
+  }
+
+  return { terrain, updateDetail };
+}
+
+function drawOldTracks(origin, span, seed, count, maxLength) {
+  // A generated snow-compaction layer, projected onto the actual snow mesh.
+  const random = mulberry32(seed);
+  const { canvas, ctx } = makeCanvas(2048, 2048);
+  const map = new THREE.CanvasTexture(canvas);
+  map.generateMipmaps = true;
+  map.minFilter = THREE.LinearMipmapLinearFilter;
+  const scale = 2048 / span;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, 2048, 2048);
+  ctx.lineCap = 'round';
+  for (let route = 0; route < count; route++) {
+    const x = random()*span, z = 8+random()*(span-16);
+    const heading = (random()-.5)*1.24 + (route%4 === 0 ? 1.54 : Math.PI);
+    const width = .036 + random()*.105;
+    const length = 5 + random()**.77*maxLength;
+    const swing = (random()-.5)*4;
+    const stride = .31+random()*.18;
+    for (const edge of [-1, 1]) {
+      ctx.beginPath();
+      for (let i=0;i<25;i++) {
+        const t = i/24;
+        const lateral = Math.sin(t*(1.5+route%4)*Math.PI+route)*swing+edge*stride*.5;
+        const xx = (x+Math.sin(heading)*t*length+Math.cos(heading)*lateral)*scale;
+        const zz = 2048-(z+Math.cos(heading)*t*length-Math.sin(heading)*lateral)*scale;
+        if (i===0) ctx.moveTo(xx,zz); else ctx.lineTo(xx,zz);
+      }
+      ctx.lineWidth = width*scale;
+      const bright = Math.round(39+random()*123);
+      ctx.strokeStyle = `rgb(${bright},${bright},${bright})`;
+      ctx.stroke();
+    }
+  }
+  map.anisotropy = 8;
+  return { map, origin, span };
+}
+
+function villageFootpaths() {
+  const origin=new THREE.Vector2(-157,-656),span=66;
+  const { canvas,ctx }=makeCanvas(1536,1536);
+  const scale=canvas.width/span,rand=mulberry32(61843);
+  ctx.fillStyle='#000';ctx.fillRect(0,0,canvas.width,canvas.height);
+  // Intersecting walks through the square and along the photo rail. Each
+  // alternating sole compresses two lobes with a shallower scuff between.
+  for(const [ax,az,bx,bz,walkers] of [
+    [-146,-648,-116,-614,10],[-148,-619,-110,-620,13],[-129,-649,-128,-621,7],
+    [-119,-644,-111,-609,7],[-139,-625,-127,-621,6],
+  ]){
+    const dx=bx-ax,dz=bz-az,len=Math.hypot(dx,dz),nx=dz/len,nz=-dx/len;
+    for(let walk=0;walk<walkers;walk++){
+      const offset=(rand()-.5)*3.1,phase=rand()*6.28,stride=.50+.20*rand(),sway=.18+.61*rand();
+      let step=0;
+      for(let s=rand()*2;s<len;s+=stride*(.87+.26*rand()),step++){
+        const side=step%2===0?1:-1,t=s/len;
+        const bend=offset+sway*Math.sin(phase+t*6.4)+side*.115;
+        const x=(ax+t*dx+nx*bend-origin.x)*scale,z=(az+t*dz+nz*bend-origin.y)*scale;
+        ctx.save();ctx.translate(x,z);
+        ctx.rotate(Math.atan2(-dx,dz)+side*.1+(rand()-.5)*.23);
+        const pressure=Math.round(68+rand()*112);
+        ctx.scale(scale,scale);ctx.fillStyle=`rgb(${pressure},${pressure},${pressure})`;
+        ctx.beginPath();ctx.ellipse(0,-.085,.051,.064,0,0,Math.PI*2);ctx.fill();
+        ctx.beginPath();ctx.ellipse(.005,.061,.062,.102,0,0,Math.PI*2);ctx.fill();
+        ctx.restore();
+      }
+    }
+  }
+  const map=new THREE.CanvasTexture(canvas);map.anisotropy=8;
+  return { map,origin,span };
+}
+
+function buildTuskPatch(patch, regionHeight) {
+  const bounds=blackTuskBounds;
+  const n=bounds.grid;
+  const dx=(bounds.maxX-bounds.minX)/(n-1), dz=(bounds.maxZ-bounds.minZ)/(n-1);
+  const points=new Float32Array(n*n*3), colors=new Float32Array(points.length);
+  const ice=new THREE.Color(0xe3edf3), stone=new THREE.Color(0x535860), color=new THREE.Color();
+  for(let j=0;j<n;j++) {
+    const z=bounds.minZ+j*dz;
+    for(let i=0;i<n;i++){
+      const x=bounds.minX+i*dx, k=j*n+i;
+      const blend=smoothstep(0,105,Math.min(x-bounds.minX,bounds.maxX-x,z-bounds.minZ,bounds.maxZ-z));
+      const xm=Math.max(0,i-1),xp=Math.min(n-1,i+1),zm=Math.max(0,j-1),zp=Math.min(n-1,j+1);
+      const grade=Math.hypot((patch.heights[j*n+xp]-patch.heights[j*n+xm])/(dx*2),
+        (patch.heights[zp*n+i]-patch.heights[zm*n+i])/(dz*2));
+      const rock=smoothstep(.42,1.15,grade*(.87+noise.fbm(x*.018,z*.025,3)*.6));
+      const y=lerp(regionHeight(x,z),patch.heights[k],blend);
+      color.copy(ice).lerp(stone,rock);
+      points.set([x,y,z],k*3);
+      colors.set([color.r,color.g,color.b],k*3);
+    }
+  }
+  const peak=makePatches(n,[['position',points,3],['color',colors,3]],surfaceMaterial('mountain',{vertexColors:true}));
+  peak.name='The Black Tusk Â· local Copernicus patch';
+  const { x,z,elevation }=MOUNTAIN.blackTusk;
+  const base=triangleHeight(patch.heights,n,...worldIndex(x,z,bounds))-12;
+  // The sub-pixel volcanic neck is modeled up to the published summit elevation.
+  const levels=[
+    [base,86,88,-8,14],[base+(elevation-base)*.28,52,60,-4,9],
+    [base+(elevation-base)*.62,31,39,2,-6],[elevation-8,13,16,3,-1],[elevation,5,8,0,0],
+  ];
+  const vertices=[], rockColor=[],indices=[], sides=11;
+  const rockRng=mulberry32(13034), rockPattern=Array.from({length:sides},()=>.83+rockRng()*.29);
+  for(const [i,[y,rx,rz,ox,oz]] of levels.entries()){
+    for(let side=0;side<sides;side++){
+      const a=side/sides*Math.PI*2, r=rockPattern[side];
+      vertices.push(x+ox+Math.sin(a)*rx*r,y-(1-rockRng())*(i===levels.length-1?4:14),z+oz+Math.cos(a)*rz*r);
+      color.setHex(side%4===0 ? 0x4c4b4e : 0x3d434c).multiplyScalar(.72+rockRng()*.35);
+      rockColor.push(color.r,color.g,color.b);
+      if(i<levels.length-1){
+        const row=i*sides,out=(i+1)*sides,s2=(side+1)%sides;
+        indices.push(row+side,out+side,row+s2,row+s2,out+side,out+s2);
+      }
+    }
+  }
+  for(let i=1;i<sides-1;i++)indices.push((levels.length-1)*sides,(levels.length-1)*sides+i,(levels.length-1)*sides+i+1);
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));
+  geo.setAttribute('color',new THREE.Float32BufferAttribute(rockColor,3));
+  geo.setIndex(indices);geo.computeVertexNormals();
+  const tusk=new THREE.Mesh(geo,surfaceMaterial('mountain',{vertexColors:true,side:THREE.DoubleSide}));
+  tusk.name='The Black Tusk volcanic neck';
+  peak.add(tusk);
+  return peak;
+}
+
+export function buildCoastMountains({ heights, cover }, tusk) {
+  const bounds = regionBounds;
+  const n = bounds.grid, step = (bounds.maxX - bounds.minX) / (n - 1);
+  const positions = new Float32Array(n ** 2 * 3);
+  const colors = new Float32Array(positions.length);
+  const normals = new Float32Array(positions.length);
+  const northSnow = new THREE.Color(0xe0e7ec), stone = new THREE.Color(0x60636a);
+  const forest = new THREE.Color(0x23342e), open = new THREE.Color(0xa4b0b1);
+  const water = new THREE.Color(0x3b6570), ice = new THREE.Color(0xe0ebef), color = new THREE.Color();
+  const rendered = heights.slice();
+  const at = (x, z) => triangleHeight(heights, n, ...worldIndex(x, z, bounds));
+  for (let j = 0; j < n; j++) {
+    const z = bounds.minZ + j * step;
+    for (let i = 0; i < n; i++) {
+      const x = bounds.minX + i * step;
+      const edgeX = clamp(x, WORLD.minX, WORLD.maxX);
+      const edgeZ = clamp(z, WORLD.minZ, WORLD.maxZ);
+      const edge = Math.hypot(x - edgeX, z - edgeZ);
+      if (edge < 240) {
+        // Relieve the overlap under the detailed grid, including LiDAR transitions.
+        rendered[j * n + i] += (heightAt(edgeX, edgeZ) - at(edgeX, edgeZ) - 18)
+          * (1 - smoothstep(0, 240, edge));
+      }
+    }
+  }
+
+  for (let j = 0; j < n; j++) {
+    const z = bounds.minZ + j * step;
+    for (let i = 0; i < n; i++) {
+      const x = bounds.minX + i * step;
+      const k = j * n + i;
+      const h = rendered[k];
+      const dx = rendered[j * n + Math.max(i - 1, 0)] - rendered[j * n + Math.min(i + 1, n - 1)];
+      const dz = rendered[Math.max(j - 1, 0) * n + i] - rendered[Math.min(j + 1, n - 1) * n + i];
+      const inv = 1 / Math.hypot(dx, 2 * step, dz);
+      const slope = 1 - 2 * step * inv;
+      positions.set([x, h, z], k * 3);
+      normals.set([dx * inv, 2 * step * inv, dz * inv], k * 3);
+      color.copy(open).lerp(northSnow, smoothstep(940, 1700, h));
+      color.lerp(stone, smoothstep(0.13, 0.51, slope) * 0.83);
+      if (cover[k] === 10) color.lerp(forest, 0.87);
+      if (cover[k] === 70) color.lerp(ice, 0.85);
+      if (cover[k] === 80) color.copy(water);
+      colors.set([color.r, color.g, color.b], k * 3);
+    }
+  }
+  const surrounding = makePatches(n, [
+    ['position', positions, 3], ['color', colors, 3], ['normal', normals, 3],
+  ], surfaceMaterial('mountain', { vertexColors: true, roughness: 0.98 }), (i, j) => {
+    const x = bounds.minX + (i + 0.5) * step, z = bounds.minZ + (j + 0.5) * step;
+    if (x > blackTuskBounds.minX && x < blackTuskBounds.maxX &&
+        z > blackTuskBounds.minZ && z < blackTuskBounds.maxZ) return true;
+    return x > WORLD.minX + 140 && x < WORLD.maxX - 140
+      && z > WORLD.minZ + 140 && z < WORLD.maxZ - 140;
+  });
+  surrounding.name = 'Coast Mountains Â· Copernicus DEM';
+  for (const mesh of surrounding.children) mesh.receiveShadow = false;
+  surrounding.add(buildTuskPatch(tusk, at));
+  const random = mulberry32(2728);
+  const groves = [];
+  for (let j = 1; j < n - 1; j += 2) {
+    const z = bounds.minZ + j * step;
+    for (let i = 1; i < n - 1; i += 2) {
+      const x = bounds.minX + i * step;
+      if (Math.hypot(x, z - 2700) > 15500 || cover[j * n + i] !== 10 || rendered[j * n + i] > 1920) continue;
+      if (x > WORLD.minX - 75 && x < WORLD.maxX + 75 && z > WORLD.minZ - 75 && z < WORLD.maxZ + 75) continue;
+      // The west-side subalpine stands are the foreground of the valley
+      // panorama. Keep their mapped forest mask, but resolve individual
+      // crowns rather than leaving widely spaced trees over bare terrain.
+      const westSubalpine = (x < WORLD.minX || z < WORLD.minZ) && z < -1700
+        && Math.hypot(x + 4300, z + 3400) < 3200
+        && rendered[j * n + i] > 1250 && rendered[j * n + i] < 1920;
+      for (let t = 0; t < (westSubalpine ? 90 : 18); t++) {
+        const tx = x + (random() - .5) * step * 1.7, tz = z + (random() - .5) * step * 1.7;
+        const [u, v] = worldIndex(tx, tz, bounds);
+        if (cover[Math.round(v) * n + Math.round(u)] !== 10) continue;
+        if (tx > WORLD.minX && tx < WORLD.maxX && tz > WORLD.minZ && tz < WORLD.maxZ) continue;
+        const altitude=triangleHeight(rendered,n,u,v);
+        const size=altitude>1690?15+random()*15:24+random()**.65*25;
+        groves.push([tx, altitude, tz, size, random() * 6.28]);
+      }
+    }
+  }
+  // Regional stands use their own spatial bounds. One giant instance batch
+  // forced every distant tree through the GPU even while looking uphill.
+  const groveCells = new Map(), groveCellSize = 600;
+  for (const grove of groves) {
+    const key = `${Math.floor(grove[0] / groveCellSize)},${Math.floor(grove[2] / groveCellSize)}`;
+    if (!groveCells.has(key)) groveCells.set(key, []);
+    groveCells.get(key).push(grove);
+  }
+  const regionalNear = coniferGeometry('hemlock', -1);
+  const regionalFar = coniferGeometry('hemlock', -2);
+  const rimedRegionalMaterial = (level) => {
+    const material = coniferMaterial(level, 'regional'), compile = material.onBeforeCompile;
+    material.onBeforeCompile = (shader, renderer) => {
+      compile(shader,renderer);
+      // Snow-laden subalpine crowns become pale and rimed; the lower
+      // valley stays predominantly green beneath its exposed upper lips.
+      shader.vertexShader = shader.vertexShader.replace(
+        'crownSnow=deposition*smoothstep(1370.0,1820.0,forestOrigin.y);',
+        'crownSnow=deposition*smoothstep(1110.0,1580.0,forestOrigin.y);');
+      shader.fragmentShader = shader.fragmentShader.replace(
+        'rime = crownSnow*frostedLip*.62;',
+        'rime = crownSnow*(.38+.62*frostedLip)*.91;');
+    };
+    material.customProgramCacheKey = () => `regional-subalpine-rime-${level}-v1`;
+    return material;
+  };
+  const regionalMaterial = rimedRegionalMaterial(0), regionalFarMaterial=rimedRegionalMaterial(-2);
+  const tree = new THREE.Object3D();
+  for (const groves of groveCells.values()) {
+    const center = new THREE.Vector3();
+    for (const [x, y, z] of groves) center.add(new THREE.Vector3(x, y + 12, z));
+    center.multiplyScalar(1 / groves.length);
+    const near = new THREE.InstancedMesh(regionalNear, regionalMaterial, groves.length);
+    const far = new THREE.InstancedMesh(regionalFar, regionalFarMaterial, groves.length);
+    const proxy = makeForestCrowns('regional',groves.map(() => 2));
+    for (const [index, [x, y, z, size, yaw]] of groves.entries()) {
+      tree.position.set(x - center.x, y - center.y - .3, z - center.z);
+      tree.scale.set(size * 1.12, size, size * 1.12);
+      tree.rotation.set(0, yaw, 0);
+      tree.updateMatrix();
+      near.setMatrixAt(index, tree.matrix);
+      far.setMatrixAt(index, tree.matrix);
+      proxy?.setMatrixAt(index,tree.matrix);
+    }
+    near.computeBoundingSphere(); far.computeBoundingSphere();
+    proxy?.computeBoundingSphere();
+    const radius = near.boundingSphere.radius + near.boundingSphere.center.length();
+    surrounding.add(new ForestCell('regional',center,radius,near,far,proxy));
+  }
+  return surrounding;
 }
 
 function buildMask(res = 1024) {
@@ -105,7 +607,8 @@ function buildMask(res = 1024) {
   for (const run of RUNS) {
     ctx.beginPath();
     const pts = run.samples;
-    ctx.lineWidth = Math.max(2.1, run.width * ((sx + sz) * 0.5) * (run.hidden ? 0.98 : 1.12));
+    ctx.strokeStyle = run.gladed ? '#568' : '#fff';
+    ctx.lineWidth = Math.max(1, run.width * ((sx + sz) * 0.5));
     for (let i = 0; i < pts.length; i++) {
       const px = (pts[i].x - WORLD.minX) * sx;
       const py = (pts[i].z - WORLD.minZ) * sz;
@@ -120,7 +623,7 @@ function buildMask(res = 1024) {
   // separable box blur, twice, for soft groomed shoulders
   let a = m, b = new Float32Array(m.length);
   for (let pass = 0; pass < 2; pass++) {
-    const r = pass === 0 ? 2 : 3;
+    const r = 1;
     // horizontal
     for (let y = 0; y < res; y++) {
       let sum = 0;
@@ -181,207 +684,37 @@ function boxBlurHeights(src, radius, iterations = 2) {
   return a;
 }
 
-function applyFeatures() {
-  const res = n;
-  const sx = WORLD.sizeX / (res - 1);
-  const sz = WORLD.sizeZ / (res - 1);
-
-  // snow cat / booter features
-  for (const k of KICKERS) {
-    const p = runPointAt(k.run, k.t);
-    if (!p) continue;
-    const fx = p.tx, fz = p.tz;
-    const rx = -fz, rz = fx;
-    const halfL = k.length * 0.5;
-    const reach = halfL + 16;
-    const halfW = k.width * 0.62;
-    const cx = p.x, cz = p.z;
-    const i0 = clamp(Math.floor((cx - reach - WORLD.minX) / sx), 1, res - 2);
-    const i1 = clamp(Math.ceil((cx + reach - WORLD.minX) / sx), 1, res - 2);
-    const j0 = clamp(Math.floor((cz - reach - WORLD.minZ) / sz), 1, res - 2);
-    const j1 = clamp(Math.ceil((cz + reach - WORLD.minZ) / sz), 1, res - 2);
-    for (let j = j0; j <= j1; j++) {
-      const z = WORLD.minZ + j * sz;
-      for (let i = i0; i <= i1; i++) {
-        const x = WORLD.minX + i * sx;
-        const dx = x - cx, dz = z - cz;
-        const s = dx * fx + dz * fz;
-        const lat = dx * rx + dz * rz;
-        if (Math.abs(lat) > halfW) continue;
-        let lift = 0;
-        const u = (s + halfL) / k.length;
-        if (u > 0 && u <= 1) {
-          lift = Math.pow(smoothstep(0, 1, u), 0.9) * k.height;
-        } else if (s > halfL && s < halfL + 3.2) {
-          lift = k.height * (1 - smoothstep(0, 3.2, s - halfL));
-        }
-        if (lift <= 0) continue;
-        const latQ = 1 - smoothstep(0.62, 1.0, Math.abs(lat) / halfW);
-        heights[j * res + i] += lift * latQ;
-      }
-    }
-  }
-
-  // cliff shelves
-  for (const c of CLIFFS) {
-    const p = runPointAt(c.run, c.t);
-    if (!p) continue;
-    const fx = p.tx, fz = p.tz;
-    const rx = -fz, rz = fx;
-    const halfW = c.width * 0.62;
-    const reach = 75;
-    const cx = p.x, cz = p.z;
-    const i0 = clamp(Math.floor((cx - reach - WORLD.minX) / sx), 1, res - 2);
-    const i1 = clamp(Math.ceil((cx + reach - WORLD.minX) / sx), 1, res - 2);
-    const j0 = clamp(Math.floor((cz - reach - WORLD.minZ) / sz), 1, res - 2);
-    const j1 = clamp(Math.ceil((cz + reach - WORLD.minZ) / sz), 1, res - 2);
-    for (let j = j0; j <= j1; j++) {
-      const z = WORLD.minZ + j * sz;
-      for (let i = i0; i <= i1; i++) {
-        const x = WORLD.minX + i * sx;
-        const dx = x - cx, dz = z - cz;
-        const s = dx * fx + dz * fz;
-        const lat = dx * rx + dz * rz;
-        if (Math.abs(s) > reach || Math.abs(lat) > halfW) continue;
-        let shelf = 1 - smoothstep(0, c.length, s + 1.6);
-        shelf *= smoothstep(-70, -14, s); // taper the upstream shelf into the hill
-        if (shelf <= 0) continue;
-        const latQ = 1 - smoothstep(0.58, 1.0, Math.abs(lat) / halfW);
-        heights[j * res + i] += c.drop * shelf * latQ;
-      }
-    }
-  }
-
-  // Soft edge berms keep players inside the mapped area without fences everywhere.
-  for (let j = 0; j < res; j++) {
-    const z = WORLD.minZ + j * sz;
-    for (let i = 0; i < res; i++) {
-      const x = WORLD.minX + i * sx;
-      const edge = Math.min(x - WORLD.minX, WORLD.maxX - x, z - WORLD.minZ, WORLD.maxZ - z);
-      if (edge < 190) {
-        const t = 1 - smoothstep(0, 190, edge);
-        heights[j * res + i] += t * t * 160;
-      }
-    }
-  }
-}
-
-function makeSnowTexture() {
-  const S = 512;
-  const { canvas, ctx } = makeCanvas(S, S);
-  const img = ctx.createImageData(S, S);
-  const rand = mulberry32(881122);
-  for (let y = 0; y < S; y++) {
-    for (let x = 0; x < S; x++) {
-      const i = (y * S + x) * 4;
-      const n1 = noise2.fbm(x * 0.035, y * 0.035, 3);
-      const n2 = noise2.fbm(x * 0.19, y * 0.19, 2);
-      const v = 244 + n1 * 14 + n2 * 8 + (rand() - 0.5) * 3.4;
-      img.data[i] = clamp(v - 2, 0, 255);
-      img.data[i + 1] = clamp(v, 0, 255);
-      img.data[i + 2] = clamp(v + 2, 0, 255);
-      img.data[i + 3] = 255;
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-  const tex = canvasTexture(canvas, { repeat: [1, 1] });
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.magFilter = THREE.LinearFilter;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  return tex;
-}
-
-function makeSnowNormal() {
-  const S = 256;
-  const { canvas, ctx } = makeCanvas(S, S);
-  const bump = new Float32Array(S * S);
-  for (let y = 0; y < S; y++) {
-    for (let x = 0; x < S; x++) {
-      bump[y * S + x] = noise2.fbm(x * 0.055, y * 0.055, 3) * 0.75 + noise2.fbm(x * 0.22, y * 0.22, 2) * 0.25;
-    }
-  }
-  const img = ctx.createImageData(S, S);
-  const strength = 1.55;
-  for (let y = 0; y < S; y++) {
-    for (let x = 0; x < S; x++) {
-      const l = bump[y * S + ((x - 1 + S) % S)];
-      const r = bump[y * S + ((x + 1 + S) % S)];
-      const d = bump[((y - 1 + S) % S) * S + x];
-      const u = bump[((y + 1 + S) % S) * S + x];
-      const nx = (l - r) * strength;
-      const ny = (d - u) * strength;
-      const nz = 1;
-      const len = Math.hypot(nx, ny, nz);
-      const i = (y * S + x) * 4;
-      img.data[i] = (nx / len * 0.5 + 0.5) * 255;
-      img.data[i + 1] = (ny / len * 0.5 + 0.5) * 255;
-      img.data[i + 2] = (nz / len * 0.5 + 0.5) * 255;
-      img.data[i + 3] = 255;
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-  const tex = canvasTexture(canvas, { repeat: [1, 1], srgb: false });
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  return tex;
-}
-
 export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Promise.resolve()) {
   initWorldData();
-  onProgress(0.08, 'Sounding the snowpack…');
+  onProgress(0.08, 'Sounding the snowpackâ€¦');
   await yieldFrame();
 
   const N = WORLD.grid;
-  n = N; heights = new Float32Array(N * N);
+  const [local, region, tusk] = await Promise.all([
+    loadGrid('resort.bin', WORLD), loadGrid('ranges.bin', regionBounds), loadGrid('black-tusk.bin', blackTuskBounds),
+    preloadForestCrowns(),
+  ]);
+  n = N;
+  heights = local.heights;
+  landCover = local.cover;
+  prepareValleyLakes(heights, landCover, WORLD);
   cell = WORLD.sizeX / (N - 1);
   const dz = WORLD.sizeZ / (N - 1);
-  for (let j = 0; j < N; j++) {
-    const z = WORLD.minZ + j * dz;
-    for (let i = 0; i < N; i++) {
-      const x = WORLD.minX + i * cell;
-      heights[j * N + i] = baseHeight(x, z);
-    }
-  }
-  onProgress(0.2, 'Laying out the runs…');
+  const stationGrading = createStationGrading((x, z) => originalDetailVertex(...worldIndex(x, z, WORLD)));
+  gradeStation = (x, z, y) => gradeGlacierCave(x, z, stationGrading(x, z, y));
+  gradedHeights = heights.map((elevation, i) =>
+    gradeStation(WORLD.minX + i % N * cell, WORLD.minZ + Math.floor(i / N) * dz, elevation));
+
+  onProgress(0.2, 'Tracing mapped ski runsâ€¦');
   await yieldFrame();
-
-  const m = buildMask(1024);
-  mask = m.mask; maskN = m.res; maskCell = WORLD.sizeX / (maskN - 1);
-
-  // Smooth the groomed corridors into long, flowing surfaces.
-  const smoothH = boxBlurHeights(heights.slice(), 5, 3);
-  for (let j = 0; j < N; j++) {
-    const z = WORLD.minZ + j * dz;
-    for (let i = 0; i < N; i++) {
-      const x = WORLD.minX + i * cell;
-      const p = sampleMask(x, z);
-      const blend = Math.min(1, p * 1.38) * 0.8;
-      heights[j * N + i] = lerp(heights[j * N + i], smoothH[j * N + i], blend);
-    }
-  }
-
-  onProgress(0.34, 'Building booters & cliff drops…');
-  await yieldFrame();
-  applyFeatures();
-
-  // The village is a flat, walkable terrace.
-  for (let j = 0; j < N; j++) {
-    const z = WORLD.minZ + j * dz;
-    for (let i = 0; i < N; i++) {
-      const x = WORLD.minX + i * cell;
-      const dv = Math.sqrt(Math.pow((x - 250) / 600, 2) + Math.pow((z - 1990) / 520, 2));
-      const wv = 1 - smoothstep(0.7, 1.02, dv);
-      if (wv > 0) heights[j * N + i] = lerp(heights[j * N + i], 662 + (z - 1990) * 0.01, wv * 0.88);
-      const dc = Math.sqrt(Math.pow((x - 790) / 340, 2) + Math.pow((z - 2060) / 290, 2));
-      const wc = 1 - smoothstep(0.64, 1.0, dc);
-      if (wc > 0) heights[j * N + i] = lerp(heights[j * N + i], 698 + (z - 2060) * 0.012, wc * 0.84);
-    }
-  }
+  const m = buildMask(1536);
+  mask = m.mask;
+  maskN = m.res;
 
   // Build mesh.
   const vcount = N * N;
   const positions = new Float32Array(vcount * 3);
   const normals = new Float32Array(vcount * 3);
-  const uvs = new Float32Array(vcount * 2);
   const colors = new Float32Array(vcount * 3);
   const dx = cell;
 
@@ -392,9 +725,10 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
   const rock = new THREE.Color().setRGB(0.30, 0.29, 0.285, THREE.SRGBColorSpace);
   const rockLight = new THREE.Color().setRGB(0.42, 0.405, 0.39, THREE.SRGBColorSpace);
   const col = new THREE.Color();
-  const blurred = boxBlurHeights(heights.slice(), 9, 1);
+  const blurred = boxBlurHeights(gradedHeights.slice(), 3, 1);
+  const lake = new THREE.Color(0x416d7e);
 
-  onProgress(0.5, 'Shading the alpine…');
+  onProgress(0.5, 'Shading the alpineâ€¦');
   await yieldFrame();
 
   for (let j = 0; j < N; j++) {
@@ -402,11 +736,11 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     for (let i = 0; i < N; i++) {
       const k = j * N + i;
       const x = WORLD.minX + i * cell;
-      const h = heights[k];
-      const hL = heights[j * N + Math.max(0, i - 1)];
-      const hR = heights[j * N + Math.min(N - 1, i + 1)];
-      const hD = heights[Math.max(0, j - 1) * N + i];
-      const hU = heights[Math.min(N - 1, j + 1) * N + i];
+      const h = gradedHeights[k];
+      const hL = gradedHeights[j * N + Math.max(0, i - 1)];
+      const hR = gradedHeights[j * N + Math.min(N - 1, i + 1)];
+      const hD = gradedHeights[Math.max(0, j - 1) * N + i];
+      const hU = gradedHeights[Math.min(N - 1, j + 1) * N + i];
       let nx = (hL - hR) / (2 * dx);
       let nz = (hD - hU) / (2 * dz);
       const nl = Math.hypot(nx, 1, nz);
@@ -418,8 +752,6 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
       normals[k * 3] = nx;
       normals[k * 3 + 1] = ny;
       normals[k * 3 + 2] = nz;
-      uvs[k * 2] = x / 14.0;
-      uvs[k * 2 + 1] = z / 14.0;
 
       const slope = 1 - ny;
       const p = sampleMask(x, z);
@@ -439,6 +771,10 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
       const treePossible = smoothstep(700, 1000, h) * (1 - smoothstep(1680, 1880, h)) * (1 - smoothstep(0.38, 0.62, slope));
       const forest = treePossible * smoothstep(0.0, 0.5, nBig + nMid * 0.4) * (1 - p);
       col.lerp(snowShade, forest * 0.18);
+      const cover = landCover[k];
+      // Land-cover class 10 describes canopy seen from a distance, not the
+      // uncovered snow beneath a skier. The snow shader adds distant canopy.
+      if (cover === 50) col.multiplyScalar(0.86 + 0.14 * p);
       // rock bands and cliff faces
       const rocky = smoothstep(0.30, 0.54, slope) * smoothstep(0.2, 0.72, nBig + nFine * 0.25 + (h > 1700 ? 0.2 : -0.1));
       if (rocky > 0.01) {
@@ -449,6 +785,7 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
       col.multiplyScalar(1 - conc * 0.85);
       // very subtle large-scale tonal drift
       col.offsetHSL(0, 0, nFine * 0.014);
+      if (cover === 80) col.copy(valleyLakeAt(x,z) ? snowShade : lake);
 
       colors[k * 3] = col.r;
       colors[k * 3 + 1] = col.g;
@@ -456,75 +793,154 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     }
   }
 
-  onProgress(0.66, 'Grooming corduroy…');
+  onProgress(0.66, 'Grooming corduroyâ€¦');
   await yieldFrame();
 
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  const indices = new Uint32Array((N - 1) * (N - 1) * 6);
-  let o = 0;
-  for (let j = 0; j < N - 1; j++) {
-    for (let i = 0; i < N - 1; i++) {
-      const a = j * N + i;
-      const b = a + 1;
-      const c = a + N;
-      const d = c + 1;
-      indices[o++] = a; indices[o++] = c; indices[o++] = b;
-      indices[o++] = b; indices[o++] = c; indices[o++] = d;
-    }
-  }
-  geo.setIndex(new THREE.BufferAttribute(indices, 1));
-  geo.computeBoundingSphere();
-
-  const snowMap = makeSnowTexture();
-  const snowNormal = makeSnowNormal();
-  const mat = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    map: snowMap,
-    normalMap: snowNormal,
-    normalScale: new THREE.Vector2(0.62, 0.62),
-    roughness: 0.92,
-    metalness: 0.0,
-    envMapIntensity: 0.6,
+  snowField = buildSnowField();
+  const pisteMap = new THREE.DataTexture(snowField, maskN, maskN, THREE.RGBAFormat);
+  pisteMap.minFilter = pisteMap.magFilter = THREE.LinearFilter;
+  pisteMap.needsUpdate = true;
+  const tracks = {
+    plaza: drawOldTracks(new THREE.Vector2(430,4812),96,1834,840,31),
+    bowl: drawOldTracks(new THREE.Vector2(-24,4995),230,6529,625,81),
+    village: villageFootpaths(),
+  };
+  const roomCutout = new THREE.Vector4(), roomYaw = new THREE.Vector2(1, 0);
+  const mountainShade = buildMountainShade();
+  const snowMaps = { pisteMap, tracks, roomCutout, roomYaw, mountainShade };
+  const mat = surfaceMaterial('snow', { vertexColors: true }, snowMaps);
+  const mesh = makePatches(N, [
+    ['position', positions, 3], ['normal', normals, 3], ['color', colors, 3],
+  ], mat, undefined, terrainTile);
+  detailTiles = new Map();
+  const detail = makeTerrainDetail(mesh, mat);
+  // Sample the rendered triangles' attributes, including their smooth detailed
+  // normals. Recessed snow uses the same material and joins this surface exactly.
+  const sampleSurface = (x, z, color, normal) => {
+    const gx = clamp((x - WORLD.minX) / WORLD.sizeX, 0, 1) * (N - 1);
+    const gz = clamp((z - WORLD.minZ) / WORLD.sizeZ, 0, 1) * (N - 1);
+    const tileCount = (N - 1) / terrainTile;
+    const ix = Math.min(tileCount - 1, Math.floor(gx / terrainTile));
+    const iz = Math.min(tileCount - 1, Math.floor(gz / terrainTile));
+    const tile = detailTiles.get(iz * tileCount + ix);
+    const width = tile ? terrainTile * detailStep + 1 : N;
+    const u = tile ? (gx - ix * terrainTile) * detailStep : gx;
+    const v = tile ? (gz - iz * terrainTile) * detailStep : gz;
+    const i = Math.min(width - 2, Math.floor(u)), j = Math.min(width - 2, Math.floor(v));
+    const tx = u - i, tz = v - j, index = j * width + i;
+    const first = tx + tz <= 1;
+    const a = first ? index : index + width + 1;
+    const b = index + 1, c = index + width;
+    const wa = first ? 1 - tx - tz : tx + tz - 1;
+    const wb = first ? tx : 1 - tz, wc = first ? tz : 1 - tx;
+    const colorData = tile ? tile.detail.geometry.attributes.color.array : colors;
+    const normalData = tile ? tile.detail.geometry.attributes.normal.array : normals;
+    color.setRGB(
+      colorData[a * 3] * wa + colorData[b * 3] * wb + colorData[c * 3] * wc,
+      colorData[a * 3 + 1] * wa + colorData[b * 3 + 1] * wb + colorData[c * 3 + 1] * wc,
+      colorData[a * 3 + 2] * wa + colorData[b * 3 + 2] * wb + colorData[c * 3 + 2] * wc,
+    );
+    normal.set(
+      normalData[a * 3] * wa + normalData[b * 3] * wb + normalData[c * 3] * wc,
+      normalData[a * 3 + 1] * wa + normalData[b * 3 + 1] * wb + normalData[c * 3 + 1] * wc,
+      normalData[a * 3 + 2] * wa + normalData[b * 3 + 2] * wb + normalData[c * 3 + 2] * wc,
+    ).normalize();
+    const values = tile ? tile.values : heights;
+    return values[a] * wa + values[b] * wb + values[c] * wc;
+  };
+  const cutoutMeshes = new Set();
+  const skiSnow = createSkiSnowSurface({
+    snowMaps, heightAt, surfaceAt, sampleSurface,
+    setCutout(skis, cutoutMaterial) {
+      for (const mesh of cutoutMeshes) mesh.material = mat;
+      cutoutMeshes.clear();
+      const tileCount = (N - 1) / terrainTile;
+      for (const ski of skis) {
+        if (!ski.active) continue;
+        let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+        for (let end = 0; end < 2; end++) {
+          const s = end ? SKI_SNOW_FOOTPRINT.front : SKI_SNOW_FOOTPRINT.back;
+          for (let edge = -1; edge <= 1; edge += 2) {
+            const t = edge * SKI_SNOW_FOOTPRINT.halfWidth;
+            const x = ski.contact.x + ski.axis.x * s + ski.rightX * t;
+            const z = ski.contact.z + ski.axis.z * s + ski.rightZ * t;
+            minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+            minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+          }
+        }
+        const x0 = clamp(Math.floor((minX - WORLD.minX) / cell / terrainTile), 0, tileCount - 1);
+        const x1 = clamp(Math.floor((maxX - WORLD.minX) / cell / terrainTile), 0, tileCount - 1);
+        const z0 = clamp(Math.floor((minZ - WORLD.minZ) / dz / terrainTile), 0, tileCount - 1);
+        const z1 = clamp(Math.floor((maxZ - WORLD.minZ) / dz / terrainTile), 0, tileCount - 1);
+        for (let iz = z0; iz <= z1; iz++) {
+          for (let ix = x0; ix <= x1; ix++) {
+            const key = iz * tileCount + ix;
+            const original = mesh.children[key], local = detailTiles.get(key)?.detail;
+            original.material = cutoutMaterial;
+            cutoutMeshes.add(original);
+            if (local) {
+              local.material = cutoutMaterial;
+              cutoutMeshes.add(local);
+            }
+          }
+        }
+      }
+    },
   });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.receiveShadow = true;
-  mesh.castShadow = false;
-  mesh.name = 'terrain';
+  detail.terrain.add(skiSnow.group);
+  terrain.ranges = buildCoastMountains(region, tusk);
 
-  terrain.mesh = mesh;
-  terrain.heights = heights;
+  terrain.mesh = detail.terrain;
+  terrain.updateDetail = detail.updateDetail;
+  terrain.updateSkiSnow = skiSnow.update;
+  terrain.skiSnowDepthAt = skiSnow.depthAt;
+  terrain.sampleSnowSurface = sampleSurface;
+  terrain.snowMaterial = mat;
+  terrain.mountainShade = mountainShade;
+  terrain.setInteriorCutout = (room) => {
+    if (!room) return;
+    roomCutout.set(room.x, room.z, room.w / 2 - .07, room.d / 2 - .07);
+    roomYaw.set(Math.cos(room.yaw), Math.sin(room.yaw));
+  };
+  terrain.heights = gradedHeights;
   terrain.n = N;
   terrain.cell = cell;
   terrain.mask = mask;
   terrain.maskN = maskN;
-  terrain.snowMap = snowMap;
-  terrain.snowNormal = snowNormal;
 
-  onProgress(0.78, 'Snow is falling…');
+  onProgress(0.78, 'Snow is fallingâ€¦');
   await yieldFrame();
   return terrain;
 }
 
-/* ── sampling API ─────────────────────────────────────────────── */
+/* â”€â”€ sampling API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 export function heightAt(x, z) {
   if (!heights) return 0;
-  const N = n;
-  const gx = clamp((x - WORLD.minX) / WORLD.sizeX * (N - 1), 0, N - 1.001);
-  const gz = clamp((z - WORLD.minZ) / WORLD.sizeZ * (N - 1), 0, N - 1.001);
-  const ix = Math.floor(gx), iz = Math.floor(gz);
-  const tx = gx - ix, tz = gz - iz;
-  const i0 = iz * N + ix;
-  const h00 = heights[i0], h10 = heights[i0 + 1], h01 = heights[i0 + N], h11 = heights[i0 + N + 1];
-  return lerp(lerp(h00, h10, tx), lerp(h01, h11, tx), tz);
+  const [gx, gz] = worldIndex(x, z, WORLD);
+  const tileCount = (n - 1) / terrainTile;
+  const ix = Math.min(tileCount - 1, Math.floor(gx / terrainTile));
+  const iz = Math.min(tileCount - 1, Math.floor(gz / terrainTile));
+  const tile = detailTiles.get(iz * tileCount + ix);
+  const u = gx * detailStep, v = gz * detailStep;
+  if (tile) {
+    return triangleHeight(tile.values, terrainTile * detailStep + 1,
+      u - ix * terrainTile * detailStep, v - iz * terrainTile * detailStep);
+  }
+  // Physics can sample the next tile before it becomes visible.
+  const step = 1 / detailStep;
+  const a = Math.min((n - 1) * detailStep - 1, Math.floor(u));
+  const b = Math.min((n - 1) * detailStep - 1, Math.floor(v));
+  const tx = u - a, tz = v - b;
+  const h10 = detailVertex((a + 1) * step, b * step);
+  const h01 = detailVertex(a * step, (b + 1) * step);
+  return tx + tz <= 1
+    ? detailVertex(a * step, b * step) * (1 - tx - tz) + h10 * tx + h01 * tz
+    : detailVertex((a + 1) * step, (b + 1) * step) * (tx + tz - 1) + h10 * (1 - tz) + h01 * (1 - tx);
 }
 
 export function normalAt(x, z, out = new THREE.Vector3()) {
-  const e = 1.8;
+  const e = 2.5;
   const hL = heightAt(x - e, z), hR = heightAt(x + e, z);
   const hD = heightAt(x, z - e), hU = heightAt(x, z + e);
   out.set(hL - hR, 2 * e, hD - hU).normalize();

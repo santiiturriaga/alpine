@@ -1,11 +1,12 @@
 /* ═══════════════════════════════════════════════════════════════
    AUDIO
-   A tiny procedural soundscape: high-altitude wind, ski edge hiss,
-   a warm pad, coins, crystals, landings, and the Peak 2 Peak motor.
+   Procedural alpine wind, tree rustle, distant calls, snow contact
+   and cable noise.
    Everything is synthesized — no audio files.
    ═══════════════════════════════════════════════════════════════ */
 
 import { clamp } from './util.js';
+import { ResortSound } from './resort-sound.js';
 
 export class AudioEngine {
   constructor() {
@@ -17,11 +18,15 @@ export class AudioEngine {
     this.wind = null;
     this.hiss = null;
     this.carve = null;
-    this.pad = null;
+    this.rustle = null;
+    this.nextBird = 0;
+    this.lastFootfall = -1;
     this.motor = null;
     this.noiseBuffer = null;
     this.playhead = 0;
     this.started = false;
+    this.musicEnabled=true;
+    try{this.musicEnabled=localStorage.getItem('alpine.music')!=='off';}catch{}
   }
 
   get supported() {
@@ -68,38 +73,8 @@ export class AudioEngine {
     // ── edges biting into snow
     this.carve = this.makeLoopNoise({ type: 'bandpass', freq: 2600, q: 1.1, gain: 0 });
 
-    // ── very quiet warm pad. D major, slowly breathing.
-    this.pad = ctx.createGain();
-    this.pad.gain.value = 0;
-    const padFilter = ctx.createBiquadFilter();
-    padFilter.type = 'lowpass';
-    padFilter.frequency.value = 760;
-    padFilter.Q.value = 0.4;
-    this.pad.connect(padFilter);
-    padFilter.connect(master);
-    this.padOscillators = [];
-    for (const [freq, detune, gain] of [
-      [73.42, -3, 0.05], [110.0, 2, 0.036], [146.83, 5, 0.028], [185.0, -4, 0.02],
-    ]) {
-      const osc = ctx.createOscillator();
-      osc.type = 'sine';
-      osc.frequency.value = freq;
-      osc.detune.value = detune;
-      const g = ctx.createGain();
-      g.gain.value = gain;
-      const lfo = ctx.createOscillator();
-      lfo.frequency.value = 0.055 + Math.random() * 0.035;
-      const lfoGain = ctx.createGain();
-      lfoGain.gain.value = gain * 0.5;
-      lfo.connect(lfoGain);
-      lfoGain.connect(g.gain);
-      lfo.start();
-      osc.connect(g);
-      g.connect(this.pad);
-      osc.start();
-      this.padOscillators.push({ osc, lfo });
-    }
-    this.pad.gain.setTargetAtTime(0.5, ctx.currentTime, 2.5);
+    this.rustle = this.makeLoopNoise({ type: 'bandpass', freq: 830, q: 0.67, gain: 0 });
+    this.nextBird = ctx.currentTime + 10 + Math.random() * 14;
 
     // ── Peak 2 Peak motor hum
     this.motor = ctx.createGain();
@@ -125,6 +100,7 @@ export class AudioEngine {
     motorOsc2.start();
     this.motorOsc = motorOsc;
 
+    this.score=new ResortSound(this);
     this.ready = true;
     try { await ctx.resume(); } catch { /* ignore */ }
     return true;
@@ -189,32 +165,64 @@ export class AudioEngine {
     return this.setEnabled(!this.enabled);
   }
 
+  toggleMusic() {
+    this.musicEnabled = !this.musicEnabled;
+    try { localStorage.setItem('alpine.music', this.musicEnabled ? 'on' : 'off'); } catch {}
+    return this.musicEnabled;
+  }
+
   /* ── per-frame mix ──────────────────────────────────────────── */
 
   update(dt, state = {}) {
     if (!this.ready || !this.ctx) return;
+    this.score.update(state);
     const t = this.ctx.currentTime;
     const {
       speed = 0, grounded = true, airborne = false, crash = false,
       powder = 0, riding = false, paused = false,
+      surface = 'packed', trees = 0, tuck = 0, altitude = 2000,
+      enclosed = false, stridePhase = 0, stride = 0, gustKmh = 8, hiking = false,
     } = state;
     const s = clamp(speed / 36, 0, 1);
     const active = !paused && !crash;
-    const windTarget = paused ? 0.012 : 0.028 + s * 0.12 + (airborne ? 0.045 : 0);
+    const gust = (.7 + Math.sin(.51*t)*.21 + Math.sin(.231*t+.7)*.12) * (1 + clamp((gustKmh - 8)/17,0,2.8));
+    const shelter = enclosed ? .34 : 1 - .31 * trees;
+    const windTarget = (paused ? .012 : .032 * gust + s * .099 + tuck * .021 + (airborne ? .035 : 0)) * shelter;
     this.wind.gain.gain.setTargetAtTime(windTarget, t, 0.25);
-    this.wind.filter.frequency.setTargetAtTime(320 + s * 520, t, 0.3);
+    this.wind.filter.frequency.setTargetAtTime((300 + gust*140 + s*490)*(enclosed ? .58 : 1), t, 0.3);
+    this.rustle.gain.gain.setTargetAtTime((enclosed ? .004 : .049 * trees * gust) * (paused ? .27 : 1), t, .62);
 
-    const hissTarget = !active || riding ? 0.004 : (grounded ? 0.014 + s * 0.062 : 0.02);
+    const vehicle = state.vehicle;
+    const hissTarget = vehicle === 'bike' && active ? .009 + s * .034
+      : !active || riding || hiking || vehicle ? 0.004 : grounded ? s * (.057 + (surface === 'ice' ? .049 : 0)) : 0.02;
     this.hiss.gain.gain.setTargetAtTime(hissTarget, t, 0.12);
-    this.hiss.filter.frequency.setTargetAtTime(1100 + s * 1800, t, 0.2);
+    this.hiss.filter.frequency.setTargetAtTime(1040 + s*1420 + (surface === 'ice' ? 1100 : -400*powder), t, 0.2);
 
-    const carveTarget = (!active || riding || !grounded) ? 0 : (s * s * 0.085 + powder * s * 0.04);
+    const carveTarget = (!active || riding || hiking || vehicle || !grounded) ? 0 : (s * s * 0.085 + powder * s * 0.04);
     this.carve.gain.gain.setTargetAtTime(carveTarget, t, 0.08);
     this.carve.filter.frequency.setTargetAtTime(2100 + s * 1300, t, 0.16);
 
-    // pad drops away slightly while moving at speed; the mountain gets quiet up high
-    if (this.pad) this.pad.gain.setTargetAtTime(paused ? 0.34 : 0.5 - s * 0.18, t, 0.6);
-    if (this.motor) this.motor.gain.setTargetAtTime(riding ? 0.07 : 0, t, riding ? 0.5 : 0.25);
+    if (this.motor) {
+      const engine=state.vehicle,rotor=engine==='helicopter';
+      const powered=rotor||engine==='snowmobile'||engine==='snowcat';
+      const pulse=rotor?.64+.36*Math.cos(t*2*Math.PI*16):1;
+      this.motor.gain.setTargetAtTime(powered?(.048+s*.045)*pulse:riding?.035+.006*Math.sin(t*.96):0,t,rotor?.023:.32);
+      this.motorOsc.frequency.setTargetAtTime(powered?(rotor?53:engine==='snowcat'?34:76)+s*44:48,t,.13);
+    }
+    const footfall = Math.floor(stridePhase / Math.PI);
+    if (active && !riding && grounded && stride > .35 && footfall !== this.lastFootfall) {
+      const floor = hiking && (surface === 'ground' || enclosed);
+      if (hiking) this.noiseHit({ dur: .062, freq: floor ? 194 : 324, gain: floor ? .055 : .035, q: .8 });
+      this.noiseHit({ dur: hiking ? .12 : .16, freq: floor ? 1080 : surface === 'ice' ? 1760 : 770,
+        gain: hiking ? .034 : .023, q: .8, when: hiking ? .012 : 0 });
+    }
+    this.lastFootfall = footfall;
+    if (active && !enclosed && altitude < 1900 && trees > .4 && s < .35 && t >= this.nextBird) {
+      const pitch = 1550 + Math.random()*690;
+      this.tone(pitch, { dur: .09, gain: .012, slide: pitch*1.19, attack: .025 });
+      this.tone(pitch*1.16, { dur: .13, gain: .01, slide: pitch*.91, when: .126, attack: .026 });
+      this.nextBird = t + 17 + Math.random()*32;
+    }
   }
 
   /* ── one-shots ──────────────────────────────────────────────── */

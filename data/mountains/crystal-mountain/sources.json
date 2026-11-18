@@ -1,0 +1,96 @@
+{
+  "id": "crystal-mountain",
+  "name": "Crystal Mountain",
+  "sourceAreas": ["Crystal Mountain"],
+  "sourceRegion": "US-WA",
+  "origin": [-121.475, 46.9356],
+  "crs": "EPSG:32610",
+  "bounds": {"minX": -3400, "maxX": 2200, "minZ": -3900, "maxZ": 3750},
+  "terrainStep": 10,
+  "backdropBounds": {"minX": -28000, "maxX": 10400, "minZ": -10400, "maxZ": 16000},
+  "backdropStep": 80,
+  "backdropQuantization": 0.075,
+  "viewDistance": 34000,
+  "elevationSources": [
+    "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/historical/n47w122/USGS_13_n47w122_20250813.tif",
+    "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/historical/n48w122/USGS_13_n48w122_20250813.tif"
+  ],
+  "coverSource": "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N45W123_Map.tif",
+  "osmFile": "crystal-mountain-area.osm",
+  "osmUrl": "https://www.openstreetmap.org/api/0.6/map?bbox=-121.518,46.900,-121.458,46.963",
+  "startLift": "mt-rainier-gondola",
+  "beginnerLift": "discovery",
+  "startRun": "front-traverse",
+  "beginnerRun": "discovery-meadow",
+  "summerLifts": ["mt-rainier-gondola"],
+  "mountainStats": {"baseElevationFt": 4400, "summitElevationFt": 6872, "skiableAcres": 2600, "officialNamedTrails": 85, "officialLifts": 11},
+  "sectionBands": [
+    {"name": "Northway", "maxZ": -810},
+    {"name": "Green Valley", "maxZ": -220},
+    {"name": "Front Side", "maxZ": 840}
+  ],
+  "defaultSection": "Campbell Basin",
+  "runSections": {
+    "Silver Basin": "Southback", "The Throne": "Southback", "Silver King": "Southback",
+    "Three Way Exit Chute": "Southback", "Powder 8s": "Southback", "Rabbit Ears": "Southback",
+    "Chairline Left": "Southback", "Chairline Right": "Southback", "Screaming Babies": "Southback",
+    "Faith's Slide": "Southback", "Hamburger": "Southback", "Double Ought's Left": "Southback",
+    "Double Ought's Right": "Southback", "Summit Chute": "Southback", "Upper Field": "Southback",
+    "Divider Chute": "Southback", "Lower Field": "Southback",
+    "Discovery Meadow": "Base & Gold Hills", "Gold Hills": "Base & Gold Hills", "CMAC": "Base & Gold Hills",
+    "Jump Hill": "Base & Gold Hills", "Sled Face": "Base & Gold Hills", "Upper Northway": "Northway",
+    "Lower Chance": "Northway", "Kelley's Gap Road": "Green Valley", "Lucky Shot": "Front Side",
+    "Back Traverse to Lucky Shot": "Front Side", "Queens": "Campbell Basin", "Quicksilver": "Campbell Basin"
+  },
+  "liftOverrides": {
+    "49962023": {"section": "Front Side", "detachable": true, "verticalFeet": 850},
+    "49962024": {"section": "Front Side", "detachable": true, "verticalFeet": 1584},
+    "49962025": {"section": "Campbell Basin", "detachable": true, "verticalFeet": 1147},
+    "49962026": {"name": "Green Valley Express", "section": "Green Valley", "detachable": true},
+    "49962027": {"section": "Campbell Basin", "detachable": false},
+    "50612542": {"section": "Base & Gold Hills", "detachable": false},
+    "50612543": {"section": "Base & Gold Hills", "detachable": false},
+    "86470525": {"section": "Northway", "detachable": false},
+    "101016003": {"section": "Base & Gold Hills", "detachable": true, "verticalFeet": 2400},
+    "127126800": {"section": "Campbell Basin", "detachable": false, "verticalFeet": 912},
+    "1491977277": {"section": "Base & Gold Hills"}
+  },
+  "runOverrides": {
+    "1170380981": {"name": "Shepherd"}
+  },
+  "runSupplements": [
+    "127128249", "127128251", "129729322", "147068147", "386368373", "386368442", "386368931",
+    "388926556", "388926558", "388926560", "388926561", "388926563", "388926565", "391399428",
+    "1169790770", "1169790771", "1169790772", "1170356099", "1170356100", "1170356103", "1170356104",
+    "1170356105", "1170356106", "1170356107", "1170380959", "1170380960", "1170380961", "1170380962",
+    "1170385766", "1170385767", "1170385769", "1170385770", "1170413263", "1170413264", "1170413265",
+    "1170413266", "1170413269", "1170413270", "1170413272", "1170413273", "1170413274", "1170420243",
+    "1170420244", "1170420245", "1170420246", "1170420247", "1170420249", "1338124729", "1338124731",
+    "1338124732", "1338124733", "1357539822", "1357539823", "1357545511", "1373900051"
+  ],
+  "summerRoutes": [
+    {"name": "Crystal Mountain Trail", "kind": "hike", "section": "Campbell Basin", "ways": ["179220398", "1103973005", "1103973006", "1103973007", "1103973008"]},
+    {"name": "Green Valley Trail", "kind": "hike", "section": "Green Valley", "ways": ["838389175"]},
+    {"name": "Northway Trail", "kind": "hike", "section": "Northway", "ways": ["12172360"]},
+    {"name": "Bullion Basin Trail", "kind": "hike", "section": "Base & Gold Hills", "ways": ["829912072", "904613016", "904613018"]},
+    {"name": "Silver Creek Trail", "kind": "hike", "section": "Base & Gold Hills", "ways": ["178729090", "178729094", "829926892"]},
+    {"name": "Henskin Lake Trail", "kind": "hike", "section": "Campbell Basin", "ways": ["838389170"]}
+  ],
+  "landmarks": [
+    {"id": "mount-rainier", "name": "Mount Rainier", "lonLat": [-121.760374, 46.852884], "kind": "peak"},
+    {"id": "silver-king", "name": "Silver King", "node": "4100697353", "kind": "peak"},
+    {"id": "silver-queen", "name": "Silver Queen", "node": "356544698", "kind": "peak"},
+    {"id": "three-way-peak", "name": "Three Way Peak", "node": "285762963", "kind": "peak"},
+    {"id": "northway-peak", "name": "Northway Peak", "node": "6724827044", "kind": "peak"},
+    {"id": "grubstake-peak", "name": "Grubstake Peak", "node": "10879508713", "kind": "peak"},
+    {"id": "the-throne", "name": "The Throne", "node": "3946243773", "kind": "peak"}
+  ],
+  "references": [
+    "https://www.crystalmountainresort.com/the-mountain/trail-maps",
+    "https://www.crystalmountainresort.com/media/mountain-stats-and-facts",
+    "https://www.crystalmountainresort.com/media/news/whats-new-2526",
+    "https://www.crystalmountainresort.com/things-to-do/activities/hiking",
+    "https://www.crystalmountainresort.com/-/media/crystal/pdf-files/trail-maps/2025-trail-maps/crystal_mountain_summer_trail_map_25.pdf?rev=baab6a2db25d4c63ba35db306b575c77",
+    "https://www.peakrankings.com/content/crystal"
+  ]
+}
