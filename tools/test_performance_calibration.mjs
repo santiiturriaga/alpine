@@ -208,7 +208,9 @@ test('adaptive resolution rolls back a scale drop when the device delivers no mo
   const calibration = open('test', false, 'resolution=adaptive');
   const trial = simulate(calibration, { duration: 3600, fps: 45 });
   assert.equal(calibration.resolutionScale, .85);
-  simulate(calibration, { start: trial.now, duration: 11_000, fps: 45 });
+  const confirmation = simulate(calibration, { start: trial.now, duration: 1600, fps: 45 });
+  assert.equal(calibration.resolutionScale, .72);
+  simulate(calibration, { start: confirmation.now, duration: 11_000, fps: 45 });
   assert.equal(calibration.resolutionScale, 1);
 });
 
@@ -244,7 +246,7 @@ test('adaptive plateau is reconsidered after graphics or the rendered scene chan
   draw.calls = 660;
   const changed = simulate(calibration, { start: plateau.now, duration: 3200, fps: 45 });
   assert.equal(calibration.resolutionScale, .85);
-  const returned = simulate(calibration, { start: changed.now, duration: 3900, fps: 45 });
+  const returned = simulate(calibration, { start: changed.now, duration: 6500, fps: 45 });
   assert.equal(calibration.resolutionScale, 1);
 
   const slider = control('pause-quality');
@@ -271,4 +273,44 @@ test('adaptive recovers detail after headroom returns and avoids repeating a fai
   draw.triangles = 1_400_000;
   simulate(calibration, { start: held.now, duration: 16_000, fps: 60 });
   assert.equal(calibration.resolutionScale, 1);
+});
+
+function exerciseResolution(calibration, fpsAt, { duration = 20_000, stallAtScale, stallMs = 0 } = {}) {
+  const changes = [calibration.resolutionScale];
+  let now = 0, scaleStarted = 0, stalled = false;
+  while (now < duration) {
+    const scale = calibration.resolutionScale;
+    if (!stalled && scale === stallAtScale && now - scaleStarted > 850) {
+      stalled = true;
+      now += stallMs;
+    }
+    if (calibration.shouldRender(now, { context: 'game' })) calibration.didRender(now);
+    if (scale !== calibration.resolutionScale) {
+      changes.push(calibration.resolutionScale);
+      scaleStarted = now;
+    }
+    now += 1000 / fpsAt(scale);
+  }
+  return changes;
+}
+
+test('adaptive probes a faster second step after a marginal first step', () => {
+  const { open } = setupCalibration();
+  const calibration = open('test', false, 'resolution=adaptive');
+  const fpsAt = scale => scale === 1 ? 28.5 : scale === .85 ? 29.4 : 59.5;
+  assert.deepEqual(exerciseResolution(calibration, fpsAt, { duration: 13_000 }), [1, .85, .72]);
+});
+
+test('adaptive keeps the highest faster scale through an isolated compilation stall', () => {
+  const { open } = setupCalibration();
+  const calibration = open('test', false, 'resolution=adaptive');
+  const fpsAt = scale => scale === 1 ? 28.5 : 31.6;
+  const options = { stallAtScale: .85, stallMs: 380 };
+  assert.deepEqual(exerciseResolution(calibration, fpsAt, options), [1, .85, .72, .60, .85]);
+});
+
+test('adaptive ignores a single long stall during near-target gameplay', () => {
+  const { open } = setupCalibration();
+  const calibration = open('test', false, 'resolution=adaptive');
+  assert.deepEqual(exerciseResolution(calibration, () => 60, { stallAtScale: 1, stallMs: 380 }), [1]);
 });

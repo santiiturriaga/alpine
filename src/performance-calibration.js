@@ -164,27 +164,31 @@ function createAdaptiveResolution() {
       return false;
     }
     if (!shortfall) { shortfall = sample; return false; }
-    const average = {
-      fps: (sample.fps + shortfall.fps) / 2,
+    const confirmed = {
+      // Both windows missed the target. Keep the faster measured rate for
+      // comparisons so an isolated stall cannot hide a real gain.
+      fps: Math.max(sample.fps, shortfall.fps),
       calls: (sample.calls + shortfall.calls) / 2,
       triangles: (sample.triangles + shortfall.triangles) / 2,
     };
+    const hasNextScale = level < scales.length - 1;
+    const noGain = lowerTrial && confirmed.fps < lowerTrial.fps + Math.max(1.5, target * .035);
     if (recoveryTrial) {
       // Keep a failed recovery from repeating until the rendered scene changes.
       failedRecovery = recoveryTrial;
       recoveryTrial = null;
       level++;
-    } else if (lowerTrial && average.fps < lowerTrial.fps + Math.max(1.5, target * .035)) {
-      // A lower pixel count did not make these gameplay frames faster.
+    } else if (noGain && (!hasNextScale || level - lowerTrial.level >= 2)) {
+      // Confirm a stalled gain at a second lower scale when one is available.
       plateau = lowerTrial;
+      level = lowerTrial.level;
       lowerTrial = null;
-      level--;
-    } else if (level < scales.length - 1) {
-      lowerTrial = average;
+    } else if (hasNextScale) {
+      if (!noGain) lowerTrial = { ...confirmed, level };
       plateau = failedRecovery = null;
       level++;
     } else {
-      plateau = average;
+      plateau = confirmed;
       shortfall = lowerTrial = null;
       return false;
     }
