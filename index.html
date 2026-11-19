@@ -10,6 +10,7 @@
 <link rel="preload" href="./vendor/fonts/BarlowCondensed-Bold.ttf" as="font" type="font/ttf" crossorigin />
 <link rel="preload" href="./vendor/fonts/Barlow-Regular.ttf" as="font" type="font/ttf" crossorigin />
 <link rel="stylesheet" href="./styles.css" />
+<link rel="stylesheet" href="./mountain-menu.css" />
 <link rel="stylesheet" href="./trail-map.css" />
 <link rel="stylesheet" href="./sled-game.css" />
 <link rel="stylesheet" href="./destination-selector.css" />
@@ -157,6 +158,20 @@
       <p id="patrol-winch-controls"></p>
     </aside>
     <div class="floater-layer" id="floater-layer" aria-hidden="true"></div>
+    <aside id="trick-combo" class="trick-combo" aria-label="Trick score" hidden>
+      <header class="trick-heading">
+        <span data-trick-value></span>
+        <strong class="trick-score" data-trick-value></strong>
+        <b class="trick-multiplier" data-trick-value></b>
+      </header>
+      <s class="trick-row trick-scratch" data-trick-row hidden><span></span><span></span></s>
+      <div class="trick-row" data-trick-row hidden><span></span><span></span></div>
+      <div class="trick-row" data-trick-row hidden><span></span><span></span></div>
+      <div class="trick-row" data-trick-row hidden><span></span><span></span></div>
+      <div class="trick-row" data-trick-row hidden><span></span><span></span></div>
+      <small class="trick-bonus" data-trick-value hidden></small>
+    </aside>
+    <span class="trick-announcement" id="trick-announcement" role="status"></span>
 
     <div class="interaction-prompt hidden" id="interaction-prompt">
       <button type="button" id="board-lift" class="board-lift" aria-labelledby="prompt-title" aria-describedby="prompt-sub">
@@ -230,82 +245,121 @@
   </div>
 
   <dialog id="mountain-panel" aria-labelledby="mountain-title">
-    <header><h2 id="mountain-title">Mountain</h2><button id="mountain-done" aria-label="Close mountain settings">✕</button></header>
-    <fieldset id="resort-travel-field"><legend>Resort</legend>
-      <button data-destination-open type="button">Choose a mountain</button>
-    </fieldset>
-    <fieldset id="skier-profile"><legend>Skier profile</legend>
-      <form id="profile-name-form" class="profile-name-form">
-        <label for="profile-name">Multiplayer name</label>
-        <input id="profile-name" type="text" maxlength="48" placeholder="Automatic callsign" autocomplete="off" spellcheck="false" aria-describedby="profile-name-status">
-        <button type="submit">Save name</button>
-        <output id="profile-name-status"></output>
-      </form>
-      <label class="profile-units">Units<select id="profile-units"><option value="km">Kilometres (km)</option><option value="mi">Miles (mi)</option></select></label>
-      <dl class="profile-stats">
-        <div><dt>Lifetime distance</dt><dd id="profile-distance">0.00 km</dd></div>
-        <div><dt>Runs explored</dt><dd id="profile-runs">0</dd></div>
-        <div><dt>Resorts visited</dt><dd id="profile-resorts">0</dd></div>
-        <div><dt>Mountains visited</dt><dd id="profile-mountains">0</dd></div>
-      </dl>
-      <details class="profile-log">
-        <summary>Exploration log</summary>
-        <dl>
-          <dt>Runs</dt><dd id="profile-run-list">None yet</dd>
-          <dt>Resorts</dt><dd id="profile-resort-list">None yet</dd>
-          <dt>Mountains</dt><dd id="profile-mountain-list">None yet</dd>
-        </dl>
-      </details>
-    </fieldset>
-    <fieldset id="assignments" hidden><legend>Field assignments</legend>
-      <div class="arrival-links" id="assignment-list"></div>
-      <div class="arrival-links" id="assignment-actions"><button type="button" id="assignment-route">Guide to objective</button><button type="button" id="assignment-abandon">Abandon assignment</button></div>
-      <button type="button" id="patrol-dispatch" hidden>Guide to the ground team callout</button>
-      <button type="button" id="patrol-invite" hidden>Copy winch seat invite</button>
-      <input id="patrol-invite-url" aria-label="Winch seat invite link" type="url" readonly hidden>
-      <div id="assignment-photos"></div>
-    </fieldset>
-    <fieldset id="mountain-lobby"><legend>Multiplayer</legend>
-      <div class="lobby-actions"><output id="lobby-status">Join when you drop in</output><button id="lobby-invite" type="button">Copy mountain link</button><button id="lobby-toggle" type="button">Ski solo</button></div>
-      <table id="lobby-scores" aria-label="Live mountain leaderboard"><thead><tr><th>Skier</th><th>Trick streak</th><th>Descent</th><th>Top speed</th></tr></thead></table>
-    </fieldset>
-    <fieldset><legend>Conditions</legend><div class="condition-selects">
-      <label>Season<select id="select-season"></select></label>
-      <label>Weather<select id="select-weather"></select></label>
-      <label>Light<select id="select-light"></select></label>
-      <label>Crowds<select id="select-traffic"></select></label>
-    </div><output id="resort-clock" aria-label="Mountain time and crowd level"></output></fieldset>
-    <fieldset><legend>Explore</legend><div class="arrival-links">
-      <button data-arrival="roundhouse">Roundhouse Lodge</button><button data-arrival="creekside">Creekside Gondola</button>
-      <button data-arrival="come-along">Come a Long glade</button><button data-arrival="olympic-plaza">Olympic Plaza at blue hour</button>
-      <button data-arrival="glacier-cave">Blackcomb Glacier cave</button>
-      <button data-arrival="wildlife">Roundhouse birdwatching</button>
-      <button data-arrival="village-outfitter">Whistler Village Outfitters</button>
-      <button data-arrival="village-barber">Whistler Village Barber</button>
-      <button data-arrival="helicopter">Alpine helicopter</button>
-      <button data-arrival="snowcat">Service snowcat</button>
-      <button data-arrival="snowmobile">Snowmobile</button>
-      <button data-arrival="wingsuit">Wingsuit launch</button>
-      <button data-arrival="bike">Summer mountain bike</button>
-    </div></fieldset>
-    <fieldset><legend>Scenic viewpoints</legend><div class="arrival-links">
-      <button data-arrival="fairmont" data-photo>Fairmont Château Whistler</button>
-      <button data-arrival="skiers-plaza" data-photo>Skiers Plaza</button>
-      <button data-arrival="dustys" data-photo>Dusty's patio</button>
-      <button data-arrival="creekside-slope" data-photo>Creekside from the run</button>
-      <button data-arrival="inukshuk" data-photo>Whistler Peak inukshuk</button>
-      <button data-arrival="alpine-cliffs" data-photo>Whistler alpine cliffs</button>
-      <button data-arrival="glacier-cave" data-photo>Glacier cave entrance</button>
-      <button data-arrival="glacier-cave-interior" data-photo>Inside the glacier cave</button>
-      <button data-arrival="valley" data-photo>Across the valley</button><button data-arrival="valley-forest" data-photo>Western treeline</button>
-    </div></fieldset>
-    <fieldset><legend>Challenges</legend><div class="course-links">
-      <button data-course="avalanche"><b>Avalanche escape</b><span>Whistler Mountain · reach a village base</span></button>
-      <button data-course="race"><b>Head-to-head</b><span>Springboard · race another skier</span></button>
-      <button data-course="slalom"><b>Whiskey Jack slalom</b><span>9 gates · 350 m</span></button>
-      <button type="button" data-minigame="sled"><b>Sled Run</b><span>Jump chasms and dodge rolling snowballs</span></button>
-    </div></fieldset>
-    <button id="mountain-outfitter" type="button">Outfitter &amp; field notes <kbd>L</kbd></button>
+    <div class="mountain-shell">
+      <header class="mountain-head">
+        <div><p id="mountain-menu-resort">Whistler Blackcomb</p><h2 id="mountain-title">Mountain menu</h2></div>
+        <button id="mountain-done" type="button" aria-label="Close mountain menu">✕</button>
+      </header>
+      <div class="mountain-layout">
+        <div class="mountain-tabs" role="tablist" aria-label="Mountain menu sections">
+          <button type="button" id="mountain-tab-travel" role="tab" aria-selected="true" aria-controls="mountain-view-travel" tabindex="0">Travel</button>
+          <button type="button" id="mountain-tab-lifts" role="tab" aria-selected="false" aria-controls="mountain-view-lifts" tabindex="-1" hidden>Lifts</button>
+          <button type="button" id="mountain-tab-activities" role="tab" aria-selected="false" aria-controls="mountain-view-activities" tabindex="-1">Activities</button>
+          <button type="button" id="mountain-tab-conditions" role="tab" aria-selected="false" aria-controls="mountain-view-conditions" tabindex="-1">Conditions</button>
+          <button type="button" id="mountain-tab-profile" role="tab" aria-selected="false" aria-controls="mountain-view-profile" tabindex="-1">Profile</button>
+        </div>
+        <div class="mountain-body">
+          <section id="mountain-view-travel" role="tabpanel" aria-labelledby="mountain-tab-travel">
+            <div id="resort-travel-field" class="mountain-travel-actions">
+              <button data-destination-open type="button">Change mountain</button>
+              <button data-mountain-section="lifts" type="button" hidden>Go to a lift</button>
+            </div>
+            <div id="mountain-destinations">
+              <fieldset><legend>Ski starts &amp; landmarks</legend><div class="arrival-links">
+                <button data-arrival="roundhouse">Roundhouse Lodge</button><button data-arrival="creekside">Creekside Gondola</button>
+                <button data-arrival="come-along">Come a Long glade</button><button data-arrival="olympic-plaza">Olympic Plaza at blue hour</button>
+                <button data-arrival="glacier-cave">Blackcomb Glacier cave</button><button data-arrival="wildlife">Roundhouse birdwatching</button>
+              </div></fieldset>
+              <details class="mountain-disclosure"><summary>Village shops</summary><div class="arrival-links">
+                <button data-arrival="village-outfitter">Whistler Village Outfitters</button>
+                <button data-arrival="village-barber">Whistler Village Barber</button>
+              </div></details>
+              <details class="mountain-disclosure"><summary>Vehicles &amp; bikes</summary><div class="arrival-links">
+                <button data-arrival="helicopter">Alpine helicopter</button>
+                <button data-arrival="snowcat">Service snowcat</button>
+                <button data-arrival="snowmobile">Snowmobile</button>
+                <button data-arrival="wingsuit">Wingsuit launch</button>
+                <button data-arrival="bike">Summer mountain bike</button>
+              </div></details>
+              <details class="mountain-disclosure"><summary>Photo viewpoints</summary><div class="arrival-links">
+                <button data-arrival="fairmont" data-photo>Fairmont Château Whistler</button>
+                <button data-arrival="skiers-plaza" data-photo>Skiers Plaza</button>
+                <button data-arrival="dustys" data-photo>Dusty's patio</button>
+                <button data-arrival="creekside-slope" data-photo>Creekside from the run</button>
+                <button data-arrival="inukshuk" data-photo>Whistler Peak inukshuk</button>
+                <button data-arrival="alpine-cliffs" data-photo>Whistler alpine cliffs</button>
+                <button data-arrival="glacier-cave" data-photo>Glacier cave entrance</button>
+                <button data-arrival="glacier-cave-interior" data-photo>Inside the glacier cave</button>
+                <button data-arrival="valley" data-photo>Across the valley</button><button data-arrival="valley-forest" data-photo>Western treeline</button>
+              </div></details>
+            </div>
+          </section>
+          <section id="mountain-view-lifts" role="tabpanel" aria-labelledby="mountain-tab-lifts" hidden>
+            <div class="lift-travel-search">
+              <label for="lift-filter">Find a lift</label>
+              <input id="lift-filter" type="search" placeholder="Search by name" autocomplete="off" spellcheck="false">
+            </div>
+            <p class="lift-travel-help">Pick a station to travel there immediately.</p>
+            <ul class="lift-travel-list" id="lift-travel-list"></ul>
+            <p id="lift-travel-empty" role="status" hidden>No lifts match your search.</p>
+          </section>
+          <section id="mountain-view-activities" role="tabpanel" aria-labelledby="mountain-tab-activities" hidden>
+            <fieldset id="mountain-challenges"><legend>Challenges</legend><div class="course-links">
+              <button data-course="avalanche"><b>Avalanche escape</b><span>Reach a village base on Whistler Mountain</span></button>
+              <button data-course="race"><b>Head-to-head</b><span>Race another skier on Springboard</span></button>
+              <button data-course="slalom"><b>Whiskey Jack slalom</b><span>9 gates over 350 m</span></button>
+              <button type="button" data-minigame="sled"><b>Sled Run</b><span>Jump chasms and dodge rolling snowballs</span></button>
+            </div></fieldset>
+            <fieldset id="assignments" hidden><legend>Field assignments</legend>
+              <div class="arrival-links" id="assignment-list"></div>
+              <div class="arrival-links" id="assignment-actions"><button type="button" id="assignment-route">Guide to objective</button><button type="button" id="assignment-abandon">Abandon assignment</button></div>
+              <button type="button" id="patrol-dispatch" hidden>Guide to the ground team callout</button>
+              <button type="button" id="patrol-invite" hidden>Copy winch seat invite</button>
+              <input id="patrol-invite-url" aria-label="Winch seat invite link" type="url" readonly hidden>
+              <div id="assignment-photos"></div>
+            </fieldset>
+          </section>
+          <section id="mountain-view-conditions" role="tabpanel" aria-labelledby="mountain-tab-conditions" hidden>
+            <fieldset id="mountain-conditions"><legend>Weather &amp; time</legend><div class="condition-selects">
+              <label>Season<select id="select-season"></select></label>
+              <label>Weather<select id="select-weather"></select></label>
+              <label>Light<select id="select-light"></select></label>
+              <label>Crowds<select id="select-traffic"></select></label>
+            </div><output id="resort-clock" aria-label="Mountain time and crowd level"></output></fieldset>
+          </section>
+          <section id="mountain-view-profile" role="tabpanel" aria-labelledby="mountain-tab-profile" hidden>
+            <button id="mountain-outfitter" type="button">Open outfitter <kbd>L</kbd></button>
+            <fieldset id="skier-profile"><legend>Skier profile</legend>
+              <form id="profile-name-form" class="profile-name-form">
+                <label for="profile-name">Multiplayer name</label>
+                <input id="profile-name" type="text" maxlength="48" placeholder="Automatic callsign" autocomplete="off" spellcheck="false" aria-describedby="profile-name-status">
+                <button type="submit">Save name</button>
+                <output id="profile-name-status"></output>
+              </form>
+              <label class="profile-units">Units<select id="profile-units"><option value="km">Kilometres (km)</option><option value="mi">Miles (mi)</option></select></label>
+              <dl class="profile-stats">
+                <div><dt>Lifetime distance</dt><dd id="profile-distance">0.00 km</dd></div>
+                <div><dt>Runs explored</dt><dd id="profile-runs">0</dd></div>
+                <div><dt>Resorts visited</dt><dd id="profile-resorts">0</dd></div>
+                <div><dt>Mountains visited</dt><dd id="profile-mountains">0</dd></div>
+              </dl>
+              <details class="profile-log">
+                <summary>Exploration log</summary>
+                <dl>
+                  <dt>Runs</dt><dd id="profile-run-list">None yet</dd>
+                  <dt>Resorts</dt><dd id="profile-resort-list">None yet</dd>
+                  <dt>Mountains</dt><dd id="profile-mountain-list">None yet</dd>
+                </dl>
+              </details>
+            </fieldset>
+            <fieldset id="mountain-lobby"><legend>Multiplayer</legend>
+              <div class="lobby-actions"><output id="lobby-status">Join when you drop in</output><button id="lobby-invite" type="button">Copy mountain link</button><button id="lobby-toggle" type="button">Ski solo</button></div>
+              <table id="lobby-scores" aria-label="Live mountain leaderboard"><thead><tr><th>Skier</th><th>Trick points</th><th>Descent</th><th>Top speed</th></tr></thead></table>
+            </fieldset>
+          </section>
+        </div>
+      </div>
+    </div>
   </dialog>
   <dialog id="outfitter" aria-labelledby="outfitter-name">
     <header><div><h2 id="outfitter-name">Mountain outfitter</h2><span data-balance></span></div><button data-shop-close aria-label="Close shop">✕</button></header>
@@ -332,46 +386,83 @@
   <!-- ══════════════ FIELD GUIDE ══════════════ -->
   <section id="guide-screen" class="screen modal-screen guide-screen hidden" role="dialog" aria-modal="true" aria-labelledby="guide-title" inert>
     <div class="modal guide">
-      <button class="modal-close" data-close="guide-screen" aria-label="Close field guide">✕</button>
-      <p class="kicker"><span class="line"></span> FIELD GUIDE</p>
-      <h2 id="guide-title">Ski it like a local.</h2>
-      <div class="guide-grid">
-        <div class="guide-block">
-          <h3>01 / The controls</h3>
-          <div class="key-row"><kbd>A</kbd><kbd>D</kbd><span>Edge &amp; carve — press into the turn</span></div>
-          <div class="key-row"><kbd>W</kbd><span>Push on flats, tuck at speed.</span></div>
-          <div class="key-row"><kbd>B</kbd><span>Switch between skis and boots. Use W and S to walk.</span></div>
-          <div class="key-row"><kbd>S</kbd><span>Brake. At speed, turn both skis across the slope. Use A or D to choose the side.</span></div>
-          <div class="key-row"><kbd>Click</kbd><span>Swing a pole while standing, walking, or gliding slowly.</span></div>
-          <div class="key-row"><kbd>SPACE</kbd><span>Ollie. Hit the lips, catch the air.</span></div>
-          <div class="key-row"><kbd>SHIFT</kbd><span>Hold in the air to grab.</span></div>
-          <div class="key-row"><kbd>A</kbd><kbd>D</kbd><kbd>W</kbd><kbd>S</kbd><span>Press after takeoff to spin or flip.</span></div>
-          <div class="key-row"><kbd>R</kbd><span>Return to the Roundhouse unload.</span></div>
-          <div class="key-row"><kbd>E</kbd><span>Board a lift, enter a vehicle or observe nearby wildlife. Press again to skip a lift or leave a parked vehicle.</span></div>
-          <div class="key-row"><kbd>C</kbd><kbd>V</kbd><span>C changes the camera. V switches between a gondola cabin and its exterior view. Click the snow to look freely with the mouse.</span></div>
-          <div class="key-row"><kbd>L</kbd><span>Visit the outfitter for skis, clothing and field notes.</span></div>
-          <div class="key-row"><kbd>M</kbd><span>Open the trail atlas. Scroll or pinch to zoom and drag to pan.</span></div>
-          <div class="key-row"><kbd>ESC</kbd><span>Pause to reopen this guide or turn on the nearby trail map.</span></div>
-          <div class="key-row"><kbd>G</kbd><span>Choose a destination, season, storm or challenge.</span></div>
-        </div>
-        <div class="guide-block">
-          <h3>02 / The mountain</h3>
-          <p>Follow the bright corduroy for speed and coins. Drop into the trees to find five hidden glades — deep stashes marked only by small wooden signs and a faint glow.</p>
-          <p>Blue and black runs hold natural airs and kickers. Land with your skis pointed down the fall line. Keep the rotation clean. The mountain is forgiving; style is not.</p>
-          <div class="guide-note"><span>PRO TIP</span>Coins build a streak. A streak multiplies every point you earn — chain them through a whole run without stopping.</div>
-        </div>
-        <div class="guide-block">
-          <h3>03 / Etiquette</h3>
-          <p>Ride within your ability. Give downhill skiers room. Look before you drop. If you find the stash, leave some for the next person.</p>
-          <div class="difficulty-legend">
-            <span><i class="dif-green"></i>GREEN · EASY</span>
-            <span><i class="dif-blue"></i>BLUE · MORE DIFFICULT</span>
-            <span><i class="dif-black"></i>BLACK · EXPERT</span>
-            <span><i class="dif-double"></i>DOUBLE BLACK</span>
+      <header class="mountain-head guide-head">
+        <h2 id="guide-title">Field Guide</h2>
+        <button class="modal-close" data-close="guide-screen" aria-label="Close field guide">✕</button>
+      </header>
+      <div class="guide-content">
+        <details class="guide-controls" id="guide-touch">
+          <summary>Touch controls</summary>
+          <dl class="guide-touch-list">
+            <div><dt>Left and right arrows</dt><dd>Hold to steer.</dd></div>
+            <div><dt>Up and down arrows</dt><dd>Hold up to move forward or tuck, and down to brake or walk backward.</dd></div>
+            <div><dt>Jump button</dt><dd>Tap to jump. Hold a steering arrow in the air to spin.</dd></div>
+            <div><dt>Walk or Ski</dt><dd>Switch between boots and skis.</dd></div>
+            <div data-guide-lift><dt>Lift prompt</dt><dd>Tap the lift name to board. Tap Skip to reach the other station.</dd></div>
+            <div><dt>Camera</dt><dd>Tap to change view. Drag on the snow to look around.</dd></div>
+            <div><dt>Trail map</dt><dd>Drag to pan and pinch to zoom.</dd></div>
+            <div><dt>Mountain</dt><dd>Open travel, conditions and activities.</dd></div>
+            <div><dt>Pause</dt><dd>Resume skiing or change audio, graphics and view settings.</dd></div>
+          </dl>
+        </details>
+        <details class="guide-controls" id="guide-keyboard" open>
+          <summary>Keyboard &amp; mouse</summary>
+          <div class="guide-keyboard-grid">
+            <section class="guide-block">
+              <h3>Skiing</h3>
+              <dl>
+                <div class="key-row" data-guide-action="steer"><dt><kbd>A</kbd><kbd>D</kbd></dt><dd>Carve left or right.</dd></div>
+                <div class="key-row" data-guide-action="forward"><dt><kbd>W</kbd></dt><dd>Push off on flats. Hold to tuck once you are moving.</dd></div>
+                <div class="key-row" data-guide-action="brake"><dt><kbd>S</kbd></dt><dd>Brake. At speed, add A or D to pick the side of your hockey stop.</dd></div>
+                <div class="key-row" data-guide-action="walk"><dt><kbd>B</kbd></dt><dd>Switch between skis and boots. Walk with W and S.</dd></div>
+                <div class="key-row" data-guide-action="pole"><dt><kbd>Click</kbd></dt><dd>Swing a pole while standing, walking or gliding slowly.</dd></div>
+              </dl>
+            </section>
+            <section class="guide-block">
+              <h3>Jumps &amp; tricks</h3>
+              <dl>
+                <div class="key-row" data-guide-action="jump"><dt><kbd>Space</kbd></dt><dd>Jump from a lip or off the snow.</dd></div>
+                <div class="key-row" data-guide-action="grab"><dt><kbd>Shift</kbd></dt><dd>Hold in the air to grab.</dd></div>
+                <div class="key-row" data-guide-action="rotate"><dt><kbd>A</kbd><kbd>D</kbd><kbd>W</kbd><kbd>S</kbd></dt><dd>Press after takeoff to spin or flip.</dd></div>
+              </dl>
+            </section>
+            <section class="guide-block">
+              <h3>Getting around</h3>
+              <dl>
+                <div class="key-row" data-guide-action="interact"><dt><kbd>E</kbd></dt><dd>Interact with a nearby lift, vehicle or animal. Press again to skip the ride or leave a parked vehicle.</dd></div>
+                <div class="key-row" data-guide-action="next" data-guide-lift><dt><kbd>Q</kbd></dt><dd>Select another lift when several are close.</dd></div>
+                <div class="key-row" data-guide-action="camera"><dt><kbd>C</kbd></dt><dd>Change the camera. Click or drag on the snow to look around.</dd></div>
+                <div class="key-row" data-guide-action="cabin" data-whistler-guide><dt><kbd>V</kbd></dt><dd>Switch between a gondola cabin and the exterior view.</dd></div>
+                <div class="key-row" data-guide-action="reset"><dt><kbd>R</kbd></dt><dd>Return to Roundhouse Lodge.</dd></div>
+                <div class="key-row" data-guide-action="outfitter"><dt><kbd>L</kbd></dt><dd>Open the outfitter.</dd></div>
+                <div class="key-row" data-guide-action="map"><dt><kbd>M</kbd></dt><dd>Open the trail map. Drag to pan and scroll to zoom.</dd></div>
+                <div class="key-row" data-guide-action="mountain"><dt><kbd>G</kbd></dt><dd>Open the mountain menu to travel, change conditions or start a challenge.</dd></div>
+                <div class="key-row" data-guide-action="pause"><dt><kbd>Esc</kbd></dt><dd>Pause and open settings.</dd></div>
+              </dl>
+            </section>
           </div>
-        </div>
+        </details>
+        <section class="guide-advice">
+          <div class="guide-block">
+            <h3>On the mountain</h3>
+            <p id="guide-mountain-intro">Follow groomed runs for coins. Look for signs and a faint glow near the five hidden glades.</p>
+            <p id="guide-mountain-advice">Land with your skis pointed downhill. Give downhill skiers room and look before you drop in.</p>
+            <p id="guide-coin-tip">Collect coins in a row to build a score multiplier.</p>
+          </div>
+          <div class="guide-block" id="guide-trail-key">
+            <h3>Trail difficulty</h3>
+            <ul class="difficulty-legend">
+              <li><i class="dif-green"></i>Easy</li>
+              <li><i class="dif-blue"></i>Intermediate</li>
+              <li><i class="dif-black"></i>Advanced</li>
+              <li><i class="dif-double"></i>Expert</li>
+            </ul>
+          </div>
+        </section>
       </div>
-      <button class="btn-primary guide-cta" id="guide-drop"><span class="btn-label">Drop in</span></button>
+      <footer class="guide-footer">
+        <button class="btn-primary guide-cta" id="guide-drop"><span class="btn-label">Drop in</span></button>
+      </footer>
     </div>
   </section>
 
@@ -443,12 +534,23 @@
       </div>
       <div class="pause-actions">
         <button class="btn-primary" id="resume"><span class="btn-label">Resume</span><kbd>ESC</kbd></button>
-        <button class="ghost-btn" id="pause-mountain">Conditions &amp; challenges <kbd>G</kbd></button>
+        <button class="ghost-btn" id="pause-mountain">Mountain menu <kbd>G</kbd></button>
+        <button class="ghost-btn" id="pause-lifts" hidden>Go to a lift</button>
         <button class="ghost-btn" id="pause-map">Trail map <kbd>M</kbd></button>
         <button class="ghost-btn" id="pause-guide">Field Guide</button>
         <button class="ghost-btn" id="pause-reset">Return to Roundhouse <kbd>R</kbd></button>
       </div>
       <div class="pause-settings">
+        <details class="pause-group"><summary>Audio</summary>
+        <div class="setting-row"><span>Soundscape</span><button class="toggle on" id="pause-audio"><i></i><span>ON</span></button></div>
+        <div class="setting-row"><span>Music</span><button class="toggle" id="pause-music" aria-label="Music"><i></i><span></span></button></div>
+        </details>
+        <details class="pause-group"><summary>View &amp; controls</summary>
+        <div class="setting-row"><span>Trail markers</span><button class="toggle on" id="pause-markers"><i></i><span>ON</span></button></div>
+        <div class="setting-row"><span>Nearby trail map</span><button class="toggle" id="pause-nearby-map" aria-label="Nearby trail map" aria-controls="nearby-map" aria-pressed="false"><i></i><span>OFF</span></button></div>
+        <div class="setting-row"><span>Camera</span><button class="seg" id="pause-camera">CHASE</button></div>
+        </details>
+        <details class="pause-group"><summary>Graphics &amp; performance</summary>
         <div class="setting-row"><label for="pause-quality">Graphics</label><div class="graphics-control"><label class="setting-check"><input id="pause-auto-quality" type="checkbox" checked aria-label="Auto graphics"> Auto</label><input id="pause-quality" type="range" min="0" max="4" step="1" value="0" aria-describedby="graphics-level"><output id="graphics-level" for="pause-quality">Budget</output></div></div>
         <div class="setting-row"><label for="pause-frame-cap">Frame cap</label><select class="seg" id="pause-frame-cap"><option value="0">Auto</option><option value="30">30 FPS</option><option value="60">60 FPS</option><option value="120">120 FPS</option><option value="240">240 FPS</option></select></div>
         <div class="setting-row"><label for="pause-resolution">3D resolution</label><select class="seg" id="pause-resolution">
@@ -459,11 +561,7 @@
         <div class="setting-row"><span>Anti-aliasing</span><div class="graphics-control"><small id="antialias-reload" hidden></small><label class="setting-check"><input id="pause-antialias" type="checkbox" aria-label="Anti-aliasing" aria-describedby="antialias-reload"> MSAA</label></div></div>
         <div class="setting-row"><span>Realism</span><button class="toggle" id="pause-realism" type="button" aria-label="Realistic surface lighting" aria-pressed="false" title="Extra snow sparkle and sharper ice reflections"><i></i><span>OFF</span></button></div>
         <div class="setting-row benchmark-setting"><div><p id="benchmark-status" role="status">Benchmark queued.</p><small id="benchmark-device"></small></div><button class="seg" id="pause-benchmark" type="button">Run benchmark</button></div>
-        <div class="setting-row"><span>Soundscape</span><button class="toggle on" id="pause-audio"><i></i><span>ON</span></button></div>
-        <div class="setting-row"><span>Music</span><button class="toggle" id="pause-music" aria-label="Music"><i></i><span></span></button></div>
-        <div class="setting-row"><span>Trail markers</span><button class="toggle on" id="pause-markers"><i></i><span>ON</span></button></div>
-        <div class="setting-row"><span>Nearby trail map</span><button class="toggle" id="pause-nearby-map" aria-label="Nearby trail map" aria-controls="nearby-map" aria-pressed="false"><i></i><span>OFF</span></button></div>
-        <div class="setting-row"><span>Camera</span><button class="seg" id="pause-camera">CHASE</button></div>
+        </details>
       </div>
       <div class="pause-foot"><button class="text-btn" id="restart-session">Restart session</button></div>
     </div>
@@ -520,8 +618,6 @@
       </div>
     </header>
     <div class="destination-stage" id="destination-stage" tabindex="0" role="region" aria-label="Mountain carousel" aria-describedby="destination-help">
-      <div class="destination-orbit" aria-hidden="true"></div>
-      <div class="destination-plinth" aria-hidden="true"></div>
       <div class="destination-models" id="destination-models"></div>
       <p id="destination-preview-status" role="status" hidden></p>
       <button type="button" class="destination-round" id="destination-rotate" aria-label="Rotate mountain preview" title="Rotate preview" hidden>
@@ -544,8 +640,13 @@
       <button type="button" id="destination-travel" aria-describedby="destination-name"></button>
     </div>
     <footer class="destination-footer">
-      <p class="destination-credits"><span><i></i> Mapped lifts</span><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a></p>
-      <p id="destination-help"><span class="destination-desktop-help">Scroll to browse · Drag the selected model to rotate</span><span class="destination-touch-help">Swipe to browse</span></p>
+      <div class="destination-credits">
+        <p class="destination-route-key" id="destination-route-key" aria-label="Mapped route colors">
+          <span class="key-lift">Lift</span><span class="key-green">Green</span><span class="key-blue">Blue</span><span class="key-red">Red</span><span class="key-black">Black</span><span class="key-double">Double black</span>
+        </p>
+        <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a>
+      </div>
+      <p id="destination-help"><span class="destination-desktop-help">Scroll or drag beside the mountain to browse · Drag the mountain to rotate</span><span class="destination-touch-help">Swipe to browse · Use the rotate button to look around</span></p>
     </footer>
   </div>
 </dialog>

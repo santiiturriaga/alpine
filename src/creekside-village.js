@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { heightAt } from './terrain.js';
-import { box, beam, part, cacheStaticTransforms, mergeParts, mergedMesh } from './scenery.js';
+import { box, beam, part, cacheStaticTransforms, finishConstruction, mergeParts, mergedMesh } from './scenery.js';
 import { timberMesh, detailedMaterial } from './plaza-materials.js';
 import { climateUniforms } from './climate-state.js';
 import { createRoofSnow, createIcicles } from './roof-weather.js';
@@ -42,15 +42,18 @@ function batch() {
   return { wood: [], plaster: [], roof: [], stone: [], metal: [], glow: [], glass: [], panes: [] };
 }
 
-function addBatch(group, b) {
+function* addBatch(group, b) {
   if (b.wood.length) group.add(timberMesh(b.wood));
+  yield;
   for (const [key, kind] of [['plaster', 'stone'], ['stone', 'granite']]) {
     if (!b[key].length) continue;
+    yield;
     const mesh = new THREE.Mesh(mergeParts(b[key], true), detailedMaterial(kind));
     mesh.castShadow = mesh.receiveShadow = true; mesh.name = 'Creekside ' + key; group.add(mesh);
   }
   for (const key of ['roof', 'metal']) {
     if (!b[key].length) continue;
+    yield;
     const mesh = mergedMesh(b[key], { roughness: key === 'roof' ? .69 : .42, metalness: key === 'roof' ? .14 : .46 });
     mesh.name = 'Creekside ' + key; group.add(mesh);
   }
@@ -309,7 +312,7 @@ function hangingFlags(group, b, flags) {
   }
 }
 
-function buildDustys(parent, grid, flags, lights) {
+function* buildDustys(parent, grid, flags, lights) {
   const group = localGroup(parent, DUSTYS, "Dusty's Bar & BBQ · mapped Creekside timber pub");
   const b = batch(), w = 17.8, d = 18.4, front = d / 2;
   b.wood.push(box(w, 4.7, d, '#6b543f', [0, 2.35, 0]));
@@ -334,6 +337,7 @@ function buildDustys(parent, grid, flags, lights) {
     b.wood.push(beam([side * 5.5, 6.15, front + .37], [side * 1.1, 12.8, front + .37], .24, .28, '#5c3e2d'));
     b.wood.push(beam([side * 6.8, 8.8, front + .5], [side * .1, 13.3, front + .5], .22, .31, '#69442d'));
   }
+  yield;
   // Main balcony wraps toward the stone stair tower on the right.
   b.wood.push(box(26.4, .35, 4.3, '#5f4835', [1.1, 4.75, front + 1.1]));
   for (let x = -11.8; x < 14.2; x += .28) b.wood.push(box(.24, .08, 4.1, '#8b6d4c', [x, 4.965, front + 1.1]));
@@ -409,7 +413,7 @@ function buildDustys(parent, grid, flags, lights) {
     winterAspen(b, x, base, z, h, seed); grid?.addCircle(p.x, p.z, .22, 'landmark');
   }
   for (let x = -12.0; x < 14.1; x += .48) b.glow.push(part(new THREE.SphereGeometry(.035, 5, 4), '#ffe1a2', [x, 4.57, 12.4]));
-  addBatch(group, b);
+  yield* addBatch(group, b);
   for (const [x, y, z, power, range] of [[-5, 3.7, 12, 17, 13], [5, 3.7, 12, 20, 15], [0, 8.0, 10.3, 22, 12]]) {
     const light = new THREE.PointLight('#ffd08a', 0, range, 1.8); light.visible=false;
     light.position.set(x, y, z); light.userData.power = power; group.add(light); lights.push(light);
@@ -429,7 +433,7 @@ function balcony(b, x, y, z, width = 3.8, depth = 1.5, color = '#80583c') {
   }
 }
 
-function lodgeWing(parent, grid, anchor, { name, width, depth, floors = 4, rise = 4.2, seed = 500, dormers = [], stoneBase = 1.3, wall = '#a49370', balconies = true, height = 3.0, floorY }) {
+function* lodgeWing(parent, grid, anchor, { name, width, depth, floors = 4, rise = 4.2, seed = 500, dormers = [], stoneBase = 1.3, wall = '#a49370', balconies = true, height = 3.0, floorY }) {
   const group = localGroup(parent, anchor, name), b = batch(), rand = mulberry32(seed), eave = stoneBase + floors * height, front = depth / 2;
   if (floorY !== undefined) group.position.y = floorY;
   b.plaster.push(box(width, eave, depth, wall, [0, eave / 2, 0]));
@@ -442,10 +446,11 @@ function lodgeWing(parent, grid, anchor, { name, width, depth, floors = 4, rise 
   roofGroup.rotation.y = Math.PI / 2; group.add(roofGroup);
   const rb = batch();
   roof(roofGroup, rb, { w: depth + 1.9, d: width + 1.6, eave: eave - .05, rise, seed, depth: .35 });
-  addBatch(roofGroup, rb);
+  yield* addBatch(roofGroup, rb);
   const bays = Math.max(3, Math.floor((width - 2.6) / 5.2)), bayWidth = (width - 2.5) / bays;
   for (const side of [-1, 1]) {
     for (let n = 0; n < bays; n++) {
+      if (n % 3 === 0) yield;
       const x = -width / 2 + 1.25 + (n + .5) * bayWidth;
       for (let floor = 0; floor < floors; floor++) {
         const y = stoneBase + .55 + floor * height + height * .35;
@@ -470,6 +475,7 @@ function lodgeWing(parent, grid, anchor, { name, width, depth, floors = 4, rise 
       { yaw: side * Math.PI / 2, seed: seed + 411 + side, timber: '#7e6746', mullions: 1 });
   }
   for (const [n, x] of dormers.entries()) {
+    yield;
     const dw = Math.min(6.4, width * .14), dz = front + .87;
     b.plaster.push(box(dw, eave - stoneBase + .15, 1.7, '#b2a17e', [x, (eave + stoneBase) / 2, dz - .7]));
     b.wood.push(triangularPrism(dw, 2.2, 2.6, name.startsWith('Legends') ? '#625b45' : '#9b8055', [x, eave + .03, dz - .6]));
@@ -489,12 +495,12 @@ function lodgeWing(parent, grid, anchor, { name, width, depth, floors = 4, rise 
     b.stone.push(box(2.0, 2.4, 1.5, '#85887a', [x, eave + rise - .15, z]));
     b.roof.push(box(2.23, .17, 1.72, '#3e4744', [x, eave + rise + 1.12, z]));
   }
-  addBatch(group, b);
+  yield* addBatch(group, b);
   grid?.addBox(anchor.x, anchor.z, width / 2, depth / 2, -anchor.yaw, 'lodge', { minY: group.position.y - .7, maxY: group.position.y + eave + rise });
   return { group, b, eave };
 }
 
-function turret(parent, anchor, { floors = 5, height = 3.0, seed = 100, width = 6.2, base = 1.2, open = false, floorY } = {}) {
+function* turret(parent, anchor, { floors = 5, height = 3.0, seed = 100, width = 6.2, base = 1.2, open = false, floorY } = {}) {
   const group = localGroup(parent, anchor, 'First Tracks square lookout tower'), b = batch(), h = base + floors * height;
   if (floorY !== undefined) group.position.y = floorY;
   b.plaster.push(box(width, h, width, '#b5a989', [0, h / 2, 0]));
@@ -511,70 +517,75 @@ function turret(parent, anchor, { floors = 5, height = 3.0, seed = 100, width = 
   b.roof.push(part(new THREE.ConeGeometry(r, 2.25, 4), '#343d3c', [0, hh + 1.1, 0], [0, Math.PI / 4, 0]));
   const corners = [[-width * .59, hh, -width * .59], [width * .59, hh, -width * .59], [width * .59, hh, width * .59], [-width * .59, hh, width * .59]];
   for (let i = 0; i < 4; i++) group.add(createRoofSnow([corners[i], corners[(i + 1) % 4], [.002, hh + 2.2, .002], [0, hh + 2.2, 0]], { seed: seed + i * 17, depth: .20, spacing: .65 }));
-  addBatch(group, b); return { group, b };
+  yield* addBatch(group, b); return { group, b };
 }
 
-function buildLodges(parent, grid) {
+function* buildLodges(parent, grid) {
   const all = [];
   // Legends' three joined wings wrap behind the freestanding pub. Keeping
   // these offsets leaves the real courtyard and the gondola corridor open.
-  all.push(lodgeWing(parent, grid, { x: -2541.6, z: 2034.8, yaw: .456 }, {
+  all.push(yield* lodgeWing(parent, grid, { x: -2541.6, z: 2034.8, yaw: .456 }, {
     name: 'Legends Hotel · central courtyard facade', width: 66, depth: 23.2, floors: 5, rise: 4.3, seed: 700,
     dormers: [-21, .4, 22], wall: '#b09c74',
   }));
-  all.push(lodgeWing(parent, grid, { x: -2578.5, z: 2034.7, yaw: -.64 }, {
+  all.push(yield* lodgeWing(parent, grid, { x: -2578.5, z: 2034.7, yaw: -.64 }, {
     name: 'Legends Hotel · north courtyard wing', width: 45, depth: 23, floors: 5, rise: 4.1, seed: 730, dormers: [-12, 12],
   }));
-  all.push(lodgeWing(parent, grid, { x: -2499.5, z: 2074.1, yaw: -1.14 }, {
+  all.push(yield* lodgeWing(parent, grid, { x: -2499.5, z: 2074.1, yaw: -1.14 }, {
     name: 'Legends Hotel · gondola-facing return', width: 58.0, depth: 22.0, floors: 5, rise: 4.2, seed: 760, dormers: [-18, 8], wall: '#9f9173',
   }));
   // First Tracks' east face is the long lodge in the slope photograph: two
   // tall glazed gables, rows of projecting balconies, and square end towers.
-  all.push(lodgeWing(parent, grid, FIRST_TRACKS, {
+  all.push(yield* lodgeWing(parent, grid, FIRST_TRACKS, {
     name: 'First Tracks Lodge · slope-facing balcony facade', width: 61.2, depth: 23.4, floors: 5, rise: 4.0, seed: 810, floorY: 653.02,
     dormers: [-14.4, 14.4], wall: '#9e957b',
   }));
-  all.push(lodgeWing(parent, grid, { x: -2580.8, z: 2199.6, yaw: Math.PI / 2 + .30 }, {
+  all.push(yield* lodgeWing(parent, grid, { x: -2580.8, z: 2199.6, yaw: Math.PI / 2 + .30 }, {
     name: 'First Tracks Lodge · taller southern wing', width: 30, depth: 23.6, floors: 5, height: 3.3, rise: 3.8, seed: 850, floorY: 657.49,
     dormers: [-6.8], wall: '#8d8a75',
   }));
-  all.push(lodgeWing(parent, grid, { x: -2607.8, z: 2111.4, yaw: 0 }, {
+  all.push(yield* lodgeWing(parent, grid, { x: -2607.8, z: 2111.4, yaw: 0 }, {
     name: 'First Tracks Lodge · London Lane return', width: 45.3, depth: 22.2, floors: 3, height: 3.3, rise: 3.9, seed: 900, floorY: 652.91,
     dormers: [-11.5, 11.5], wall: '#9e967b',
   }));
   for (const [x, z, floors, seed] of [[-2573.0, 2130.8, 4, 1001], [-2570.3, 2201.8, 5, 1101]]) {
-    all.push(turret(parent, { x, z, yaw: Math.PI / 2 }, {
+    all.push(yield* turret(parent, { x, z, yaw: Math.PI / 2 }, {
       floors, seed, open: floors === 5, height: floors === 5 ? 3.3 : 3.0, floorY: floors === 5 ? 657.49 : 653.02,
     }));
   }
   return all;
 }
 
-export function buildCreeksideVillage(scene, { grid } = {}) {
-  const root = new THREE.Group(); root.name = 'Creekside · photo-studied Dustys, Legends and First Tracks'; scene.add(root);
-  const flags = [], lights = [], dustys = buildDustys(root, grid, flags, lights), lodges = buildLodges(root, grid);
+export function creeksideFloor(x, z, currentY) {
+  if (Math.abs(x - DUSTYS.x) > 32 || Math.abs(z - DUSTYS.z) > 32) return null;
+  const dx = x - DUSTYS.x, dz = z - DUSTYS.z, c = Math.cos(DUSTYS.yaw), s = Math.sin(DUSTYS.yaw);
+  const lx = dx * c - dz * s, lz = dx * s + dz * c, base = heightAt(DUSTYS.x, DUSTYS.z);
+  const lower = base + .39 * DUSTYS_HEIGHT_SCALE, upper = base + 5.005 * DUSTYS_HEIGHT_SCALE;
+  if (currentY > base + 3.6 * DUSTYS_HEIGHT_SCALE && upper <= currentY + .7
+      && lx > -12.1 && lx < 14.3 && lz > 8.15 && lz < 12.45) return upper;
+  if (Math.abs(lx) < 13.8 && lz > 11.65 && lz < 18.95
+      && (currentY === undefined || lower <= currentY + .7)) return lower;
+  // Tread intervals share their boundaries, so walking never falls through
+  // the log nosings. The final step is only centimetres above the snow.
+  if (lx > -7.1 && lx < 3.7 && lz >= 18.85 && lz <= 22.19) {
+    const step = Math.max(0, Math.min(6, Math.floor((lz - 18.865) / .47)));
+    const floor = base + (.39 - step * .245) * DUSTYS_HEIGHT_SCALE;
+    return currentY === undefined || floor <= currentY + .7 ? floor : null;
+  }
+  return null;
+}
+
+export function* stageCreeksideVillage(scene, { grid } = {}) {
+  const root = new THREE.Group(); root.name = 'Creekside · photo-studied Dustys, Legends and First Tracks';
+  const flags = [], lights = [], dustys = yield* buildDustys(root, grid, flags, lights);
+  const lodges = yield* buildLodges(root, grid);
   const glowMaterials = [dustys, ...lodges].map(v => v.b.glowMaterial).filter(Boolean);
   const lampPosition = new THREE.Vector3(); let time = 0;
+  scene.add(root);
   cacheStaticTransforms(root);
   return {
     group: root, dustys: dustys.group,
-    walkSurfaceAt(x, z, currentY) {
-      const dx = x - DUSTYS.x, dz = z - DUSTYS.z, c = Math.cos(DUSTYS.yaw), s = Math.sin(DUSTYS.yaw);
-      const lx = dx * c - dz * s, lz = dx * s + dz * c, base = dustys.group.position.y;
-      const lower = base + .39 * DUSTYS_HEIGHT_SCALE, upper = base + 5.005 * DUSTYS_HEIGHT_SCALE;
-      if (currentY > base + 3.6 * DUSTYS_HEIGHT_SCALE && upper <= currentY + .7
-          && lx > -12.1 && lx < 14.3 && lz > 8.15 && lz < 12.45) return upper;
-      if (Math.abs(lx) < 13.8 && lz > 11.65 && lz < 18.95
-          && (currentY === undefined || lower <= currentY + .7)) return lower;
-      // Tread intervals share their boundaries, so walking never falls through
-      // the log nosings. The final step is only centimetres above the snow.
-      if (lx > -7.1 && lx < 3.7 && lz >= 18.85 && lz <= 22.19) {
-        const step = Math.max(0, Math.min(6, Math.floor((lz - 18.865) / .47)));
-        const floor = base + (.39 - step * .245) * DUSTYS_HEIGHT_SCALE;
-        return currentY === undefined || floor <= currentY + .7 ? floor : null;
-      }
-      return null;
-    },
+    walkSurfaceAt: creeksideFloor,
     update(dt = 0, _time, camera) {
       time += dt;
       const night = warmNight.value;
@@ -594,4 +605,8 @@ export function buildCreeksideVillage(scene, { grid } = {}) {
       }
     },
   };
+}
+
+export function buildCreeksideVillage(scene, options) {
+  return finishConstruction(stageCreeksideVillage(scene, options));
 }

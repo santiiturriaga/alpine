@@ -2,6 +2,7 @@ import { addPassGate } from './pass-gates.js';
 import * as THREE from 'three';
 import { beam, box, cacheStaticTransforms, mergeParts, part } from './scenery.js';
 import { canvasTexture, makeCanvas } from './util.js';
+import { createIcicles, createRoofSnow } from './roof-weather.js';
 
 const dark = '#28343a', zinc = '#7d8c93', light = '#aebbc0', iron = '#53646b';
 const rubber = '#263239', snow = '#f2f5f3';
@@ -374,7 +375,7 @@ function skinSection(parts, a, b, tint) {
   geometry.computeVertexNormals(); parts.push(part(geometry,tint));
 }
 
-function hood(parts, gauge, length, top, paint, cableRise, stevensHogsback = false, coarse = false) {
+function hood(parts, gauge, length, top, paint, cableRise, stevensHogsback = false, coarse = false, weather) {
   const width = gauge + 1.05, end = top ? 1 : -1;
   const sections = [[-width,0],[-width-.05,.35],[-width+.36,.84],[-width+.82,1.08],
     [-.42,1.22],[.42,1.22],[width-.82,1.08],[width-.36,.84],[width+.05,.35],[width,0]];
@@ -388,14 +389,24 @@ function hood(parts, gauge, length, top, paint, cableRise, stevensHogsback = fal
     panel(start,finish,skin);
     panel(finish.map(lining),start.map(lining),'#33454e');
     if (i > 2 && i < 6) {
-      const loft = (j,z)=>shape(j,z).map((v,k)=>v+(k===1?.10:0));
-      panel([loft(i,z1+end*.25),loft(i+1,z1+end*.25)],
-        [loft(i,z0-end*.15),loft(i+1,z0-end*.15)],snow);
+      const a = z1+end*.25, b = z0-end*.14;
+      if (weather) {
+        const high = i === 5 ? i : i+1, low = i === 5 ? i+1 : i;
+        weather.add(createRoofSnow([shape(high,a),shape(high,b),shape(low,b),shape(low,a)],
+          { seed: 540+i*38+Number(top), depth: i === 4 ? .126 : .164, spacing: .67, overhang: .037 }));
+      } else {
+        const loft = (j,z) => shape(j,z).map((v,k) => v + (k === 1 ? .10 : 0));
+        panel([loft(i,a),loft(i+1,a)], [loft(i,b),loft(i+1,b)],snow);
+      }
     }
     if (!coarse) {
       for (const z of [z0,z1]) parts.push(beam(shape(i,z),shape(i+1,z),.08,.11,light));
       parts.push(pipe(shape(i,z0),shape(i,z1),.025,light));
     }
+  }
+  if (weather) for (const i of [2,7]) {
+    const a = shape(i,z0-end*.22), b = shape(i,z1+end*.52);
+    weather.add(createIcicles(a,b,{ seed: 840+i*14+Number(top), spacing: .74, length: .19 }));
   }
   for (const s of [-1,1]) {
     const x=s*(width+.009), lo=Math.min(z0,z1), hi=Math.max(z0,z1);
@@ -459,27 +470,61 @@ function guardRails(parts, frame, ground, x, start, end, paint) {
   }
 }
 
-function operatorShelter(root, parts, frame, ground, colliders, x,z,paint) {
+function shelterRoof(root, parts, { x, z, y, width, depth, rise, color, seed, pack }) {
+  const half = width / 2, near = z - depth / 2, far = z + depth / 2;
+  const span = Math.hypot(half, rise), pitch = Math.atan2(rise, half);
+  for (const side of [-1, 1]) {
+    const edge = x + side * half, ridge = y + rise;
+    parts.push(box(span + .06, .135, depth, color, [(edge+x)/2, y+rise/2-.06, z], [0, 0, -side*pitch]));
+    if (rise > .04) {
+      for (const end of [near + .16, far - .16]) {
+        const face = new THREE.BufferGeometry();
+        const vertices = [[x, y, end], [edge - side*.14, y, end], [x, ridge - .045, end]];
+        face.setAttribute('position', new THREE.Float32BufferAttribute([...vertices.flat(), ...vertices.reverse().flat()], 3));
+        face.computeVertexNormals();
+        parts.push(part(face, color));
+        parts.push(beam([edge,y,end], [x,ridge,end], .09, .12, color));
+      }
+    }
+    const ae = [edge, y, near], be = [edge, y, far];
+    root.add(createRoofSnow([[x,ridge+.01,near], [x,ridge+.01,far], be, ae],
+      { seed: seed + side * 17, depth: pack * (side === 1 ? 1 : .73), spacing: .29, overhang: .105 }));
+    root.add(createIcicles([edge + side*.013, y-.03, near], [edge + side*.013, y-.03, far],
+      { seed: seed + side * 57, spacing: .36, length: pack * 1.52 }));
+  }
+}
+
+function operatorShelter(root, parts, frame, ground, colliders, x,z,lift) {
   const p=frame.world(x,z), floor=ground.heightAt(p.x,p.z)-frame.y, bottom=floor-.58;
-  parts.push(box(2.44,1.63,2.81,'#6b5b4b',[x,floor+.24,z]));
-  parts.push(box(2.58,.19,2.94,iron,[x,floor+1.18,z]));
-  parts.push(box(2.65,.18,2.95,paint,[x,floor+2.33,z]));
-  parts.push(box(2.73,.09,3.03,snow,[x,floor+2.46,z]));
+  const alpine = /vallees|arlberg|cervinia|disere|mont-blanc/.test(lift.resortId);
+  const wood = alpine ? '#755940' : lift.vintage ? '#6b5b4b' : '#647477';
+  const trim = alpine ? '#463b32' : '#4a555a';
+  const rise = alpine ? .68 : lift.vintage ? .32 : .075;
+  parts.push(box(2.46,.73,2.82,'#727877',[x,floor-.24,z]));
+  parts.push(box(2.44,1.08,2.81,wood,[x,floor+.59,z]));
+  parts.push(box(2.58,.16,2.94,trim,[x,floor+1.14,z]));
   parts.push(box(2.42,1.01,2.81,iron,[x,floor+1.69,z]));
+  parts.push(box(2.52,.18,2.91,trim,[x,floor+2.24,z]));
+  shelterRoof(root, parts, { x, z, y: floor+2.37, width: 2.92, depth: 3.20, rise,
+    color: alpine ? '#434448' : lift.paint, seed: Math.round(Math.abs(p.x * 37 + p.z * 13)) + 29, pack: .19 });
   const panes = [];
   for (const s of [-1,1]) {
     panes.push(box(2.19,.71,.026,'#fff',[x,floor+1.74,z+s*1.412]),
       box(.027,.71,2.51,'#fff',[x+s*1.22,floor+1.74,z]));
     for(const dx of [-.37,.37]) parts.push(box(.04,.76,.039,light,[x+dx,floor+1.73,z+s*1.429]));
+    for (const dz of [-.88, .17, .88]) parts.push(box(.06,.77,.045,trim,[x+s*1.24,floor+1.74,z+dz]));
+    for (const h of [.33,.55,.77,.99]) parts.push(box(2.44,.018,.025,trim,[x,floor+h,z+s*1.407]));
   }
   const windows = new THREE.Mesh(liftParts(panes),windowGlass);
   windows.name = 'Operator shelter windows';
   root.add(windows);
-  parts.push(box(.08,2.05,.83,'#564b3d',[x+1.266,floor+.65,z+.62]));
-  colliders.push({ ...p,hw:1.22,hd:1.40,rot:-frame.heading,type:'station',minY:frame.y+bottom,maxY:frame.y+floor+2.46 });
+  parts.push(box(.08,1.99,.83,wood,[x+1.267,floor+1.01,z+.64]));
+  parts.push(box(.08,.65,.63,'#475c63',[x+1.275,floor+1.60,z+.64]));
+  parts.push(box(.08,.045,.15,light,[x+1.32,floor+1.04,z+.93]));
+  colliders.push({ ...p,hw:1.22,hd:1.40,rot:-frame.heading,type:'station',minY:frame.y+bottom,maxY:frame.y+floor+2.60+rise });
 }
 
-function stevensCabin(parts, frame, ground, colliders, x, z, platform) {
+function stevensCabin(root, parts, frame, ground, colliders, x, z, platform) {
   const point = frame.world(x, z), floor = ground.heightAt(point.x, point.z) - frame.y;
   const deck = floor + platform;
   const siding = '#8b8175', trim = '#976847', glass = '#435156';
@@ -488,7 +533,8 @@ function stevensCabin(parts, frame, ground, colliders, x, z, platform) {
   parts.push(box(width + .02, .22, depth + .02, trim, [x, deck + .02, z]));
   parts.push(box(width, 2.18, depth, siding, [x, deck + 1.16, z]));
   parts.push(box(width + .28, .16, depth + .30, trim, [x, roof - .15, z]));
-  parts.push(box(width + .38, .21, depth + .36, snow, [x, roof, z]));
+  shelterRoof(root, parts, { x, z, y: roof-.058, width: width+.39, depth: depth+.39,
+    rise: .045, color: trim, seed: Math.round(Math.abs(point.x * 29 + point.z * 11)) + 17, pack: .29 });
   for (const side of [-1, 1]) {
     const glassZ = z + side * (depth * .5 + .018);
     parts.push(box(width - .48, 1.18, .04, glass, [x, deck + 1.50, glassZ]));
@@ -522,7 +568,7 @@ function stevensCabin(parts, frame, ground, colliders, x, z, platform) {
     type: 'station', minY: frame.y + floor - .1, maxY: frame.y + roof });
 }
 
-function tyeMillSummitHardware(parts, frame, ground, colliders, gauge) {
+function tyeMillSummitHardware(root, parts, frame, ground, colliders, gauge) {
   const foot = frame.world(0, 1.76), floor = ground.heightAt(foot.x, foot.z) - frame.y;
   parts.push(pipe([0, floor, 1.76], [0, -.33, .41], .27, '#242d2e'));
   parts.push(pipe([0, floor, -.93], [0, -.35, .34], .13, '#242d2e'));
@@ -537,7 +583,7 @@ function tyeMillSummitHardware(parts, frame, ground, colliders, gauge) {
     parts.push(box(.36, .30, .21, iron, [x, 2.01, .17], [.30, 0, 0]));
     parts.push(box(.27, .21, .03, '#d2d7c8', [x, 1.99, .052], [.30, 0, 0]));
   }
-  stevensCabin(parts, frame, ground, colliders, -gauge - 3.7, 1.12, 1.08);
+  stevensCabin(root, parts, frame, ground, colliders, -gauge - 3.7, 1.12, 1.08);
 }
 
 export function buildLiftTerminal(group, lift, top, ground, colliders, sharedMidstation = false) {
@@ -578,7 +624,7 @@ export function buildLiftTerminal(group, lift, top, ground, colliders, sharedMid
     lift.wheels.push(assembly(root,wheel,'Rotating bullwheel'));
     if (detachable) {
       if (!architecturalShelter) {
-        hood(parts,gauge,top?7.3:9.3,top,paint,cableRise,lift.stationStyle === 'hogsback-express');
+        hood(parts,gauge,top?7.3:9.3,top,paint,cableRise,lift.stationStyle === 'hogsback-express',false,root);
         hood(coarseParts,gauge,top?7.3:9.3,top,paint,cableRise,lift.stationStyle === 'hogsback-express',true);
       }
       const inner = -end*4.25;
@@ -598,7 +644,7 @@ export function buildLiftTerminal(group, lift, top, ground, colliders, sharedMid
       }
     } else if (tyeSummit) {
       const cabinStart = parts.length;
-      tyeMillSummitHardware(parts, frame, ground, colliders, gauge);
+      tyeMillSummitHardware(root, parts, frame, ground, colliders, gauge);
       keep(cabinStart);
       sheaves(parts,gauge,-1.28,0,4,true);
     } else {
@@ -611,7 +657,7 @@ export function buildLiftTerminal(group, lift, top, ground, colliders, sharedMid
     }
     if (!tyeSummit && !architecturalShelter) {
       const cabinStart = parts.length;
-      operatorShelter(root,parts,frame,ground,colliders,-gauge-3.0,end*1.2,paint);
+      operatorShelter(root,parts,frame,ground,colliders,-gauge-3.0,end*1.2,lift);
       keep(cabinStart);
     }
   } else {
@@ -776,7 +822,7 @@ export function buildSurfaceLine(group, lift, ground, colliders) {
       terminal.push(pipe([-2.35, floor + 4.4, z], [2.35, floor + 4.4, z], .081, zinc));
       terminal.push(pipe([0, floor + 4.35, z], [0, .09, z], .029, iron));
       terminal.push(cylinder(.35, .11, dark, [0, .035, z], undefined, .35, 16));
-      if (counter) stevensCabin(terminal, frame, ground, colliders, 0, 3.9, 1.51);
+      if (counter) stevensCabin(root, terminal, frame, ground, colliders, 0, 3.9, 1.51);
     }
     const signX = lift.stationStyle === 'rope-tow' ? -3.25 : 0;
     const signWidth = lift.stationStyle === 'rope-tow' ? 1.64 : 2.58;

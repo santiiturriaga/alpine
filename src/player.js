@@ -5,6 +5,7 @@ import {
 import { heightAt, normalAt, surfaceAt } from './terrain.js';
 import { WORLD, startPose } from './worlddata.js';
 import { createSkier } from './skier.js';
+import { TrickCombo, flipLabel, minimumScoringAir } from './trick-combo.js';
 
 /* ═══════════════════════════════════════════════════════════════
    PLAYER
@@ -15,14 +16,12 @@ import { createSkier } from './skier.js';
 
 const GRAVITY = 9.81;
 const MIN_RIDER_IMPACT_SPEED = 6; // m/s, measured before obstacle push-out
-const P2 = Math.PI * 2;
 const whistlerGround = {heightAt,normalAt,surfaceAt,bounds:WORLD,startPose};
 
 const _normal = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
-const _zeroVelocity = new THREE.Vector3();
 const _basis = new THREE.Matrix4();
 const _qBase = new THREE.Quaternion();
 const _qSpin = new THREE.Quaternion();
@@ -87,6 +86,8 @@ export class Player {
     this.flipVel = 0;
     this.grabTime = 0;
     this.grab = 0;
+    this.trickCombo = new TrickCombo();
+    this.trickContextMultiplier = 1;
     this.crash = false;
     this.crashTimer = 0;
     this.crashReason = '';
@@ -170,6 +171,7 @@ export class Player {
 
   teleport(pose = this.ground.startPose(), { resetStats = false, snap = true } = {}) {
     this.clearBoost();
+    this.trickCombo.reset();
     this.conveyor = null;
     this.lookPitch = this.lookYaw = 0;
     this.stopEdge = 0;
@@ -327,6 +329,7 @@ export class Player {
     if (!on) this.vehicleLabel = null;
     this.rig.group.visible = !on && this.cameraMode !== 2;
     if (on) {
+      this.trickCombo.reset();
       this.stopEdge = this.stopDirection = this.poleSwing = 0;
       this.poleTap = null;
       this.vel.set(0, 0, 0);
@@ -352,6 +355,7 @@ export class Player {
   startCrash(reason = 'impact') {
     if (this.crash) return;
     this.clearBoost();
+    this.trickCombo.bail();
     this.crash = true;
     this.crashTimer = 0;
     this.crashReason = reason;
@@ -400,11 +404,12 @@ export class Player {
     if (wasSwinging && this.poleTap && this.poleSwing <= .30) {
       const tap = this.poleTap;
       this.poleTap = null;
-      this.audio?.poleTap(tap.tree);
-      if (tap.tree) this.fx?.skiSpray(tap.point, _zeroVelocity, .38);
+      this.audio?.poleTap(tap.isTree);
+      if (tap.tree) this.fx?.shedTreeSnow?.(tap.tree, tap.point);
     }
     if (this.riding) return;
     dt = Math.min(dt, 0.12);
+    this.trickCombo.advance(dt);
     if (this.ollieCooldown > 0) this.ollieCooldown -= dt;
 
     this.steer = damp(this.steer, input.steer || 0, 9, dt);
@@ -600,6 +605,7 @@ export class Player {
         this.grabTime = 0;
         this.vy = clamp(this.vyGround, -10.5, 11.5) + 0.35;
         this.pos.y = Math.max(gy + .08, predicted);
+        this.trickCombo.begin();
         this.breakSnowContact();
         this.emit('launch', { speed, vy: this.vy });
       } else {
@@ -622,6 +628,7 @@ export class Player {
         this.vy = 4.6*this.tuning.pop + Math.max(0, this.vyGround);
         this.pos.y += 0.04;
         this.ollieCooldown = 0.35;
+        this.trickCombo.begin();
         this.breakSnowContact();
         if (!this.footMode) this.fx?.skiSpray(this.pos, this.vel, .12 + 1.25 * this.surface.powder);
         this.emit('ollie', {});
@@ -659,12 +666,15 @@ export class Player {
         this.grab = Math.max(0, this.grab - dt * 6);
       }
 
+      this.trickCombo.update(this, this.trickBonus);
       const gy = this.groundHeight(this.pos.x, this.pos.z);
       if (this.pos.y <= gy + 0.06) this.land(gy);
     }
     this._lastX = this._lastX ?? this.pos.x;
     this._lastZ = this._lastZ ?? this.pos.z;
   }
+
+  get trickBonus() { return this.trickContextMultiplier * (this.landingTrickMultiplier ?? 1); }
 
   land(gy) {
     this.groundNormal(this.pos.x,this.pos.z,_normal);
@@ -692,11 +702,11 @@ export class Player {
     }
 
     const air = this.airTime;
-    const turns = Math.round(Math.abs(this.spin) / Math.PI)*.5;
-    const flips = Math.round(Math.abs(this.flip) / P2);
+    const points = this.trickCombo.bank(this, this.trickBonus);
+    const { spin, flips, backflip, grabPoints } = this.trickCombo;
+    const turns = spin / 360;
     const grab = this.grabTime;
-    const points = Math.round(air * 72 + turns * 190 + flips * 320 + grab * 95);
-    const label = trickLabel(turns, flips, grab);
+    const label = trickLabel(spin, flips, backflip, grabPoints);
 
     this.refreshSurface();
     this.landingLoad = clamp(impact / 9, 0, 1);
@@ -704,9 +714,9 @@ export class Player {
     if (turns || flips) this.fx?.burst(this.pos, 'gold', Math.min(40, 12 + turns * 8 + flips * 12));
     this.shake = Math.max(this.shake, clamp(impact * 0.014, 0.05, 0.42));
 
-    if (air > 0.42) {
+    if (air > minimumScoringAir) {
       let earnedBoost=0;
-      if((turns||flips||grab>.22) && speed>2.8){
+      if((turns||flips||grabPoints) && speed>2.8){
         this.trickChain=Math.min(4,this.trickChain+1);
         this.boostDuration=Math.min(4.6,1.75+this.trickChain*.35+Math.min(1.2,turns*.34+flips*.65+grab*.4));
         this.boostTime=earnedBoost=this.boostDuration;
@@ -727,7 +737,7 @@ export class Player {
       this.lastLanding = event;
       this.stats.longestAir = Math.max(this.stats.longestAir, air);
       this.stats.air += air;
-      if (turns || flips || grab > 0.22) this.stats.tricks++;
+      if (turns || flips || grabPoints) this.stats.tricks++;
       this.stats.trickPoints += points;
       this.emit('land', event);
     } else {
@@ -985,7 +995,7 @@ export class Player {
           y + .35 > (object.maxY ?? Infinity)) continue;
       nearest = distance - (object.r ?? .14);
       this.poleSide = Math.sign(dx * fz - dz * fx) || 1;
-      this.poleTap = { tree: object.type === 'tree', point: new THREE.Vector3(object.x, y + .95, object.z) };
+      this.poleTap = { isTree: object.type === 'tree', tree: object.tree, point: new THREE.Vector3(object.x, y + .95, object.z) };
     }
     return true;
   }
@@ -1092,13 +1102,10 @@ export class Player {
   }
 }
 
-function trickLabel(turns, flips, grab) {
+function trickLabel(spin, flips, backflip, grabPoints) {
   const bits = [];
-  const spinDeg = Math.round(turns * 360);
-  if (spinDeg > 0) bits.push(`${spinDeg}`);
-  if (flips > 0) bits.push(flips > 1 ? `${flips}× FLIP` : 'FLIP');
-  if (grab > 0.22) bits.push('MUTE');
-  if (!bits.length) return 'CLEAN AIR';
-  if (spinDeg > 0 && !flips) bits.push('SPIN');
-  return bits.join(' ');
+  if (spin) bits.push(`${spin}° spin`);
+  if (flips) bits.push(flipLabel(flips, backflip));
+  if (grabPoints) bits.push('Mute grab');
+  return bits.join(' + ') || 'Clean air';
 }

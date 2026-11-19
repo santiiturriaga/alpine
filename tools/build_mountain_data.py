@@ -436,6 +436,8 @@ def map_features(osm_nodes, osm_ways, osm_relations, project, play_area):
             value = number(props.get(tag))
             if value:
                 building[key] = value
+        if props.get("building") in {"church", "chapel"}:
+            building["kind"] = props["building"]
         buildings.append(building)
 
     superseded = set()
@@ -455,7 +457,7 @@ def map_features(osm_nodes, osm_ways, osm_relations, project, play_area):
     for osm_id, way in osm_ways.items():
         props = tags(way)
         building = props.get("building") not in (None, "no", "roof", "construction", "parking")
-        highway = props.get("highway") in {"motorway", "motorway_link", "trunk", "primary", "secondary",
+        highway = props.get("highway") in {"motorway", "motorway_link", "trunk", "primary", "secondary", "tertiary",
                                           "residential", "unclassified", "service"}
         highway = highway or (props.get("highway") in {"path", "footway"} and props.get("bridge") == "yes")
         carpark = props.get("amenity") == "parking"
@@ -471,10 +473,38 @@ def map_features(osm_nodes, osm_ways, osm_relations, project, play_area):
                                 "points": points[:-1], "surface": props.get("surface", ""), "osmId": osm_id})
         if highway and len(points) >= 2:
             for index, part in enumerate(line_parts(LineString(points).intersection(play_area))):
-                roads.append({"id": f"road-{osm_id}-{index}", "name": props.get("name", ""),
-                              "kind": props["highway"], "points": list(part.coords),
-                              "bridge": props.get("bridge") == "yes", "osmId": osm_id})
+                road = {"id": f"road-{osm_id}-{index}", "name": props.get("name", ""),
+                        "kind": props["highway"], "points": list(part.coords),
+                        "bridge": props.get("bridge") == "yes", "osmId": osm_id}
+                for tag in ("ref", "lit"):
+                    if value := props.get(tag):
+                        road[tag] = value
+                roads.append(road)
     return buildings, roads, parking
+
+
+def add_village_features(result, config, cache, project, play_area):
+    village_bounds = config.get("villageOsmBounds")
+    if not village_bounds:
+        return
+    records = map_features(*load_osm({"osmBounds": village_bounds}, cache), project, play_area)
+    for key, identity, fields, additions in zip(
+        ("buildings", "roads", "parking"), ("osmId", "id", "id"), (("kind",), ("ref", "lit"), ()), records
+    ):
+        merged = {item[identity]: item for item in result[key]}
+        for item in additions:
+            existing = merged.get(item[identity])
+            if existing is None or len(item["points"]) > len(existing["points"]):
+                merged[item[identity]] = item
+            else:
+                existing.update({field: item[field] for field in fields if field in item})
+        result[key] = list(merged.values())
+
+
+def write_resort(path, result):
+    with path.open("w", encoding="utf-8", newline="\n") as file:
+        json.dump(result, file, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        file.write("\n")
 
 
 def summer_routes(config, osm_nodes, osm_ways, project, height, play_area):
@@ -563,11 +593,10 @@ def build(config, cache, output):
         metadata = json.loads((cache / "metadata.json").read_text(encoding="utf-8"))
         result["osmTimestamp"] = metadata["source"]["openStreetMap"]["dataTimestamp"]
     path = output / "resort.json"
-    with path.open("w", encoding="utf-8", newline="\n") as file:
-        json.dump(result, file, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-        file.write("\n")
-    print(f"Built {path} with {len(runs)} run paths, {len(lifts)} lifts, {len(buildings)} buildings, "
-          f"{len(roads)} roads and {len(parking)} parking polygons")
+    add_village_features(result, config, cache, project, play_area)
+    write_resort(path, result)
+    print(f"Built {path} with {len(runs)} run paths, {len(lifts)} lifts, {len(result['buildings'])} buildings, "
+          f"{len(result['roads'])} roads and {len(result['parking'])} parking polygons")
     print(f"Terrain {terrain.min():.1f}–{terrain.max():.1f} m, backdrop {backdrop.min():.1f}–{backdrop.max():.1f} m, "
           f"tree cover {forest.mean():.1%}")
 
@@ -578,10 +607,27 @@ def main():
                         default=ROOT / "data" / "mountains" / "stevens-pass" / "sources.json")
     parser.add_argument("--cache", type=Path, default=ROOT / ".cache")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--village-features-only", action="store_true",
+                        help="Refresh the supplemental village OSM coverage in an existing resort pack")
     args = parser.parse_args()
     args.cache.mkdir(parents=True, exist_ok=True)
     config = json.loads(args.config.read_text(encoding="utf-8"))
-    build(config, args.cache, args.output or args.config.parent)
+    output = args.output or args.config.parent
+    if args.village_features_only:
+        if not config.get("villageOsmBounds"):
+            parser.error("village-features-only requires villageOsmBounds in the source configuration")
+        path = output / "resort.json"
+        result = json.loads(path.read_text(encoding="utf-8"))
+        if result["id"] != config["id"] or result["bounds"] != config["bounds"] or result["crs"] != config["crs"]:
+            parser.error("the existing resort pack must use the source configuration's map grid")
+        _, project = coordinate_frame(config)
+        bounds = config["bounds"]
+        play_area = box(bounds["minX"], bounds["minZ"], bounds["maxX"], bounds["maxZ"])
+        add_village_features(result, config, args.cache, project, play_area)
+        write_resort(path, result)
+        print(f"Updated village scenery in {path}")
+    else:
+        build(config, args.cache, output)
 
 
 if __name__ == "__main__":

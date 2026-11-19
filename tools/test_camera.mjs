@@ -40,4 +40,10 @@ close(throughTrees(0, 1, 0, eye), 2.72);
 eye.set(0, 20, 8);
 close(throughTrees(0, 20, 0, eye, branches), 8);
 close(branches.fraction, 1);
+// Mapped deciduous stands use width. Missing crown dimensions still allow trunk contact.
+for (const tree of [{ x:0, y:0, z:3, height:14, width:1 }, { x:0, y:0, z:3, height:14 }]) {
+  eye.set(0, 1, 8);
+  cameraClipper(() => [{ ...post, tree }])(0, 1, 0, eye, branches);
+  assert.ok(Number.isFinite(branches.fraction) && branches.fraction > 0 && branches.fraction < .40);
+}
 console.log('Camera clears thin posts, rotated walls, overhead structures and occupied station envelopes.');

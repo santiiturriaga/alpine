@@ -3,6 +3,7 @@ import { mulberry32, smoothstep } from './util.js';
 import { climateUniforms } from './climate-state.js';
 import { compactDevice } from './device-budget.js';
 import { attachChaseFoliage } from './chase-foliage.js';
+import { bindTreeSnow } from './tree-snow.js';
 
 const TAU=Math.PI*2, variants=3, geometryCache=new Map();
 const profiles={
@@ -13,17 +14,18 @@ const profiles={
   MAX:{start:42,end:94,budget:192,far:4800},
 };
 const species={
-  birch:{seed:6193,spread:.27,bark:0xc6c7bc,twig:0x514b43,leaf:0x718349,fall:0xc6a34b},
+  birch:{seed:6193,spread:.26,bark:0xe0ded0,twig:0x51413f,leaf:0x718349,fall:0xc6a34b},
   aspen:{seed:2503,spread:.22,bark:0xbfc3ad,twig:0x575347,leaf:0x7e9250,fall:0xd4b744},
   neutral:{seed:9817,spread:.29,bark:0x989181,twig:0x534e42,leaf:0x657a48,fall:0xa98a4b},
 };
 const pose=new THREE.Object3D(), eye=new THREE.Vector3(), up=new THREE.Vector3(0,1,0);
 const _a=new THREE.Vector3();
 const ATLAS_TILE_W=128,ATLAS_TILE_H=256;
+const atlasBase=-.105,atlasHeight=1.25;
 let branchAtlas,leafAtlas;
 let atlasLoad;
-const farCard=new THREE.PlaneGeometry(.86,1.18);
-farCard.translate(0,.565,0);
+const farCard=new THREE.PlaneGeometry(.86,atlasHeight);
+farCard.translate(0,atlasBase+atlasHeight/2,0);
 farCard.setAttribute('woodAge',new THREE.Float32BufferAttribute(new Float32Array(4),1));
 
 function sharedGeometry(source) {
@@ -81,7 +83,7 @@ function getBranchAtlases() {
       const projected=i=>{
         const x=p.getX(i),y=p.getY(i),z=p.getZ(i);
         return [view*ATLAS_TILE_W+((x*cos-z*sin)/.86+.5)*ATLAS_TILE_W,
-          row*ATLAS_TILE_H+(1-(y+.025)/1.18)*ATLAS_TILE_H,x*sin+z*cos];
+          row*ATLAS_TILE_H+(1-(y-atlasBase)/atlasHeight)*ATLAS_TILE_H,x*sin+z*cos];
       };
       for(let i=0;i<index.length;i+=3){
         const a=projected(index[i]),b=projected(index[i+1]),d=projected(index[i+2]);
@@ -180,7 +182,8 @@ function treeGeometry(kind,variant,leaves) {
     for(let row=0;row<2;row++)for(let side=0;side<=sides;side++){
       const angle=side/sides*TAU,n=across.clone().multiplyScalar(Math.cos(angle)).addScaledVector(lateral,Math.sin(angle));
       const center=row?b:a,radius=row?r1:r0;
-      vertex(center.clone().addScaledVector(n,radius),n,side/sides,center.y,age);
+      const grain = age < .35 ? .96 + .065 * Math.sin(angle * 3. + center.y * 14.) : 1;
+      vertex(center.clone().addScaledVector(n,radius * grain),n,side/sides,center.y,age);
     }
     for(let i=0;i<sides;i++){
       const a=first+i,b=a+1,c=a+sides+1,d=c+1;indices.push(a,b,c,b,d,c);
@@ -197,30 +200,37 @@ function treeGeometry(kind,variant,leaves) {
     for(let i=0;i<points.length;i++)vertex(points[i],normal,i===1?0:i===3?1:.5,i===0?0:i===2?1:.5,0);
     indices.push(first,first+1,first+4,first+1,first+2,first+4,first+2,first+3,first+4,first+3,first,first+4);
   }
-  const trunkRows=10,sides=9;
-  if(!leaves)for(let i=0;i<trunkRows;i++){
-    const a=i/trunkRows,b=(i+1)/trunkRows;
-    tube(trunk(a===0?-.016:a),trunk(b),.0107*Math.pow(1-a,.76)+.0005,.0107*Math.pow(1-b,.76)+.0005,sides,a*.24);
+  const trunkLevels=[-.097,-.012,.022,.081,.16,.26,.38,.49,.61,.74,.86,.94,1];
+  const boleScale=kind==='birch'?.86+variant*.08:1;
+  const boleRadius=y=>boleScale*(.0101*Math.pow(1-Math.max(0,y),.76)+.0005+.005*Math.exp(-Math.max(0,y)*83));
+  if(!leaves)for(let i=1;i<trunkLevels.length;i++){
+    const a=trunkLevels[i-1],b=trunkLevels[i];
+    tube(trunk(a),trunk(b),boleRadius(a),boleRadius(b),11,Math.max(0,a)*.24);
   }
   for(let i=0;i<12;i++){
-    const y=.29+i*.049+rand()*.021,angle=i*2.39996+phase+(rand()-.5)*.7;
+    const y=.24+i*.051+rand()*.037,angle=i*2.39996+phase+(rand()-.5)*.84;
     const spread=spec.spread*Math.sin((y-.18)/.94*Math.PI)*(.76+rand()*.41);
-    const root=trunk(y),mid=root.clone().add(new THREE.Vector3(Math.cos(angle)*spread*.53,.025+rand()*.051,Math.sin(angle)*spread*.53));
-    const end=root.clone().add(new THREE.Vector3(Math.cos(angle+.13)*spread,.10+rand()*.11,Math.sin(angle+.13)*spread));
+    const root=trunk(y),mid=root.clone().add(new THREE.Vector3(Math.cos(angle)*spread*.53,.018+rand()*.061,Math.sin(angle)*spread*.53));
+    const arc=(rand()-.46)*.51;
+    const end=root.clone().add(new THREE.Vector3(Math.cos(angle+arc)*spread,.082+rand()*.11,Math.sin(angle+arc)*spread));
+    const elbowY=.015+rand()*.016;
     if(!leaves){
-      tube(root,mid,.0037*(1-y*.7),.0018,5,.56);tube(mid,end,.0018,.00053,4,.83);
+      const elbow=root.clone().lerp(mid,.48).add(new THREE.Vector3(0,elbowY,0));
+      tube(root,elbow,.0045*(1-y*.66),.0022,7,.30);
+      tube(elbow,mid,.0022,.0014,5,.52);
+      tube(mid,end,.0014,.00036,4,.78);
     }
     for(let j=0;j<5;j++){
       const t=.15+j*.16+rand()*.06,side=j%2?1:-1,turn=angle+side*(.56+rand()*.58);
       const attach=mid.clone().lerp(end,t),reach=spread*(.26+rand()*.23)*(1-t*.32);
-      const tip=attach.clone().add(new THREE.Vector3(Math.cos(turn)*reach,.035+rand()*.059,Math.sin(turn)*reach));
-      const elbow=attach.clone().lerp(tip,.56).add(new THREE.Vector3(0,-.008,0));
-      if(!leaves){tube(attach,elbow,.00094,.00055,4,.78);tube(elbow,tip,.00055,.00014,3,.94);}
+      const tip=attach.clone().add(new THREE.Vector3(Math.cos(turn)*reach,.039+rand()*.055,Math.sin(turn)*reach));
+      const elbow=attach.clone().lerp(tip,.56).add(new THREE.Vector3(0,.007,0));
+      if(!leaves){tube(attach,elbow,.00078,.00046,4,.79);tube(elbow,tip,.00046,.00012,3,.95);}
       tips.push({tip,axis:tip.clone().sub(attach).normalize()});
       for(let k=0;k<2;k++){
         const base=elbow.clone().lerp(tip,.22+k*.47),fork=turn+(k?1:-1)*(.49+rand()*.45);
-        const twigEnd=base.clone().add(new THREE.Vector3(Math.cos(fork)*reach*.47,.022+rand()*.038,Math.sin(fork)*reach*.47));
-        if(!leaves)tube(base,twigEnd,.00037,.00008,3,.98);
+        const twigEnd=base.clone().add(new THREE.Vector3(Math.cos(fork)*reach*.58,.018+rand()*.039,Math.sin(fork)*reach*.58));
+        if(!leaves)tube(base,twigEnd,.00032,.00006,3,.99);
         tips.push({tip:twigEnd,axis:twigEnd.clone().sub(base).normalize()});
       }
     }
@@ -228,10 +238,10 @@ function treeGeometry(kind,variant,leaves) {
   // Unequal upright leaders make the crown split and lean rather than read as
   // a central white pole with radial spokes. Their side shoots fill its volume.
   for(let i=0;i<3;i++){
-    const angle=phase+i*2.39996,y=.29+i*.11,root=trunk(y),reach=.075+rand()*.07;
-    const mid=root.clone().add(new THREE.Vector3(Math.cos(angle)*reach*.7,.27+rand()*.08,Math.sin(angle)*reach*.7));
-    const top=new THREE.Vector3(Math.cos(angle+.2)*reach,1.0+rand()*.08,Math.sin(angle+.2)*reach);
-    if(!leaves){tube(root,mid,.0041-i*.0005,.0018,6,.35);tube(mid,top,.0018,.0002,4,.72);}
+    const angle=phase+i*2.39996,y=.27+i*.11,root=trunk(y),reach=.085+rand()*.073;
+    const mid=root.clone().add(new THREE.Vector3(Math.cos(angle)*reach*.7,.23+rand()*.13,Math.sin(angle)*reach*.7));
+    const top=new THREE.Vector3(Math.cos(angle+.2)*reach,1.015-i*.037+rand()*.056,Math.sin(angle+.2)*reach);
+    if(!leaves){tube(root,mid,.0044-i*.00065,.0017,7,.27);tube(mid,top,.0017,.00016,4,.70);}
     for(let j=0;j<6;j++){
       const t=.13+j*.13,attach=mid.clone().lerp(top,t),turn=angle+j*2.39996;
       const end=attach.clone().add(new THREE.Vector3(Math.cos(turn)*(.055+rand()*.055),.032+rand()*.04,Math.sin(turn)*(.055+rand()*.055)));
@@ -240,7 +250,7 @@ function treeGeometry(kind,variant,leaves) {
     }
   }
   if(leaves){
-    for(const {tip,axis} of tips)for(let i=0;i<8;i++){
+    for(const {tip,axis} of tips)for(let i=0;i<6;i++){
       const center=tip.clone().addScaledVector(axis,(rand()-.65)*.033)
         .add(new THREE.Vector3((rand()-.5)*.024,(rand()-.5)*.027,(rand()-.5)*.024));
       leaf(center,axis,.0049+rand()*.0038,rand()*TAU);
@@ -256,15 +266,19 @@ function treeGeometry(kind,variant,leaves) {
 }
 
 function forestMaterial(kind,near,leaves,uniforms) {
+  const branchCard=!near&&!leaves;
   const spec=species[kind],material=new THREE.MeshStandardMaterial({
     color:leaves?spec.leaf:0xffffff,vertexColors:near&&!leaves,roughness:leaves?.87:.97,
-    side:leaves?THREE.DoubleSide:THREE.FrontSide,alphaTest:.001,alphaToCoverage:true,
+    side:leaves?THREE.DoubleSide:THREE.FrontSide,alphaTest:.001,alphaToCoverage:!branchCard,
+    transparent:branchCard,depthWrite:!branchCard,
   });
-  if(!near){getBranchAtlases();material.map=leaves?leafAtlas:branchAtlas;material.alphaTest=.002;}
+  if(!near){getBranchAtlases();material.map=leaves?leafAtlas:branchAtlas;material.alphaTest=branchCard?.011:.06;}
   material.forceSinglePass=true;
-  material.customProgramCacheKey=()=>`winter-deciduous-${kind}-${near}-${leaves}-v2`;
+  material.customProgramCacheKey=()=>`winter-deciduous-${kind}-${near}-${leaves}-v4`;
   material.onBeforeCompile=(shader,renderer)=>{
     const multisample=renderer.getContext().getContextAttributes().antialias;
+    const showBark=near&&!leaves;
+    if(showBark)bindTreeSnow(shader);
     Object.assign(shader.uniforms,uniforms,{
       decSnow:climateUniforms.snowpack,decLine:climateUniforms.snowline,
       decAutumn:climateUniforms.autumn,decSpring:climateUniforms.spring,
@@ -274,20 +288,25 @@ function forestMaterial(kind,near,leaves,uniforms) {
       ${near?'':'attribute float detailWeight;'}
       attribute float woodAge;varying float decAge;varying vec2 decBark;
       varying float decCoverage;varying vec3 decWorld;varying vec3 decFacing;
+      ${showBark?'varying float decAttachedSnow;':''}
       ${near?'':'varying float decFrame;'}
+      ${branchCard?'varying float decWoodDistance;':''}
       uniform vec2 decNear;uniform vec2 decFar;
     `).replace('#include <begin_vertex>',`#include <begin_vertex>
       vec3 decRoot=(modelMatrix*instanceMatrix*vec4(0.,0.,0.,1.)).xyz;
       float decHeight=length(instanceMatrix[1].xyz);
       float decRise=max(0.,max(decRoot.y-cameraPosition.y,cameraPosition.y-decRoot.y-decHeight));
       float decDistance=length(vec3(cameraPosition.xz-decRoot.xz,decRise));
+      ${branchCard?'decWoodDistance=decDistance;':''}
       float decJitter=fract(sin(dot(decRoot.xz,vec2(.1271,.2293)))*3375.73);
-      float decStart=mix(decNear.x,decNear.y,.45*decJitter);
-      float decBlend=1.-smoothstep(decStart,decStart+.55*(decNear.y-decNear.x),decDistance);
-      decCoverage=${near?'decBlend':'(1.-detailWeight*decBlend)*(1.-smoothstep(decFar.x,decFar.y,decDistance))'};
+      float decStart=mix(decNear.x,decNear.y,.79*decJitter);
+      float decBlend=1.-smoothstep(decStart,decStart+.21*(decNear.y-decNear.x),decDistance);
+      float decHorizon=mix(decFar.x,decFar.y,decJitter);
+      decCoverage=${near?'decBlend':'(1.-detailWeight*decBlend)*step(decDistance,decHorizon)'};
       decWorld=(modelMatrix*instanceMatrix*vec4(position,1.)).xyz;
       decFacing=normalize(mat3(modelMatrix)*mat3(instanceMatrix)*normal);
       decAge=woodAge;decBark=vec2(uv.x,uv.y*decHeight);
+      ${showBark?'decAttachedSnow=attachedTreeSnow(decRoot.xz);':''}
     `);
     if(!near){
       shader.vertexShader=shader.vertexShader.replace('#include <defaultnormal_vertex>',`#include <defaultnormal_vertex>
@@ -300,15 +319,18 @@ function forestMaterial(kind,near,leaves,uniforms) {
         float decRotation=atan(instanceMatrix[2].x,instanceMatrix[2].z);
         decFrame=mod(floor((atan(decToward.x,decToward.y)-decRotation)*.6366197724+4.5),4.);
         vec3 decBillboard=decRoot+decRight*position.x*length(instanceMatrix[0].xyz)+vec3(0.,position.y*decHeight,0.);
+        if(decCoverage<=0.)decBillboard=decRoot;
         decWorld=decBillboard;
         vec4 mvPosition=viewMatrix*vec4(decBillboard,1.);gl_Position=projectionMatrix*mvPosition;
       `).replace('#include <worldpos_vertex>','vec4 worldPosition=vec4(decBillboard,1.);');
     }
     shader.fragmentShader=shader.fragmentShader.replace('#include <common>',`#include <common>
       varying float decAge;varying vec2 decBark;varying float decCoverage;varying vec3 decWorld;varying vec3 decFacing;
+      ${showBark?'varying float decAttachedSnow;':''}
       uniform float decSnow;uniform float decLine;uniform float decAutumn;uniform float decSpring;
       uniform float decLeafCover;uniform vec3 decFall;uniform vec3 decGreen;
       ${near?'':'varying float decFrame;'}
+      ${branchCard?'varying float decWoodDistance;':''}
       float decHash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
     `).replace('#include <color_fragment>',`#include <color_fragment>
       ${leaves?`
@@ -316,29 +338,47 @@ function forestMaterial(kind,near,leaves,uniforms) {
         diffuseColor.rgb=mix(decGreen,decFall,decAutumn*(.72+.28*variation));
         diffuseColor.rgb*=.82+.24*variation;
       `:near?`
-        vec2 barkCell=vec2(decBark.x*13.,decBark.y*7.7);
+        vec2 barkCell=vec2(decBark.x*9.,decBark.y*5.4);
         vec2 barkLocal=fract(barkCell);float mark=decHash(floor(barkCell));
-        float lenticel=(1.-smoothstep(.028,.086,abs(barkLocal.y-(.27+mark*.43))))
-          *(1.-smoothstep(.16,.44,abs(barkLocal.x-.5)))*step(.43,mark);
-        float rough=.94+.06*sin(decBark.x*74.+sin(decBark.y*3.8)*1.4);
-        diffuseColor.rgb*=rough*(1.-lenticel*(1.-decAge)*${kind==='neutral'?'.30':'.69'});
-        float basal=(1.-smoothstep(.14,1.65,decBark.y))*(.31+.69*decHash(floor(decBark*vec2(19.,7.))));
-        diffuseColor.rgb*=1.-basal*(1.-decAge)*${kind==='neutral'?'.24':'.46'};
-        float snowDust=decSnow*smoothstep(decLine-230.,decLine+130.,decWorld.y)
-          *smoothstep(.33,.85,decFacing.y)*(.18+.40*decAge);
-        diffuseColor.rgb=mix(diffuseColor.rgb,vec3(.78,.85,.88),snowDust);
+        float antialias=max(.027,fwidth(barkCell.y));
+        float ends=1.-smoothstep(.22+mark*.13,.48,abs(barkLocal.x-.5));
+        float center=.22+mark*.54+sin(barkLocal.x*6.+mark*2.)*.041;
+        float lenticel=(1.-smoothstep(.036,.057+antialias,abs(barkLocal.y-center)))
+          *ends*step(.37,mark)*(1.-smoothstep(.27,1.,antialias));
+        float rolls=.92+.08*sin(decBark.x*45.+sin(decBark.y*4.8)*1.38);
+        float basal=(1.-smoothstep(.10,1.7,decBark.y))*(.27+.73*decHash(floor(decBark*vec2(24.,11.))));
+        diffuseColor.rgb*=rolls*(1.-lenticel*(1.-decAge)*${kind==='neutral'?'.35':'.79'});
+        diffuseColor.rgb=mix(diffuseColor.rgb,vec3(.13,.099,.083),basal*(1.-decAge)*${kind==='neutral'?'.25':'.63'});
+        float snowDust=decSnow*decAttachedSnow*smoothstep(decLine-230.,decLine+130.,decWorld.y)
+          *smoothstep(.36,.84,decFacing.y)*(.18+.48*decAge);
+        diffuseColor.rgb=mix(diffuseColor.rgb,vec3(.82,.88,.92),snowDust);
       `:'diffuseColor.rgb*=.94;'}
     `).replace('#include <alphatest_fragment>',`#include <alphatest_fragment>
+      ${branchCard?'':`
       float decThreshold=fract(52.9829189*fract(dot(floor(gl_FragCoord.xy),vec2(.06711056,.00583715))));
-      if(decCoverage${leaves?'*decLeafCover':''}${!near&&!multisample?'*diffuseColor.a':''}<=decThreshold)discard;
+      if(decCoverage${leaves?'*decLeafCover':''}<=decThreshold)discard;
+      ${!near&&!multisample?'if(diffuseColor.a < .18)discard;':''}
+      `}
     `);
     if(!near){
       shader.fragmentShader=shader.fragmentShader.replace('#include <map_fragment>',`
         vec2 decUV=vec2((vMapUv.x*.98+.01+decFrame)*.25,
           (1.-(vMapUv.y*.992+.004)+${Object.keys(species).indexOf(kind)}.)*.25);
-        vec4 decTexel=texture2D(map,decUV);diffuseColor*=decTexel;
+        vec4 decTexel=texture2D(map,decUV,${branchCard?'.27':'-.30'});
+        ${branchCard?'decTexel.a *= decCoverage;':'decTexel.a=smoothstep(.023,.46,decTexel.a);'}
+        diffuseColor*=decTexel;
       `).replace('#include <opaque_fragment>',`#undef OPAQUE
         #include <opaque_fragment>`);
+      if(branchCard){
+        // Fractional mip coverage keeps thin twigs stable over the snow.
+        // Each card represents branches facing many ways, so direct light is
+        // the average across the crown instead of the sun-facing card normal.
+        shader.fragmentShader=shader.fragmentShader.replace('#include <lights_fragment_end>',`#include <lights_fragment_end>
+          float groupedBark = smoothstep(32.,178.,decWoodDistance);
+          reflectedLight.directDiffuse *= mix(.62,.27,groupedBark);
+          reflectedLight.directSpecular *= .05;
+        `);
+      }
     }else attachChaseFoliage(shader);
   };
   return material;

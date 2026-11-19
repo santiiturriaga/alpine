@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { checkSkierName, onProfileChange, skierName, skiUnits } from './skier-profile.js';
+import { shellForColor } from './garment-marks.js';
 import { createSkier } from './skier.js';
 import { readWinchPacket } from './patrol-winch-link.js';
 
@@ -36,7 +37,7 @@ function validPose(s) {
     bounded(s[7],110) && bounded(s[8],1.01) && bounded(s[9],1.01) &&
     Number.isInteger(s[10]) && bounded(s[10],31) && bounded(s[11],7) &&
     s.slice(12,15).every(v => Number.isInteger(v) && v >= 0 && v <= 100000000) &&
-    /^#[0-9a-f]{6}$/i.test(s[15]) && Number.isSafeInteger(s[16]) && s[16] >= 0;
+    typeof s[15] === 'string' && /^#[0-9a-f]{6}$/i.test(s[15]) && Number.isSafeInteger(s[16]) && s[16] >= 0;
 }
 
 function discontinuous(before, after, elapsed) {
@@ -393,7 +394,10 @@ export function createMultiplayer(scene, resort, getPlayer) {
         }
       }
       remote.dx=predicting?undefined:dx;remote.dz=dz;
-      if (fresh || remote.color !== s[15]) { remote.color=s[15]; rig.setAppearance({jacket:s[15]}); }
+      if (fresh || remote.color !== s[15]) {
+        remote.color = s[15];
+        rig.setAppearance({ jacket: remote.color, apparel: shellForColor(remote.color) });
+      }
       const phase = Math.atan2(Math.sin(next[11] - s[11]), Math.cos(next[11] - s[11]));
       rig.animate(dt,{speed:remoteSpeed,steer:lerp(s[8],next[8],mix),tuck:lerp(s[9],next[9],mix),brake:0,grab:0,crash:!!(s[10]&4),crashTime:0,
         airborne:!!(s[10]&2),footMode:!!(s[10]&1),switchStance:!!(s[10]&16),

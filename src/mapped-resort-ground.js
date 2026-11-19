@@ -190,7 +190,7 @@ function makeSurfaceField(bounds, grid, forestAt, runs, runAreas, roads, parking
     }
   }
   for (const road of roads) {
-    const spread = road.halfWidth ?? (/motorway|trunk|primary/i.test(road.kind) ? 8.5 : 4.5);
+    const spread = road.halfWidth ?? (/motorway|trunk|primary/i.test(road.kind) ? 8.5 : /^D\s?90\b/.test(road.ref ?? '') ? 7.2 : 4.5);
     for (let i = 1; i < road.points.length; i++) {
       const [ax, az] = road.points[i - 1], [bx, bz] = road.points[i];
       paint(Math.min(ax, bx) - spread, Math.max(ax, bx) + spread,
@@ -282,6 +282,8 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
   const summerTrails = !regional && !!field.summerTexture;
   const forest = regional ? field.survey?.region : field.survey?.local;
   const regionalForest = field.survey?.region;
+  const cascade = field.cascade;
+  const village = field.village;
   const regionalColor = /* glsl */ `
     vec3 surveyColor(vec3 p, float up, float mountainside, float flutes, float cliffBed, float cliff, float weather) {
       float surveySnow = max(weather, snowpack);
@@ -294,6 +296,15 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
       vec3 spruce = mix(vec3(.018,.027,.029),vec3(.112,.160,.163),canopy*.7+mountainside*.3);
       vec3 alpine = mix(vec3(.49,.58,.66),vec3(.85,.91,.95),.55*flutes+.45*mountainside);
       vec3 stone = vec3(.11,.134,.15) * (.54+.70*cliffBed);
+      ${cascade ? `
+        float rockLayers = resortNoise(vec3(p.x*.021-p.y*.037,p.y*.142,p.z*.023+p.y*.044));
+        float rockFlank = smoothstep(.08,.65,1.-up) * smoothstep(1000.,1630.,p.y);
+        cliff = max(cliff,.52*rockFlank*(.62+.38*flutes));
+        stone = mix(vec3(.084,.105,.123),vec3(.295,.288,.252),rockLayers*.56+cliffBed*.44);
+        alpine = mix(alpine*.81,alpine*1.08,mountainside*.6+rockLayers*.4);
+        spruce *= .77 + canopy*.37;
+        forests = smoothstep(.12,.74,forests)*(1.-rockFlank*.60);
+      ` : ''}
       ${regionalForest ? `
         vec3 grove = mix(vec3(.105,.184,.075),vec3(.33,.197,.064),standAutumn);
         vec3 bareGrove = mix(vec3(.077,.073,.071),vec3(.35,.365,.372),mountainside);
@@ -304,7 +315,7 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
       return mix(mix(stone,alpine,(1.-cliff)*surveySnow),spruce,forests*.96);
     }
   `;
-  material.customProgramCacheKey = () => `mapped-resort-snow-${regional}-${summerTrails}-${!!nightLight}-${!!forest}-${!!regionalForest}`;
+  material.customProgramCacheKey = () => `mapped-resort-snow-${regional}-${summerTrails}-${!!nightLight}-${!!forest}-${!!regionalForest}-${!!cascade}-${!!village}`;
   material.onBeforeCompile = (shader) => {
     shader.uniforms.resortField = { value: field.texture };
     if (forest && !regional) {
@@ -378,7 +389,7 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
         ${summerTrails ? 'float path = texture2D(summerField,(p.xz-resortLimits.xy)/resortLimits.zw).r;' : ''}
         float marks = max(max(groom,ice),road);
         ${summerTrails ? 'marks = max(marks, smoothstep(.07,.61,path));' : ''}
-        float localWeight = max(smoothstep(0.,190.,edgeDistance),smoothstep(0.,35.,edgeDistance)*marks);
+        float localWeight = max(smoothstep(0.,${cascade ? '420.' : '190.'},edgeDistance),smoothstep(0.,35.,edgeDistance)*marks);
         float nearDetail = 1. - smoothstep(28.,140.,eye);
         float traffic = trackPressure(p.xz) * (1.0-ice);
         float drift = resortNoise(p * vec3(.45,.14,.72)+flutes*.55);
@@ -423,6 +434,10 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
         if (localWeight < 1.) {
           surfaceColor = mix(surveyColor(p,up,mountainside,flutes,cliffBed,naturalCliff,weather),surfaceColor,localWeight);
         }
+        ${cascade ? `
+          float distant = smoothstep(1950.,4400.,eye)*(1.-marks);
+          surfaceColor = mix(surfaceColor,surveyColor(p,up,mountainside,flutes,cliffBed,naturalCliff,weather),distant*.78);
+        ` : ''}
         diffuseColor.rgb *= surfaceColor;
         float resortRelief = nearDetail * (.021 * drift + .008 * shallow + .0014 * grains * coverage
           + .0018 * ripple * tracks) * (1. - ice*.77) * localWeight;
@@ -458,9 +473,10 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
             (1.-cliff)*snow*(1.-road)*(1.-underTrees*.65), ice, (1.-groom)*(1.-traffic)), localWeight);
         }
         ${nightLight ? `
-          if (pisteFloodlightStrength > .006) {
-            vec2 pools = texture2D(pisteFloodlight,(p.xz-pisteFloodlightLimits.xy)/pisteFloodlightLimits.zw).rg;
-            vec3 irradiance = pools.r*vec3(1.0,.70,.35) + pools.g*vec3(.77,.89,1.0);
+          vec2 lightUV = (p.xz-pisteFloodlightLimits.xy)/max(pisteFloodlightLimits.zw,vec2(1.));
+          if (pisteFloodlightStrength > .006 && all(greaterThan(lightUV,vec2(0.))) && all(lessThan(lightUV,vec2(1.)))) {
+            vec2 pools = texture2D(pisteFloodlight,lightUV).rg;
+            vec3 irradiance = pools.r*${village ? 'vec3(1.0,.51,.18)' : 'vec3(1.0,.70,.35)'} + pools.g*vec3(.77,.89,1.0);
             outgoingLight += diffuseColor.rgb * irradiance * pisteFloodlightStrength * 1.25 * localWeight;
           }
         ` : ''}
@@ -580,8 +596,10 @@ export async function loadMappedGround(scene, config, baseURL, { quality = 'BALA
     ? roads.filter(road => road.osmId !== STEVENS_OVERPASS_OSM) : roads;
   const field = makeSurfaceField(bounds, grid, forestAt, runs, runAreas, surfaceRoads, parking, summerRoutes);
   field.survey = survey;
+  field.cascade = config.id === 'snoqualmie';
+  field.village = config.id === 'les-3-vallees';
   field.horizon = terrainHorizon(dem, terrain.cols, terrain.rows, bounds);
-  const nightLight = nightRunsFor(config).length
+  const nightLight = (field.village || nightRunsFor(config).length)
     ? { texture: { value: null }, limits: { value: new THREE.Vector4() }, strength: { value: 0 } } : null;
   const localMaterial = snowMaterial(bounds, field, false, nightLight);
   const horizonMaterial = snowMaterial(bounds, field, true);
@@ -594,7 +612,7 @@ export async function loadMappedGround(scene, config, baseURL, { quality = 'BALA
   let seed = 0;
   for (const letter of config.id) seed = Math.imul(seed, 31) + letter.charCodeAt(0);
   const backcountry = createBackcountry({
-    survey: surveyTerrain, material: snowMaterial(bounds, { texture: field.texture }, true), seed,
+    survey: surveyTerrain, material: snowMaterial(bounds, { texture: field.texture, cascade: field.cascade }, true), seed,
     compact: compactDevice, viewDistance: config.viewDistance ?? 19000,
   });
   const heightAt = (x, z, normal, exact) => insideTerrain(bounds, x, z)

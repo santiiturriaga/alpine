@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { climateUniforms } from './climate-state.js';
 import { compactCrownBatch, forestView } from './forest-culling.js';
+import { bindTreeSnow } from './tree-snow.js';
 
 const profiles = {
   BUDGET: { mapped: [90, 205], regional: [145, 320], detail: .46 },
@@ -15,7 +16,7 @@ const transitions = {
   regional: { value: new THREE.Vector2() },
 };
 let budget = false, maxCrowns = false;
-export const forestQuality = { detail: { value: 1 } };
+export const forestQuality = { detail: { value: 1 }, name: 'HIGH' };
 export const forestDetailTiers = {
   '-0.5': [105, 165],
   1: [44, 79],
@@ -26,6 +27,7 @@ export function setForestQuality(name) {
   const profile = profiles[name] || profiles.HIGH;
   budget = name === 'BUDGET';
   maxCrowns = name === 'MAX';
+  forestQuality.name = name;
   forestQuality.detail.value = profile.detail;
   transitions.mapped.value.fromArray(profile.mapped);
   transitions.regional.value.fromArray(profile.regional);
@@ -39,8 +41,9 @@ const declarations = `
     // Each tree changes tiers over part of the total band. The threshold
     // varies with its fixed root and is shared by both representations.
     float stagger = fract(sin(dot(root, vec2(.1271, .2293))) * 3375.73);
-    float start = mix(forestRange.x, forestRange.y, .57 * stagger);
-    return smoothstep(start, start + .43 * (forestRange.y - forestRange.x), distanceFromEye);
+    float band = forestRange.y - forestRange.x;
+    float start = mix(forestRange.x, forestRange.y, .86 * stagger);
+    return smoothstep(start, start + .14 * band, distanceFromEye);
   }
 `;
 const coverage = `
@@ -78,14 +81,16 @@ export function preloadForestCrowns() {
   return atlasPromise;
 }
 
-function crownMaterial(region) {
-  if (proxyMaterials.has(region)) return proxyMaterials.get(region);
-  const material = new THREE.MeshBasicMaterial({ map: atlas, alphaTest: .12, alphaToCoverage: true });
+function crownMaterial(region, cascade) {
+  const profile = cascade ? `${region}-cascades` : region;
+  if (proxyMaterials.has(profile)) return proxyMaterials.get(profile);
+  const material = new THREE.MeshBasicMaterial({ map: atlas, alphaTest: .09, alphaToCoverage: true });
   material.onBeforeCompile = shader => {
     shader.uniforms.forestRange = transitions[region];
     shader.uniforms.snowline = climateUniforms.snowline;
     shader.uniforms.snowpack = climateUniforms.snowpack;
     shader.uniforms.night = climateUniforms.night;
+    bindTreeSnow(shader);
     shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
       attribute float crownSpecies;
       uniform float snowline;
@@ -108,9 +113,11 @@ function crownMaterial(region) {
       forestFade = crownFade(crownDistance, origin.xz);
       float distantCrown = smoothstep(700.,2450.,crownDistance);
       float snow = smoothstep(snowline-180.,snowline+410.,origin.y) * snowpack;
-      crownSnow = snow * ${region === 'regional' ? 'smoothstep(1110.,1580.,origin.y)' : 'smoothstep(1370.,1820.,origin.y)'};
-      vec3 world = origin + right * position.x * length(instanceMatrix[0].xyz) * (1. - .18*distantCrown)
-        + vec3(0.,position.y * height,0.);
+      crownSnow = snow * attachedTreeSnow(origin.xz)
+        * ${region === 'regional' ? 'smoothstep(1110.,1580.,origin.y)' : 'smoothstep(1370.,1820.,origin.y)'};
+      float rootedY = position.y * height - (1. - smoothstep(-.063,.014,position.y)) * 1.55;
+      vec3 world = origin + right * position.x * length(instanceMatrix[0].xyz) * (1. + .10*distantCrown)
+        + vec3(0.,rootedY,0.);
       if (forestFade <= 0.) world = origin;
     `).replace('#include <project_vertex>', 'vec4 mvPosition = viewMatrix * vec4(world,1.); gl_Position = projectionMatrix * mvPosition;')
       .replace('#include <worldpos_vertex>', 'vec4 worldPosition = vec4(world,1.);');
@@ -123,21 +130,24 @@ function crownMaterial(region) {
       varying float forestFade;
     `).replace('#include <map_fragment>', `
       vec2 frameUV = vec2((vMapUv.x + crownDirection)*.25, (vMapUv.y + 5.0 - crownRow) / 6.0);
-      vec4 sampleCrown = texture2D(map,frameUV);
+      float bias = ${cascade ? 'mix(-.28,.56,smoothstep(1050.,3700.,crownDistance))' : '-.28'};
+      vec4 sampleCrown = texture2D(map,frameUV,bias);
       vec3 crown = sampleCrown.rgb;
       float exposedNeedles = smoothstep(.032,.22,crown.g);
       const vec3 dimmer = vec3(.65,.76,.84);
       crown *= mix(dimmer,vec3(.84,.91,1.0),smoothstep(700.,2450.,crownDistance));
-      crown = mix(crown,vec3(.34,.41,.46), crownSnow * exposedNeedles * .23);
-      diffuseColor *= vec4(crown * mix(vec3(1.),vec3(.18,.25,.36),night),sampleCrown.a);
+      float snowContrast = ${cascade ? 'mix(.23,.072,smoothstep(540.,2000.,crownDistance))' : '.23'};
+      crown = mix(crown,vec3(.34,.41,.46), crownSnow * exposedNeedles * snowContrast);
+      float opacity = smoothstep(.038, .49, sampleCrown.a);
+      diffuseColor *= vec4(crown * mix(vec3(1.),vec3(.18,.25,.36),night),opacity);
     `).replace('#include <alphatest_fragment>', `
       #include <alphatest_fragment>
       ${coverage}
       if (forestFade < 1.0 && forestFade <= forestThreshold) discard;
-    `);
+    `).replace('#include <opaque_fragment>', '#undef OPAQUE\n#include <opaque_fragment>');
   };
-  material.customProgramCacheKey = () => `forest-crown-atlas-${region}-v2`;
-  proxyMaterials.set(region,material);
+  material.customProgramCacheKey = () => `forest-crown-atlas-${profile}-v3`;
+  proxyMaterials.set(profile,material);
   return material;
 }
 
@@ -159,11 +169,11 @@ card.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
 card.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));
 card.setIndex(indices);
 
-export function makeForestCrowns(region, species) {
+export function makeForestCrowns(region, species, cascade = false) {
   if (!atlas) return null;
   const geometry = card.clone();
   geometry.setAttribute('crownSpecies',new THREE.InstancedBufferAttribute(Float32Array.from(species),1));
-  const mesh = new THREE.InstancedMesh(geometry,crownMaterial(region),species.length);
+  const mesh = new THREE.InstancedMesh(geometry,crownMaterial(region,cascade),species.length);
   mesh.name = 'Baked conifer crowns';
   return mesh;
 }

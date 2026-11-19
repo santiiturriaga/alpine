@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { canvasTexture, clamp, damp, makeCanvas, mulberry32 } from './util.js';
 import { baseThickness, isSkiStyle, skiDeck } from './skier-equipment.js';
+import { embroideredMaterial } from './garment-marks.js';
 import { buildSnowShoe } from './snow-shoes.js';
 import { batchRigidParts } from './skier-hardware.js';
 
@@ -506,7 +507,7 @@ function helmetTrim(profile, start, end, minY, maxY, ribbon = false) {
 
 export function createSkier({
   jacket: jacketColor = 0x925041, pants: pantsColor = 0x2e3237,
-  helmet: helmetColor = 0xddd9cc, backpack: backpackColor = 0x353f41, accessories = true,
+  helmet: helmetColor = 0xddd9cc, backpack: backpackColor = 0x24282a, accessories = true,
   snowDetail = false,
 } = {}) {
   const group = new THREE.Group();
@@ -555,36 +556,13 @@ export function createSkier({
     });
   };
   const jacketMesh = put(torso, shapeJacket(shell(jacketProfile, .021, 40, true)), jacket);
-  let rescueTrim, summitBadge;
-  function brandBadge(brand, x, y, width, height) {
-    const {canvas,ctx} = makeCanvas(256, 96);
-    ctx.fillStyle = ctx.strokeStyle = '#edf1f4';
-    ctx.textAlign = 'left';
-    if (brand === 'north-face') {
-      ctx.font = '900 30px Arial';
-      for (const [i, line] of ['THE','NORTH','FACE'].entries()) ctx.fillText(line, 31, 27 + i * 31);
-      ctx.lineWidth = 10;
-      for (const radius of [42,60,78]) {
-        ctx.beginPath();ctx.arc(158, 93, radius, -Math.PI / 2, 0);ctx.stroke();
-      }
-    } else {
-      ctx.font = '700 47px Barlow Condensed, Arial';
-      ctx.fillText("ARC’TERYX", 9, 74, 238);
-    }
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshStandardMaterial({
-      map:canvasTexture(canvas),roughness:.95,transparent:true,alphaTest:.28,
-    }));
-    mesh.position.set(...jacketFront([[x,y],[x,y+.003]],.009)[0]);
-    mesh.rotation.y = x*.92;
-    torso.add(mesh);
-    return mesh;
-  }
+  let rescueTrim, packFace, packMark;
+  const jacketMarks = new Map();
   function patrolTrim() {
     const group = new THREE.Group();
     group.name = 'Patrol shell · high storm collar, bonded pockets and stitched crest';
     torso.add(group);
     const trim = material(0x272d31, .82);
-    const thread = material(0xc4c9c6, .92);
     put(group, shell([[.535,.112,.103,.006],[.58,.114,.111,.009],[.627,.108,.102,.016],
       [.649,.099,.092,.019]], .018, 28), shoulderPanel);
     piping(group, trim, jacketFront([[-.184,.318],[-.092,.331],[0,.332],[.092,.331],[.184,.318]], .009), .0027);
@@ -593,13 +571,6 @@ export function createSkier({
       piping(group, trim, jacketFront([[start,.066],[side*.102,.158],[side*.112,.253],[side*.108,.310]], .009), .0044);
       rounded(group, black, .010,.024,.008, ...jacketFront([[side*.108,.287],[side*.108,.291]],.017)[0], .002);
     }
-    // Embroidered fossil-bird motif and feather stitching on the chest.
-    for (const line of [
-      [[.105,.414],[.091,.418],[.078,.408],[.086,.393],[.107,.383],[.125,.383]],
-      [[.088,.398],[.067,.396],[.049,.382]], [[.086,.398],[.107,.401],[.132,.391]],
-      [[.085,.392],[.065,.382],[.052,.370]], [[.093,.386],[.084,.372],[.072,.369]],
-      [[.098,.388],[.112,.375],[.13,.369]],
-    ]) piping(group, thread, jacketFront(line,.012), .0009);
     return group;
   }
   put(torso, shell([[.495,.103,.082,-.058],[.54,.107,.094,-.067],[.603,.105,.096,-.056],[.657,.089,.083,-.017],[.688,.077,.069,.014]], .026), shoulderPanel);
@@ -617,8 +588,9 @@ export function createSkier({
     // A compact weatherproof pack, with a sewn front panel and tool straps.
     put(torso, shell([[.062,.063,.031,-.158],[.096,.107,.055,-.161],[.15,.127,.062,-.169],
       [.232,.127,.063,-.169],[.317,.126,.055,-.162],[.39,.113,.047,-.156],[.438,.079,.029,-.145]], .027), bag);
-    put(torso, shell([[.096,.053,.018,-.191],[.132,.092,.042,-.198],[.22,.105,.049,-.198],
-      [.298,.101,.043,-.196],[.363,.093,.036,-.180],[.405,.05,.017,-.177]], .028), bagPanel);
+    packMark = embroideredMaterial(bagPanel, 'fossil', 0, .279, .147, true);
+    packFace = put(torso, shell([[.096,.053,.018,-.191],[.132,.092,.042,-.198],[.22,.105,.049,-.198],
+      [.298,.101,.043,-.196],[.363,.093,.036,-.180],[.405,.05,.017,-.177]], .028), packMark);
     for (const side of [-1, 1]) {
       piping(torso, black, [[side*.075,.127,-.224],[side*.099,.222,-.237],[side*.097,.315,-.217],
         [side*.076,.373,-.204],[side*.042,.395,-.194]], .0032);
@@ -1177,15 +1149,14 @@ export function createSkier({
   function setAppearance({ jacket: color, pants: trousers, helmet: shellColor, backpack, sticker, skis, apparel,
     haircut: cut, hairColor, footwear } = {}) {
     const patrol = apparel === 'patrol-shell';
-    if (patrol && !rescueTrim) {
-      rescueTrim = patrolTrim();
-      const text = brandBadge('arcteryx',.091,.352,.080,.031);
-      rescueTrim.add(text);
-    }
+    if (patrol && !rescueTrim) rescueTrim = patrolTrim();
     if (rescueTrim) rescueTrim.visible = patrol;
-    if (apparel === 'summit-shell' && !summitBadge) summitBadge = brandBadge('north-face',.101,.383,.074,.049);
-    if (summitBadge) summitBadge.visible = apparel === 'summit-shell';
     jacket.map = shoulderPanel.map = patrol ? patrolFabric() : cloth.map;
+    const brand = patrol ? 'fossil' : apparel === 'summit-shell' ? 'half-dome' : null;
+    if (brand && !jacketMarks.has(brand)) {
+      jacketMarks.set(brand, embroideredMaterial(jacket, brand, .065, .404, .081));
+    }
+    jacketMesh.material = jacketMarks.get(brand) ?? jacket;
     if (acceptsColor(color)) {
       jacket.color.set(color);
       shoulderPanel.color.copy(jacket.color).multiplyScalar(.58);
@@ -1222,6 +1193,7 @@ export function createSkier({
       const { r, g, b } = bagPanel.color;
       bagDecalMaterial.color.set(.2126 * r + .7152 * g + .0722 * b > .35 ? 0x364048 : 0xe8e2d6);
     }
+    if (packFace && sticker !== undefined) packFace.material = sticker === 'none' ? packMark : bagPanel;
     if (sticker !== undefined) for (const [name, decal] of Object.entries(helmetDecals)) {
       decal.visible = sticker === name;
       if (bagDecals[name]) bagDecals[name].visible = decal.visible;

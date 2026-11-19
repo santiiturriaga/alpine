@@ -5,6 +5,8 @@ import { loadMappedGround, pointInPolygon, runStyle } from './mapped-resort-grou
 import { buildMappedLodges } from './stevens-pass-buildings.js';
 import { buildInternationalLandmarks } from './international-landmarks.js';
 import { buildStevensPassDetails } from './stevens-pass-details.js';
+import { buildExpeditionCamp } from './mapped-expedition-camp.js';
+import { buildTarentaiseLights } from './tarentaise-lights.js';
 import { cacheStaticTransforms } from './scenery.js';
 import { clamp, makeCanvas } from './util.js';
 
@@ -222,15 +224,14 @@ export async function buildMappedResortWorld(scene, config, baseURL, { quality =
   const env = createEnvironment();
   const ground = await loadMappedGround(root, config, baseURL, { quality });
   const lodges = buildMappedLodges(root, config, ground, env, quality);
+  const updateValleyLights = buildTarentaiseLights(root, config, ground, env);
   buildInternationalLandmarks(root, config, ground, env);
   if (config.id === 'stevens-pass') buildStevensPassDetails(root, config, ground, env, pointInPolygon);
-  const forest = await buildMappedForest(root, ground, config, env, quality);
-  const start = config.terrainOnly && config.startPoint
-    ? (() => {
-      const [x,z] = config.startPoint;
-      const [tx,tz] = config.landmarks?.find(spot => spot.kind === 'peak')?.point ?? [x,z+1];
-      return { x, z, heading: Math.atan2(tx-x,tz-z), footMode: true };
-    })()
+  const camp = buildExpeditionCamp(root, config, ground, env);
+  const forestConfig = camp ? { ...config, startPoint: [camp.x, camp.z],
+    landmarkClearings: [...(config.landmarkClearings ?? []), camp.clearing] } : config;
+  const forest = await buildMappedForest(root, ground, forestConfig, env, quality);
+  const start = camp ? { x: camp.x, z: camp.z, heading: camp.heading, footMode: true, runName: camp.runName }
     : chooseStart(config, ground, env);
   const beginner = config.beginnerRun ? chooseStart(config, ground, env, config.beginnerRun, config.beginnerLift) : start;
   ground.startPose = () => ({ ...start });
@@ -252,6 +253,7 @@ export async function buildMappedResortWorld(scene, config, baseURL, { quality =
       forest.update(camera);
       signs.update(camera);
       lodges.updateDetail(camera);
+      updateValleyLights?.();
     },
   };
 }

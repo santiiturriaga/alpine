@@ -1,5 +1,12 @@
 import * as THREE from 'three';
 
+// Direct model previews need a finished group; the world streams the same steps on approach.
+export function finishConstruction(steps) {
+  let step;
+  do { step = steps.next(); } while (!step.done);
+  return step.value;
+}
+
 export function part(geo, color, pos = [0, 0, 0], rot = [0, 0, 0], scale = [1, 1, 1]) {
   return { geo, color, pos, rot, scale };
 }

@@ -4,6 +4,7 @@ import { mulberry32 } from './util.js';
 import { climateUniforms } from './climate-state.js';
 import { coniferBarkMap } from './conifer-bark.js';
 import { attachForestFade, forestQuality, forestDetailTiers } from './forest-lod.js';
+import { bindTreeSnow } from './tree-snow.js';
 
 const TAU = Math.PI * 2, ATLAS_SIZE = 2048, TILE = ATLAS_SIZE / 2, BARK_X = ATLAS_SIZE / 2 - 16;
 const species = {
@@ -195,7 +196,7 @@ export function coniferGeometry(kind, detail = 0, variant = 0) {
 function buildConifer(kind, detail, variant) {
   const spec = species[kind] || species.fir, rand = mulberry32(spec.seed + variant * 7919);
   const positions = [], normals = [], colors = [], anchors = [], uvs = [], deposits = [], indices = [];
-  const vertices = new WeakMap();
+  const vertices = new WeakMap(), trunkAnchors = new WeakMap();
   let snowCenter = null;
   const terminalShoots = [];
   const green = new THREE.Color(spec.color), snow = new THREE.Color(0xe8eff0);
@@ -212,7 +213,7 @@ function buildConifer(kind, detail, variant) {
     vertices.set(p,index);
     indices.push(index);
     positions.push(...p); normals.push(...n); colors.push(c.r, c.g, c.b);
-    anchors.push(...(anchor || p)); uvs.push(...uv);
+    anchors.push(...(trunkAnchors.get(p) || anchor || p)); uvs.push(...uv);
     deposits.push(...(snowCenter || [0,0,0]));
   }
   function tri(a, b, c, na, nb, nc, ca, cb = ca, cc = ca, ua, ub, uc, anchor) {
@@ -250,7 +251,7 @@ function buildConifer(kind, detail, variant) {
   }
 
   function oldGrowthTrunk(anchor) {
-    const heights = [-.042,-.013,-.003,.008,.019,.037,.061,.092,.17,.30,.46,.65,.82,1];
+    const heights = [-.085,-.013,-.003,.008,.019,.037,.061,.092,.17,.30,.46,.65,.82,1];
     const sides = 22;
     const roots = [.06,1.29,2.71,4.04,5.29].map((a, i) => ({
       angle: a + variant * .41 + spec.seed * .001,
@@ -275,6 +276,11 @@ function buildConifer(kind, detail, variant) {
       return Array.from({length:sides+1},(_,i)=>{
         const a = i/sides*TAU;
         const p = trunkPoint(y, a);
+        if (anchor) {
+          const center = trunk(Math.max(0, y));
+          center[1] = y;
+          trunkAnchors.set(p, center);
+        }
         const previous = trunkPoint(y, a - .045), below = trunkPoint(y - .001, a);
         const around = trunkPoint(y, a + .045).map((v,j)=>v - previous[j]);
         const up = trunkPoint(y + .001, a).map((v,j)=>v - below[j]);
@@ -339,11 +345,13 @@ function buildConifer(kind, detail, variant) {
       tri(c.p, d.p, b.p, c.n, d.n, b.n, c.color, d.color, b.color, c.uv, d.uv, b.uv, anchor);
     }
   }
+  const snowDeposits = [];
   function pillow(center, yaw, length, width, phase, anchor, coarse = false) {
     const ux=Math.cos(yaw),uz=Math.sin(yaw),vx=-uz,vz=ux;
     // A deposit follows the loaded bough: a long narrow cap, with a compact
     // hanging lip rather than a round white block over the fine twig work.
     length*=1.02; width*=.62;
+    snowDeposits.push({ center, width });
     const near = detail === -.5 || detail === 0;
     const sides = coarse ? (near ? 7 : 5) : 9;
     const segments = coarse ? (near ? 5 : 3) : 7;
@@ -391,6 +399,7 @@ function buildConifer(kind, detail, variant) {
     geometry.computeBoundingSphere();
     geometry.userData.coniferTier = detail;
     geometry.userData.terminalShoots = terminalShoots;
+    geometry.userData.snowDeposits = snowDeposits;
     return geometry;
   }
 
@@ -560,7 +569,8 @@ const snowDeposition = (regional = false) => `
     * snowpack * (.78+.22*sin(forestOrigin.x*.037+forestOrigin.z*.021));
   float crownRime = deposition*smoothstep(${regional ? '1110.0,1580.0' : '1370.0,1820.0'},forestOrigin.y);
   float stormTree = smoothstep(.31,.94,.5+.5*sin(forestOrigin.x*.057 + forestOrigin.z*.033));
-  float snowLoad = deposition * mix(.44,.83 + .16*stormTree,crownRime);
+  float snowAttached = attachedTreeSnow(forestOrigin.xz);
+  float snowLoad = deposition * mix(.44,.83 + .16*stormTree,crownRime) * snowAttached;
   transformed = mix(transformed, snowCenter + (transformed-snowCenter)*snowLoad, snowVertex);
 `;
 
@@ -572,16 +582,18 @@ export function coniferDepthMaterial() {
   material.onBeforeCompile = shader => {
     shader.uniforms.snowline = climateUniforms.snowline;
     shader.uniforms.snowpack = climateUniforms.snowpack;
+    bindTreeSnow(shader);
     shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
       attribute vec3 snowCenter;
       uniform float snowline;
       uniform float snowpack;
     `).replace('#include <begin_vertex>', `#include <begin_vertex>
       vec4 forestOrigin = modelMatrix * instanceMatrix * vec4(0.,0.,0.,1.);
+      if (position.y < -.07) transformed.y -= 1.55 / max(.2, length(instanceMatrix[1].xyz));
       ${snowDeposition()}
     `);
   };
-  material.customProgramCacheKey = () => 'conifer-cutout-depth';
+  material.customProgramCacheKey = () => 'conifer-cutout-depth-snow-hit';
   return material;
 }
 
@@ -596,6 +608,7 @@ export function coniferMaterial(level = 0, region = null) {
     shader.uniforms.snowpack = climateUniforms.snowpack;
     shader.uniforms.snowline = climateUniforms.snowline;
     shader.uniforms.forestDetail = forestQuality.detail;
+    bindTreeSnow(shader);
     if (level !== -2) {
       shader.uniforms.barkRelief = { value: coniferBarkMap() };
       shader.uniforms.closeNeedles = { value: closeNeedleAtlas };
@@ -721,7 +734,6 @@ export function coniferMaterial(level = 0, region = null) {
       #endif
       forestOrigin = modelMatrix * forestOrigin;
       forestTop = modelMatrix * forestTop;
-      if (position.y < -.07) transformed.y -= 1.55 / max(.2, distance(forestOrigin.xyz,forestTop.xyz));
       ${level === -2 ? '' : 'crownBaseAltitude = forestOrigin.y;'}
       float crownAltitude = max(0.0, max(forestOrigin.y - cameraPosition.y, cameraPosition.y - forestTop.y));
       float forestDistance = length(vec3(cameraPosition.xz - forestOrigin.xz, crownAltitude));
@@ -729,13 +741,14 @@ export function coniferMaterial(level = 0, region = null) {
       float crownPhase = forestOrigin.x*.037 + forestOrigin.z*.021;
       crownShape = vec4(position,crownPhase);
       ${snowDeposition(region === 'regional')}
-      crownSnow = crownRime;
+      crownSnow = crownRime * snowAttached;
       ${detailTier ? `float branchGrowth = 1.0 - smoothstep(${detailTier[0]}.0 * forestDetail, ${detailTier[1]}.0 * forestDetail, forestDistance);
       transformed = mix(branchAnchor, transformed, branchGrowth);` : ''}
+      if (position.y < -.07) transformed.y -= 1.55 / max(.2, distance(forestOrigin.xyz,forestTop.xyz));
     `);
     if (region) attachForestFade(shader,region,level !== -2);
     if (level !== -2) attachChaseFoliage(shader);
   };
-  material.customProgramCacheKey = () => `conifer-needle-branches-${level}-${region}-v23`;
+  material.customProgramCacheKey = () => `conifer-needle-branches-${level}-${region}-v24`;
   return material;
 }

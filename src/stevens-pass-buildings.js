@@ -4,6 +4,7 @@ import { pointInPolygon, segmentDistance } from './mapped-resort-ground.js';
 import { liftPoint } from './mapped-lift-profile.js';
 import { makeTextTexture, mulberry32 } from './util.js';
 import { cacheStaticTransforms } from './scenery.js';
+import { climateUniforms } from './climate-state.js';
 
 const profiles = {
   'granite-peaks-lodge': {
@@ -25,6 +26,11 @@ const profiles = {
   },
 };
 const standardProfile = { walls: 0x766859, trim: 0x4e4134, roof: 0x414641, eave: 3.35, pitch: .37 };
+const savoieProfiles = [
+  { walls: 0x806249, trim: 0x4a352a, roof: 0x414448, eave: 4.75, pitch: .49 },
+  { walls: 0x685649, trim: 0x3c332a, roof: 0x3b444a, eave: 5.35, pitch: .43 },
+  { walls: 0x9c8871, trim: 0x503d30, roof: 0x4a4a49, eave: 4.40, pitch: .54 },
+];
 
 function textureSurface(color, kind, extra = {}) {
   const material = new THREE.MeshStandardMaterial({ color, roughness: .87, ...extra });
@@ -269,12 +275,12 @@ function batchSurfaces(group) {
   };
 }
 
-function windowBays(add, trim, glasses, { x, y, z, width, height, yaw, seed }) {
+function windowBays(add, trim, glasses, { x, y, z, width, height, yaw, seed, addGlass = add }) {
   const fill = glasses[Math.floor(seed * glasses.length)];
   const ux = Math.cos(yaw), uz = -Math.sin(yaw);
   const nx = Math.sin(yaw), nz = Math.cos(yaw);
   add(trim, x, y, z, width + .18, height + .16, .15, yaw);
-  add(fill, x + nx * .095, y, z + nz * .095, width, height, .06, yaw);
+  addGlass(fill, x + nx * .095, y, z + nz * .095, width, height, .06, yaw);
   const divisions = width > 2.9 ? 3 : 2;
   for (let i = 1; i < divisions; i++) {
     const u = width * (i / divisions - .5);
@@ -312,6 +318,11 @@ export function buildMappedLodges(scene, config, ground, env, initialQuality = '
   const glasses = [0x42585e, 0x546267, 0x637775, 0x816754, 0x978569].map((color, i) =>
     new THREE.MeshStandardMaterial({ color, roughness: .36, metalness: .14,
       emissive: i > 2 ? 0xdf9e58 : 0x829eb0, emissiveIntensity: i > 2 ? .19 : .07 }));
+  const savoy = config.id === 'les-3-vallees';
+  const villageWindows = savoy ? batchBoxes(group, true) : null;
+  const warmGlasses = savoy ? [0x3a3d46, 0x664a35, 0x836345, 0xac824e, 0x76706c].map((color, i) =>
+    new THREE.MeshStandardMaterial({ color, roughness: .47, emissive: i === 4 ? 0xd4c3ac : 0xffb66c,
+      emissiveIntensity: .05 })) : glasses;
   const orange = new THREE.MeshStandardMaterial({ color: 0xa8471e, roughness: .76 });
   const navy = new THREE.MeshStandardMaterial({ color: 0x1c4d9c, roughness: .79, side: THREE.DoubleSide });
   const white = new THREE.MeshStandardMaterial({ color: 0xc9c6b8, roughness: .79, side: THREE.DoubleSide });
@@ -334,7 +345,10 @@ export function buildMappedLodges(scene, config, ground, env, initialQuality = '
     if (replacesLiftTerminal(building, points, basis, terminals)) continue;
     const precise = profiles[building.id] || Object.values(profiles).find(p =>
       p.title === building.name?.toUpperCase()) || (/ski (and|&) ride school|ski.+snowboard school/i.test(building.name) ? profiles.school : null);
-    const profile = precise || standardProfile;
+    const [cx, cz] = basis.center;
+    const chalet = savoy && !precise && cx > -4400 && cx < -1060 && cz > -11600 && cz < -3960;
+    const church = chalet && building.kind === 'church';
+    const profile = precise || (chalet ? savoieProfiles[Math.floor(rand() * savoieProfiles.length)] : standardProfile);
     const addFacade = precise ? add : facadeBoxes.add;
     if (!palette.has(profile)) palette.set(profile,{
       trim: textureSurface(profile.trim, 'wood', { side: THREE.DoubleSide }),
@@ -342,13 +356,13 @@ export function buildMappedLodges(scene, config, ground, env, initialQuality = '
       roof: new THREE.MeshStandardMaterial({ color: profile.roof, roughness: .74, side: THREE.DoubleSide }),
     });
     const { trim,walls,roof } = palette.get(profile);
-    const [cx, cz] = basis.center;
     const addShape = surfaces?.at(cx,cz) ?? ((vertices,material)=>shapeMesh(group,vertices,material));
     const cy = ground.heightAt(cx, cz);
     const base = cy + .08;
-    const eave = base + (building.height ? Math.min(16, building.height * .76) : profile.eave);
+    const storeys = chalet && (building.levels || (basis.width * basis.depth > 420 ? 3 : 2));
+    const eave = base + (building.height ? Math.min(16, building.height * .76) : storeys > 2 ? Math.min(13, storeys * 2.48) : profile.eave);
     const pitch = Math.min(profile.pitch, 10.8 / basis.depth);
-    const overhang = precise?.eaveOverhang ?? (precise ? .78 : .34);
+    const overhang = precise?.eaveOverhang ?? (precise ? .78 : chalet ? .65 : .34);
     const { outline, roofY: riseAt } = snowRoof(addShape, points, basis, eave, pitch, overhang, roof, snow);
     const ridge = eave + pitch * (basis.depth * .5 + overhang);
     roofs.add(outline, ridge + (precise?.balcony ? 1.66 : .34));
@@ -376,7 +390,7 @@ export function buildMappedLodges(scene, config, ground, env, initialQuality = '
       const yaw = Math.atan2(nx, nz);
       const hw = length * .5;
       const localGround = ground.heightAt(x + nx * 1.2, z + nz * 1.2);
-      const rockTop = Math.min(eave - 1.1, Math.max(base + .7, localGround + .27));
+      const rockTop = Math.min(eave - 1.1, Math.max(base + (chalet ? 1.24 : .7), localGround + .27));
       for (let i = 0; i < steps; i++) {
         const f = i / steps, g = (i + 1) / steps;
         const p = [ax + dx * f, az + dz * f], q = [ax + dx * g, az + dz * g];
@@ -400,19 +414,32 @@ export function buildMappedLodges(scene, config, ground, env, initialQuality = '
         piece(trim, 0, eave - .15, .025, length, .31, .19);
         for (const u of [-hw + .13, hw - .13]) piece(trim, u, (eave + rockTop) * .5, .085, .21, eave - rockTop, .22);
       }
-      if (!precise && length < 7.5) continue;
-      const bays = Math.floor(length / (precise ? 4.25 : 5.1));
+      if (!precise && length < (chalet ? 4.6 : 7.5)) continue;
+      const bays = Math.max(1, Math.floor(length / (precise ? 4.25 : chalet ? 4.7 : 5.1)));
       const width = length / (bays || 1);
-      for (let floor = 0; floor < (precise && profile.eave > 6 ? 2 : 1); floor++) {
-        const y = base + (floor ? 4.82 : 2.10);
+      const floors = chalet && !church ? Math.min(4, Math.max(1, Math.floor((eave - base - .15) / 2.10)))
+        : precise && profile.eave > 6 ? 2 : 1;
+      for (let floor = 0; floor < floors; floor++) {
+        const y = base + (chalet ? 2.10 + 2.19 * floor : floor ? 4.82 : 2.10);
         if (y < rockTop + .45 || y > eave - .72) continue;
         for (let j = 0; j < bays; j++) {
           const door = yard && !floor && j === Math.floor(bays / 2);
           const u = -hw + width * (j + .5);
           const [wx, wy, wz] = local(u, door ? Math.max(base, localGround) + 1.23 : y, .05);
-          windowBays(addFacade, trim, glasses, { x: wx, y: wy, z: wz, width: door ? Math.min(2.2, width * .65) : width * .70,
-            height: door ? 2.35 : floor ? 1.70 : 1.32, yaw, seed: rand() });
+          windowBays(addFacade, trim, chalet && !church ? warmGlasses : glasses,
+            { x: wx, y: wy, z: wz, width: door ? Math.min(2.2, width * .65) : width * (chalet ? .49 : .70),
+              height: door ? 2.30 : floor && !chalet ? 1.70 : 1.32, yaw, seed: rand(),
+              addGlass: chalet ? villageWindows.add : addFacade });
           if (floor && profile.ticket) piece(iron, u, y + 1.15, .12, .16, .27, .28);
+        }
+        if (chalet && !church && yard && floor && length > 7 && rand() < .72) {
+          const balcony = length * .71, deck = y - .70;
+          piece(trim,0,deck,.59,balcony,.17,1.18);
+          piece(snow,0,deck+.1,.60,balcony,.065,1.15);
+          piece(trim,0,deck+.80,1.17,balcony,.065,.09);
+          piece(trim,0,deck+.29,1.17,balcony,.07,.09);
+          const spans = Math.ceil(balcony / .54);
+          for (let k = 0; k <= spans; k++) piece(trim,balcony*(k/spans-.5),deck+.45,1.17,.039,.72,.043);
         }
       }
       if (!precise || !yard || length < 9) continue;
@@ -495,6 +522,22 @@ export function buildMappedLodges(scene, config, ground, env, initialQuality = '
     }
     addShape(foundation, stone);
     addShape(siding, walls);
+    if (church) {
+      const [px,pz] = centroid;
+      const roofY = riseAt(centroid);
+      const lower = roofY - 1.35, upper = roofY + 3.55, half = 1.46;
+      add(stone, px, (lower+upper)/2, pz, half*2, upper-lower, half*2);
+      for (const side of [-1,1]) {
+        add(iron, px+side*(half+.018), upper-1.09, pz, .045, 1.25, .62);
+        add(iron, px, upper-1.09, pz+side*(half+.018), .62, 1.25, .045);
+      }
+      const cap = [[px-1.68,upper,pz-1.68],[px+1.68,upper,pz-1.68],
+        [px+1.68,upper,pz+1.68],[px-1.68,upper,pz+1.68]];
+      const spire = [px,upper+3.1,pz];
+      addShape(cap.flatMap((point,i) => [...point,...cap[(i+1)%4],...spire]),roof);
+      add(iron, px, spire[1]+.39, pz, .075, .84, .075);
+      add(iron, px, spire[1]+.56, pz, .45, .075, .075);
+    }
     if (precise?.balcony && points.length > 3) {
       const [px, pz] = centroid;
       const chimneyY = riseAt([px, pz]);
@@ -505,6 +548,8 @@ export function buildMappedLodges(scene, config, ground, env, initialQuality = '
   if (clock) buildClock(group, clock.point, ground, env, add, snow, stone, orange, iron);
   surfaces?.flush();
   boxes.flush();
+  const windowMeshes = villageWindows?.flush() ?? [];
+  for (const mesh of windowMeshes) mesh.castShadow = false;
   const facadeMeshes = spatial ? facadeBoxes.flush() : [];
   let budget = initialQuality === 'BUDGET', lastX = Infinity, lastZ = Infinity;
   function setQuality(name) {
@@ -513,6 +558,11 @@ export function buildMappedLodges(scene, config, ground, env, initialQuality = '
     lastX = lastZ = Infinity;
   }
   function update(camera) {
+    if (savoy) {
+      const night = climateUniforms.night.value;
+      const brightness = [.025, .59, 1.29, 1.85, .43];
+      warmGlasses.forEach((material,i) => { material.emissiveIntensity = .018 + night*brightness[i]; });
+    }
     const { x, z } = camera.position;
     if (Number.isFinite(lastX) && (!budget || (lastX - x) ** 2 + (lastZ - z) ** 2 < 32 ** 2)) return;
     lastX = x;

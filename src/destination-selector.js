@@ -1,8 +1,16 @@
-import { createDestinationRelief, drawDestinationRelief, loadDestinationReliefs } from './destination-relief.js';
+import { createDestinationRelief, drawDestinationRelief, hitDestinationRelief, loadDestinationReliefs } from './destination-relief.js';
 
 const $ = id => document.getElementById(id);
 const TAU = Math.PI * 2;
-const DEFAULT_ANGLE = .54;
+const DEFAULT_ANGLE = -.91;
+const OPENING_ANGLES = {
+  'whistler-blackcomb': -2.52,
+  'stevens-pass': -2.5,
+  'matterhorn': 4.19,
+  'eiger': -2.55,
+  'mount-rainier': .68,
+  'everest': .71,
+};
 
 function populatePicker(picker, places) {
   const resorts = document.createElement('optgroup');
@@ -22,12 +30,13 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
   const travel = $('destination-travel');
   const status = $('destination-preview-status');
   const rotatePreview = $('destination-rotate');
+  const routesKey = $('destination-route-key');
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const wrap = i => (i % places.length + places.length) % places.length;
-  let selected = places.indexOf(current);
+  let selected = Math.max(0, places.findIndex(place => place.id === current.id));
   let records, pending, previewError = false;
-  let pointer, suppressClickUntil = 0, idleUntil = 0;
-  let hovered, lastWheelEvent = 0, lastWheelStep = 0, wheelTravel = 0;
+  let pointer, suppressClick = false, idleUntil = 0;
+  let lastWheelEvent = 0, lastWheelStep = 0, wheelTravel = 0;
   let frame = 0, lastFrame = 0;
 
   const tiles = places.map((place, index) => {
@@ -44,19 +53,10 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
     canvas.setAttribute('aria-hidden', 'true');
     label.textContent = place.label;
     button.append(canvas, label);
-    button.addEventListener('click', event => {
-      if (event.detail && performance.now() < suppressClickUntil) return;
-      if (index !== selected) select(index);
-    });
-    button.addEventListener('pointerenter', event => {
-      if (event.pointerType === 'mouse') hovered = index;
-    });
-    button.addEventListener('pointerleave', () => {
-      if (hovered === index) hovered = undefined;
-    });
     $('destination-models').append(button);
-    return { place, button, canvas, angle: DEFAULT_ANGLE, displayedAt: null };
+    return { place, button, canvas, angle: OPENING_ANGLES[place.id] ?? DEFAULT_ANGLE, displayedAt: null };
   });
+  let hitOrder = [];
 
   function layout(turn = 0) {
     for (let index = 0; index < tiles.length; index++) {
@@ -72,8 +72,11 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
       button.style.zIndex = String(10 - Math.round(gap * 2));
       button.setAttribute('aria-hidden', String(!visible));
       button.setAttribute('aria-current', String(index === selected));
+      tiles[index].gap = gap;
       if (visible && records) renderTile(index);
     }
+    hitOrder = tiles.map((_, i) => i).filter(i => tiles[i].gap < 2.65)
+      .sort((a, b) => Number(tiles[b].button.style.zIndex) - Number(tiles[a].button.style.zIndex) || b - a);
   }
 
   function renderTile(index) {
@@ -83,13 +86,13 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
       if (!record) return;
       tile.model = createDestinationRelief(record);
     }
-    const width = index === selected ? 700 : 330;
+    const width = index === selected ? 840 : 350;
     if (tile.displayedAt === tile.angle && tile.canvas.width === width) return;
     if (tile.canvas.width !== width) {
       tile.canvas.width = width;
       tile.canvas.height = Math.round(width * 470 / 700);
     }
-    drawDestinationRelief(tile.canvas, tile.model, tile.angle);
+    drawDestinationRelief(tile.canvas, tile.model, tile.angle, index === selected);
     tile.displayedAt = tile.angle;
   }
 
@@ -108,7 +111,9 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
     $('destination-name').textContent = place.label;
     $('destination-country').textContent = place.country;
     picker.value = place.id;
-    travel.textContent = !standalone && place === current ? 'Stay here' : place.terrainOnly ? 'Visit mountain' : 'Travel to resort';
+    travel.textContent = !standalone && place.id === current.id ? 'Stay here' : place.terrainOnly ? 'Visit mountain' : 'Travel to resort';
+    routesKey.hidden = Boolean(place.terrainOnly);
+    idleUntil = performance.now() + 1250;
     showStatus();
     layout();
   }
@@ -116,17 +121,13 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
   function animate(now) {
     frame = 0;
     if (!dialog.open || !records || reduceMotion.matches) return;
-    if (now - lastFrame >= 42) {
-      const elapsed = Math.min(.08, (now - lastFrame) / 1000);
+    if (now - lastFrame >= 67) {
+      const elapsed = Math.min(.12, (now - lastFrame) / 1000);
       lastFrame = now;
       if (!pointer && now > idleUntil) {
         const tile = tiles[selected];
-        tile.angle = (tile.angle + elapsed * .22) % TAU;
+        tile.angle = (tile.angle + elapsed * .17) % TAU;
         renderTile(selected);
-      }
-      if (!pointer && hovered !== undefined && hovered !== selected) {
-        tiles[hovered].angle = (tiles[hovered].angle + elapsed * .35) % TAU;
-        renderTile(hovered);
       }
     }
     frame = requestAnimationFrame(animate);
@@ -174,38 +175,56 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
 
   function go() {
     const place = places[selected];
-    if (!standalone && place === current) close();
+    if (!standalone && place.id === current.id) close();
     else location.assign(travelURL(place, { arrive: true }));
   }
 
-  function dragDistance(event) {
-    const dx = event.clientX - pointer.x;
-    const dy = event.clientY - pointer.y;
-    return pointer.kind === 'touch' && Math.abs(dy) > Math.abs(dx) ? -dy : -dx;
+  function hitTile(event) {
+    const tile = event.target.closest?.('.destination-tile');
+    if (tile && tile.getAttribute('aria-hidden') === 'false') {
+      return places.findIndex(place => place.id === tile.dataset.destination);
+    }
+    // The relief and its box occupy different regions. Scan near-to-far so a
+    // transparent part of the center canvas cannot steal a neighbouring peak.
+    for (const index of hitOrder) {
+      const { canvas, model } = tiles[index];
+      if (!model) continue;
+      const rect = canvas.getBoundingClientRect();
+      const u = (event.clientX - rect.left) / rect.width;
+      const v = (event.clientY - rect.top) / rect.height;
+      if (u < 0 || u >= 1 || v < 0 || v >= 1) continue;
+      if (hitDestinationRelief(model, u * canvas.width, v * canvas.height)) return index;
+    }
+    return -1;
   }
 
   stage.addEventListener('pointerdown', event => {
     if (!event.isPrimary || event.button !== 0 || pointer || rotatePreview.contains(event.target)) return;
+    suppressClick = false;
     const kind = event.pointerType;
-    const rotate = kind !== 'touch' && event.target.closest('[aria-current="true"]') !== null;
-    pointer = { id: event.pointerId, kind, rotate, x: event.clientX, y: event.clientY,
+    const rotate = kind !== 'touch' && hitTile(event) === selected;
+    pointer = { id: event.pointerId, kind, rotate, x: event.clientX, y: event.clientY, axis: 'x',
       angle: tiles[selected].angle, moved: false, turn: 0 };
   });
 
   stage.addEventListener('pointermove', event => {
     if (pointer?.id !== event.pointerId) return;
-    const xy = Math.max(Math.abs(event.clientX - pointer.x), Math.abs(event.clientY - pointer.y));
-    if (!pointer.moved && xy < 7) return;
+    const dx = event.clientX - pointer.x;
+    const dy = event.clientY - pointer.y;
+    if (!pointer.moved && Math.hypot(dx, dy) < 7) return;
     if (!pointer.moved) {
       pointer.moved = true;
+      if (pointer.kind === 'touch' && Math.abs(dy) > Math.abs(dx)) pointer.axis = 'y';
       stage.setPointerCapture(event.pointerId);
       stage.classList.add('is-dragging');
     }
     if (pointer.rotate) {
-      tiles[selected].angle = (pointer.angle - (event.clientX - pointer.x) * .013) % TAU;
+      tiles[selected].angle = (pointer.angle - dx * .011) % TAU;
       if (records) renderTile(selected);
     } else {
-      pointer.turn = Math.max(-2, Math.min(2, dragDistance(event) / Math.min(245, stage.clientWidth * .51)));
+      const distance = pointer.axis === 'y' ? dy : dx;
+      const span = pointer.axis === 'y' ? stage.clientHeight : stage.clientWidth;
+      pointer.turn = Math.max(-2, Math.min(2, -distance / Math.min(245, span * .51)));
       layout(pointer.turn);
     }
   });
@@ -216,7 +235,7 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
     pointer = undefined;
     stage.classList.remove('is-dragging');
     if (!moved) return;
-    suppressClickUntil = performance.now() + 300;
+    suppressClick = true;
     idleUntil = performance.now() + 1600;
     if (!cancelled && !rotate && Math.abs(turn) >= .18) {
       select(selected + Math.sign(turn) * Math.max(1, Math.round(Math.abs(turn))));
@@ -225,13 +244,18 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
     }
   }
 
-  stage.addEventListener('pointerup', finishDrag);
+  stage.addEventListener('pointerup', event => finishDrag(event));
   stage.addEventListener('pointercancel', event => finishDrag(event, true));
   stage.addEventListener('lostpointercapture', event => {
     if (event.target === stage) finishDrag(event, true);
   });
   stage.addEventListener('pointerleave', event => {
     if (!pointer?.moved) finishDrag(event, true);
+  });
+  stage.addEventListener('click', event => {
+    if ((event.detail && suppressClick) || rotatePreview.contains(event.target)) return;
+    const index = hitTile(event);
+    if (index !== -1 && index !== selected) select(index);
   });
 
   dialog.addEventListener('wheel', event => {
@@ -264,7 +288,7 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
   dialog.addEventListener('close', () => {
     cancelAnimationFrame(frame);
     frame = 0;
-    pointer = hovered = undefined;
+    pointer = undefined;
     stage.classList.remove('is-dragging');
   });
   reduceMotion.addEventListener('change', resumeAnimation);

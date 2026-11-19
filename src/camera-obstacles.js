@@ -58,9 +58,12 @@ function canopyFraction(tree, x, y, z, dx, dy, dz, length) {
   const t = (ox * dx + oz * dz) / horizontal;
   const onArm = Math.max(0, Math.min(1, t));
   const height = tree.apex ?? tree.height;
+  // Evergreen and broadleaf stands store the horizontal crown scale separately.
+  const width = tree.stretch ?? tree.spread ?? tree.width;
+  if (!(height > 0 && width > 0) || !Number.isFinite(tree.y)) return 1;
   const level = (y + onArm * dy - tree.y) / height;
   if (level < -.03 || level >= .98) return 1;
-  const radius = height * (tree.stretch ?? tree.spread) * .23 * (1 - Math.max(0, level)) ** .85;
+  const radius = height * width * .23 * (1 - Math.max(0, level)) ** .85;
   const distance = Math.hypot(ox - onArm * dx, oz - onArm * dz);
   if (distance >= radius) return 1;
   const sideSq = (ox - t * dx) ** 2 + (oz - t * dz) ** 2;

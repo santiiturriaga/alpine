@@ -17,12 +17,13 @@ import { climateUniforms } from './climate-state.js';
 import { buildNeedleShoots } from './needle-shoots.js';
 import { ForestCell, batchBudgetForestCrowns, forestDetailTiers, forestQuality, makeForestCrowns, shareForestInstances } from './forest-lod.js';
 import { coniferInView, crownDistanceSquared, forestView, setConiferBounds } from './forest-culling.js';
+import { makeForestUndergrowth } from './forest-undergrowth.js';
 import { part, box, beam, cacheStaticTransforms, mergeParts, mergedMesh } from './scenery.js';
 import { buildResortPeople } from './resort-people.js';
 import { buildRoundhouseArrival } from './roundhouse.js';
-import { buildFairmont,FAIRMONT_REPLACED_IDS } from './fairmont.js';
+import { stageFairmont,FAIRMONT_REPLACED_IDS } from './fairmont.js';
 import { roofHeights } from '../data/roof-heights.js';
-import { buildCreeksideVillage,CREEKSIDE_BUILDING_IDS } from './creekside-village.js';
+import { stageCreeksideVillage, creeksideFloor, CREEKSIDE_BUILDING_IDS } from './creekside-village.js';
 import { buildSkiersPlaza, SKIERS_PLAZA_BUILDING_IDS } from './skiers-plaza.js';
 import { buildSummitLandmarks, buildAlpineChairStation } from './alpine-landmarks.js';
 import { buildingData } from '../data/osm-whistler.js';
@@ -210,7 +211,7 @@ function buildForest(scene, grid, rand, detail) {
   const silhouetteMaterial = coniferMaterial(-2, 'mapped');
   const shadowMaterial = coniferDepthMaterial();
   const setTree = (mesh, index, tree) => {
-    dummy.position.set(tree.x, tree.y - 0.1, tree.z);
+    dummy.position.set(tree.x, tree.y, tree.z);
     dummy.scale.set(tree.apex * tree.stretch, tree.apex, tree.apex * tree.stretch);
     dummy.rotation.set(0, tree.yaw, 0);
     dummy.updateMatrix();
@@ -364,6 +365,13 @@ function buildForest(scene, grid, rand, detail) {
   const base = makeDetail(-.5), mid = makeDetail(1), close = makeDetail(2);
   const detailMeshes = [...base,...mid,...close];
   const updateNeedles = buildNeedleShoots(group,grid,species,close);
+  const updateUndergrowth = makeForestUndergrowth(group, {
+    region: 'whistler-blackcomb',
+    heightAt,
+    treesAt: (x, z, radius) => grid.query(x, z, radius),
+    permits: (x, z) => landCoverAt(x, z) === 10 && pisteAt(x, z) < .18
+      && slopeAt(x, z) < .42 && !grid.buildingsAt(x, z).length,
+  });
   const lastEye = new THREE.Vector3(Infinity,Infinity,Infinity);
   const footprint = new Float64Array(6);
   let candidates = [], lastView, viewRevision;
@@ -384,6 +392,7 @@ function buildForest(scene, grid, rand, detail) {
   }
   function updateDetail(camera) {
     const eye = camera.position;
+    updateUndergrowth(camera, forestQuality.name);
     updateNeedles(eye);
     const scale = forestQuality.detail.value;
     const moved = scale !== detailScale || lastEye.distanceToSquared(eye) >= 25;
@@ -2214,27 +2223,41 @@ function buildVillage(scene, grid, district = null, detail = null) {
 // At summit distance the surveyed building envelopes occupy only a few pixels.
 // Construct their architectural details and walk surfaces on approach, before entry.
 function resortDistrict(scene, grid, ids, x, z, build, detail) {
-  const load = () => build(scene, { grid });
-  let district = compactDevice || detail.budget ? null : load();
+  let district, steps;
+  function assemble(deadline) {
+    if (district) return;
+    steps ??= build(scene, { grid });
+    do {
+      const step = steps.next();
+      if (step.done) {
+        district = step.value;
+        steps = null;
+        return;
+      }
+    } while (performance.now() < deadline);
+  }
+  if (!compactDevice && !detail.budget) assemble(Infinity);
   let outline = district ? null : buildVillage(scene, null, ids);
   const distanceSquared = (px, pz) => (px - x) ** 2 + (pz - z) ** 2;
   return {
     get group() { return district?.group; },
     update(dt, time, camera) {
       const distance = camera ? distanceSquared(camera.position.x, camera.position.z) : 0;
-      const near = (!detail.budget && (!!district || !compactDevice)) ||
-        distance < (district?.group.visible ? 1450 : 1200) ** 2;
-      if (near) district ??= load();
-      else outline ??= buildVillage(scene, null, ids);
+      if (!district && (distance < 2100 ** 2 || (!detail.budget && !compactDevice))) {
+        assemble(performance.now() + 2);
+      }
+      const near = !!district && (!detail.budget || distance < (district.group.visible ? 1450 : 1200) ** 2);
+      if (!near) outline ??= buildVillage(scene, null, ids);
       if (outline) outline.visible = !near;
       if (district) district.group.visible = near;
       if (near) district.update(dt, time, camera);
     },
-    walkSurfaceAt(px, pz, y) {
-      // Direct arrivals and lift exits may ask for the floor before the next
-      // render updates the district.
-      if (!district && distanceSquared(px, pz) < 1200 ** 2) district = load();
-      return district?.walkSurfaceAt?.(px, pz, y);
+    async prepareArrival(px, pz) {
+      if (distanceSquared(px, pz) > 240 ** 2) return;
+      while (!district) {
+        assemble(performance.now() + 5);
+        if (!district) await frame();
+      }
     },
   };
 }
@@ -2468,8 +2491,8 @@ export async function buildEnvironment(scene, { onProgress = () => {}, quality }
   const updateSummitSigns = buildSummitLandmarks(scene);
   roundhouseArrival.update(0);
   updateSummitSigns(0);
-  const fairmont = resortDistrict(scene, grid, FAIRMONT_REPLACED_IDS, 523, -434, buildFairmont, detail);
-  const creeksideVillage = resortDistrict(scene, grid, CREEKSIDE_BUILDING_IDS, -2549, 2071, buildCreeksideVillage, detail);
+  const fairmont = resortDistrict(scene, grid, FAIRMONT_REPLACED_IDS, 523, -434, stageFairmont, detail);
+  const creeksideVillage = resortDistrict(scene, grid, CREEKSIDE_BUILDING_IDS, -2549, 2071, stageCreeksideVillage, detail);
   const interiors = buildLodgeInteriors(scene, grid);
 
   onProgress(0.65, 'Hanging the trail signs…');
@@ -2519,8 +2542,11 @@ export async function buildEnvironment(scene, { onProgress = () => {}, quality }
     scene, grid, forest, markers, lifts, flags, finishArches, interiors, stationOperations, people, fairmont, creeksideVillage, skiersPlaza,
     alpineCliffs, glacierCave,
     walkSurfaceAt(x, z, y) {
-      return glacierCave.walkSurfaceAt(x,z,y) ?? skiersPlaza.walkSurfaceAt(x,z,y) ?? creeksideVillage.walkSurfaceAt(x,z,y)
+      return glacierCave.walkSurfaceAt(x,z,y) ?? skiersPlaza.walkSurfaceAt(x,z,y) ?? creeksideFloor(x,z,y)
         ?? roundhouseArrival.walkSurfaceAt(x,z,y) ?? interiors.walkSurfaceAt(x,z,y);
+    },
+    async prepareArrival({ x, z }) {
+      await Promise.all([fairmont.prepareArrival(x, z), creeksideVillage.prepareArrival(x, z)]);
     },
     raisedPadAt: roundhouseArrival.raisedPadAt,
     interiorAt(x, z, y) { return glacierCave.interiorAt(x,z,y) ?? interiors.interiorAt(x,z,y); },

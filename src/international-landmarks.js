@@ -5,6 +5,7 @@ import { pointInPolygon } from './mapped-resort-ground.js';
 import { makeTextTexture } from './util.js';
 import { finishLandmarkMaterial } from './international-landmark-materials.js';
 import { buildNisekoLandmarks } from './niseko-landmarks.js';
+import { createIcicles, createRoofSnow } from './roof-weather.js';
 
 const concrete = '#a5a49d', snow = '#e1e8e9', trim = '#a9b6bf';
 const steel = '#596970', iron = '#333d43', zinc = '#b9c2c6';
@@ -205,7 +206,15 @@ function anteroom(m, x, z, y, w, d, height, { liftMouth = false, skirtDepth = In
   const left = x - w / 2, right = x + w / 2, front = z - d / 2, back = z + d / 2;
   const roof = y + height;
   m.block(w + .45, .27, d + .46, '#808487', x, roof, z);
-  m.block(w + .06, .09, d + .12, snow, x, roof + .18, z);
+  const top = roof+.137;
+  const edge = [left-.17,right+.17,front-.17,back+.17];
+  m.group.add(createRoofSnow([[edge[0],top,edge[2]],[edge[1],top,edge[2]],
+    [edge[1],top,edge[3]],[edge[0],top,edge[3]]],
+  { seed: 29001+Math.round(w*61), depth: parapet ? .31 : .24, spacing: .72, overhang: .10 }));
+  for (const px of edge.slice(0,2)) {
+    m.group.add(createIcicles([px,roof+.024,edge[2]], [px,roof+.024,edge[3]],
+      { seed: 1905+Math.round(Math.abs(px)*17), spacing: .69, length: .23 }));
+  }
   const glass = ['#3a5366', '#526e7a', '#46606a', '#67767a', '#3d596d', '#637983'];
   const faces = [[left, front, left, back], [right, back, right, front], [left, back, right, back]];
   if (!liftMouth) faces.push([right, front, left, front]);

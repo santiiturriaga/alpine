@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { coniferDepthMaterial, coniferGeometry, coniferMaterial } from './conifers.js';
 import { batchMaxForestCrowns, forestDetailTiers, makeForestCrowns, preloadForestCrowns } from './forest-lod.js';
 import { coniferInView, crownDistanceSquared, forestView, setConiferBounds } from './forest-culling.js';
+import { makeForestUndergrowth } from './forest-undergrowth.js';
 import { pointInPolygon, runStyle, segmentDistance } from './mapped-resort-ground.js';
 import { stevensTraverseTrees, STEVENS_POWERLINE } from './stevens-pass-details.js';
 import { hash2, smoothstep } from './util.js';
@@ -105,6 +106,8 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
   group.name = 'Mapped woodland and ski clearings';
   scene.add(group);
   const { minX, minZ, maxX, maxZ } = ground.bounds;
+  const cascadeHorizon = config.id === 'snoqualmie' && !!config.forest.survey;
+  const beyond = cascadeHorizon ? 1800 : 0;
   // Keep the close spacing around ski terrain even on multi-valley maps.
   // Wide background stands use fewer sample points and larger draw batches.
   const footprint = (maxX - minX) * (maxZ - minZ);
@@ -132,17 +135,20 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
     if (!env.isOpen(x, y + .4, z, 2.6)) continue;
     plant({ x, y, z, height, kind: 2, yaw: hash2(x, z, 2131) * Math.PI * 2, spread: 1.06, tint: hash2(x, z, 311) });
   }
-  function sample(ix, iz) {
+  function sample(ix, iz, regional = false) {
     const x = (ix + .12 + .76 * hash2(ix, iz, 747)) * TREE_SPACING;
     const z = (iz + .12 + .76 * hash2(ix, iz, 519)) * TREE_SPACING;
-    if (x > maxX - 2 || z > maxZ - 2) return;
+    if (regional ? x >= minX && x < maxX && z >= minZ && z < maxZ : x > maxX - 2 || z > maxZ - 2) return;
     const cover = ground.forestAt(x, z);
     const patchiness = .73 + .27 * Math.sin(x * .009 - z * .014 + Math.sin(z * .035) * .9) ** 2;
-    if (hash2(ix, iz, 1291) > smoothstep(.10, .84, cover) * patchiness || excluded(x, z)) return;
+    const edge = Math.max(minX-x, x-maxX, minZ-z, z-maxZ);
+    const fringe = regional ? 1 - smoothstep(beyond*.29, beyond, edge) : 1;
+    if (hash2(ix, iz, 1291) > smoothstep(.10, .84, cover) * patchiness * fringe || excluded(x, z)) return;
     const y = ground.heightAt(x, z, normal, true);
     if (normal.y < .56) return;
     if (config.id === 'stevens-pass' && !env.isOpen(x, y + .4, z, 1.4)) return;
-    ground.sampleStand?.(x, z, standSample);
+    if (regional) standSample[0] = standSample[1] = 0;
+    else ground.sampleStand?.(x, z, standSample);
     const observed = standSample[0];
     const wind = observed >= 1 ? 1 - smoothstep(5, 19, observed) : smoothstep(1430, 1900, y);
     const age = hash2(ix, iz, 1923);
@@ -173,10 +179,26 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
     }
   }
 
+  if (cascadeHorizon) {
+    const spacing = 3;
+    for (let iz = Math.ceil((minZ-beyond)/TREE_SPACING); iz < (maxZ+beyond)/TREE_SPACING; iz += spacing) {
+      for (let ix = Math.ceil((minX-beyond)/TREE_SPACING); ix < (maxX+beyond)/TREE_SPACING; ix += spacing) {
+        if (ix >= minX/TREE_SPACING && ix+spacing < lastX && iz >= minZ/TREE_SPACING && iz+spacing < lastZ) continue;
+        sample(ix + Math.floor(hash2(ix,iz,103)*spacing), iz + Math.floor(hash2(ix,iz,541)*spacing), true);
+      }
+    }
+  }
   const range = { value: new THREE.Vector2() };
   const farRange = { value: 4400 };
   const branchRange = { value: 0 }, sprayRange = { value: 0 }, twigRange = { value: 0 };
   const crownAtlas = patches.size ? preloadForestCrowns() : null;
+  const updateUndergrowth = count ? makeForestUndergrowth(group, {
+    region: config.id,
+    heightAt: ground.heightAt,
+    treesAt: env.queryColliders,
+    permits: (x, z) => x > minX + 1 && z > minZ + 1 && x < maxX - 1 && z < maxZ - 1
+      && ground.forestAt(x, z) > .24 && !excluded(x, z),
+  }) : null;
   let hardwoods = null;
   if (deciduousPatches.size) {
     const forest = await import('./deciduous-forest.js');
@@ -188,7 +210,7 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
     qualityName = name;
     const [min, max, far, detail] = detailProfiles[name] ?? detailProfiles.BALANCED;
     range.value.set(min, max);
-    farRange.value = far;
+    farRange.value = cascadeHorizon ? Math.max(4750,far) : far;
     quality = detail;
     branchRange.value = .67 * quality;
     sprayRange.value = .53 * quality;
@@ -197,7 +219,10 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
   setQuality(initialQuality);
   if (!patches.size) {
     cacheStaticTransforms(group);
-    return { group, count, setQuality, update(camera) { hardwoods?.update(camera, qualityName); } };
+    return { group, count, setQuality, update(camera) {
+      hardwoods?.update(camera, qualityName);
+      updateUndergrowth?.(camera, qualityName);
+    } };
   }
   await crownAtlas;
   const mapped = bindCascadeRange(coniferMaterial(-1, 'mapped'), range);
@@ -206,7 +231,7 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
   let silhouette = null, far = null;
   const stand = new THREE.Object3D(), color = new THREE.Color();
   function prepareTree(tree) {
-    stand.position.set(tree.x, tree.y - .15, tree.z);
+    stand.position.set(tree.x, tree.y, tree.z);
     stand.scale.set(tree.height * tree.spread, tree.height, tree.height * tree.spread);
     stand.rotation.set(0, tree.yaw, 0);
     stand.updateMatrix();
@@ -224,7 +249,7 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
   };
   const farBatches = [];
   for (const trees of patches.values()) {
-    const proxy = makeForestCrowns('mapped', trees.map(tree => tree.kind));
+    const proxy = makeForestCrowns('mapped', trees.map(tree => tree.kind), cascadeHorizon);
     if (proxy) {
       if (!proxyMaterial) {
         proxyMaterial = proxy.material.clone();
@@ -235,9 +260,10 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
         proxyMaterial.onBeforeCompile = (shader, renderer) => {
           compile(shader, renderer);
           shader.uniforms.cascadeDistance = farRange;
-          shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float cascadeDistance;')
-            .replace('#include <alphahash_fragment>', `#include <alphahash_fragment>
-              if (smoothstep(cascadeDistance-530.,cascadeDistance,crownDistance)>forestThreshold) discard;
+          shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nuniform float cascadeDistance;')
+            .replace('if (forestFade <= 0.) world = origin;', `
+              float horizon = cascadeDistance - ${cascadeHorizon ? '1270.' : '490.'} * fract(sin(dot(origin.xz, vec2(.243,.671))) * 1927.2);
+              if (forestFade <= 0. || crownDistance > horizon) world = origin;
             `);
         };
       }
@@ -324,6 +350,7 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
   }
   function update(camera) {
     hardwoods?.update(camera, qualityName);
+    updateUndergrowth?.(camera, qualityName);
     const eye = camera.position;
     if (last.distanceToSquared(eye) < 18 && lastFacing.angleTo(camera.quaternion) < .08
       && quality === oldQuality && lastProjection.equals(camera.projectionMatrix)) return;

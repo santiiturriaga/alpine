@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { buildingData } from '../data/osm-whistler.js';
 import { heightAt } from './terrain.js';
-import { box, beam, part, cacheStaticTransforms, mergeParts } from './scenery.js';
+import { beam, part, cacheStaticTransforms, finishConstruction, mergeParts } from './scenery.js';
 import { mulberry32, makeCanvas, canvasTexture, makeRadialTexture } from './util.js';
 import { climateUniforms } from './climate-state.js';
 import { createRoofSnow, createIcicles } from './roof-weather.js';
@@ -66,36 +66,61 @@ function triangle(a, b, c) {
   g.setAttribute('position', new THREE.Float32BufferAttribute([...a, ...b, ...c], 3));
   g.computeVertexNormals(); return g;
 }
-function joinWeather(meshes, name) {
-  if (!meshes.length) return null;
-  const arrays = {}, itemSizes = {};
-  for (const mesh of meshes) {
-    const g = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry;
-    for (const [key, attr] of Object.entries(g.attributes)) {
-      (arrays[key] ||= []).push(attr.array); itemSizes[key] = attr.itemSize;
+function vertexCount(geometry) {
+  return geometry.index?.count ?? geometry.attributes.position.count;
+}
+
+// Keep one draw per material. Each slice writes its transformed vertices into
+// the final buffers, so a bank of hundreds of windows can span several ticks.
+function* assembleGeometry(parts, vertexTotal) {
+  const result = new THREE.BufferGeometry();
+  result.boundingSphere = new THREE.Sphere();
+  let vertex = 0;
+  for (const part of parts) {
+    const geometry = surveyGeometry(part);
+    for (const [key, source] of Object.entries(geometry.attributes)) {
+      let target = result.getAttribute(key);
+      if (!target) {
+        const buffer = new source.array.constructor(vertexTotal * source.itemSize);
+        target = new THREE.BufferAttribute(buffer, source.itemSize, source.normalized);
+        result.setAttribute(key, target);
+      }
+      target.array.set(source.array, vertex * source.itemSize);
     }
-    if (g !== mesh.geometry) g.dispose();
-    mesh.geometry.dispose();
+    result.boundingSphere.union(geometry.boundingSphere);
+    vertex += geometry.attributes.position.count;
+    geometry.dispose();
+    yield;
   }
-  const g = new THREE.BufferGeometry();
-  for (const [key, chunks] of Object.entries(arrays)) {
-    const data = new Float32Array(chunks.reduce((n, p) => n + p.length, 0));
-    let at = 0; for (const chunk of chunks) { data.set(chunk, at); at += chunk.length; }
-    g.setAttribute(key, new THREE.BufferAttribute(data, itemSizes[key]));
+  return result;
+}
+
+function* weatherParts(meshes) {
+  for (const mesh of meshes) {
+    const g = mesh.geometry;
+    yield g.index ? g.toNonIndexed() : g;
+    if (g.index) g.dispose();
   }
-  surveyGeometry(g);
-  const mesh = new THREE.Mesh(g, meshes[0].material);
+}
+
+function* joinWeather(meshes, name) {
+  if (!meshes.length) return null;
+  const total = meshes.reduce((sum, mesh) => sum + vertexCount(mesh.geometry), 0);
+  const geometry = yield* assembleGeometry(weatherParts(meshes), total);
+  const mesh = new THREE.Mesh(geometry, meshes[0].material);
   mesh.name = name; mesh.castShadow = mesh.receiveShadow = true;
   mesh.customDepthMaterial = meshes[0].customDepthMaterial;
+  meshes.length = 0;
   return mesh;
 }
 
 /** Hand-built, walk-scale Chateau; every room opening and roof is geometry. */
-export function buildFairmont(scene, { grid } = {}) {
+export function* stageFairmont(scene, { grid } = {}) {
   const root = new THREE.Group(); root.name = 'Fairmont Chateau Whistler · slope facade';
   const ground = 685.20;
   root.position.set(ORIGIN.x, ground, ORIGIN.z); root.rotation.y = ORIGIN.yaw;
-  scene.add(root);
+  // Assemble off-scene while the surveyed silhouette is visible.
+
   const masonry = [], trim = [], roofs = [], metal = [], dark = [], glass = [],
     rooms = [], curtains = [], stone = [], timber = [], bulbs = [], snow = [], ice = [];
   const lights = [], glows = [], warmMaterials = [];
@@ -111,7 +136,9 @@ export function buildFairmont(scene, { grid } = {}) {
     }
   }
 
-  const putBox = (bucket, w, h, d, color, x, y, z, yaw = 0) => bucket.push(box(w, h, d, color, [x, y, z], [0, yaw, 0]));
+  const unit = new THREE.BoxGeometry();
+  const putBox = (bucket, w, h, d, color, x, y, z, yaw = 0) =>
+    bucket.push(part(unit, color, [x, y, z], [0, yaw, 0], [w, h, d]));
   const piece = (bucket, geo, color, position = [0, 0, 0], yaw = 0) => bucket.push(part(geo, color, position, [0, yaw, 0]));
   const transformedBox = (bucket, w, h, d, color, x, y, z, yaw, offset) => {
     const p = localPoint(x, y, z, yaw, offset); putBox(bucket, w, h, d, color, ...p, yaw);
@@ -224,6 +251,7 @@ export function buildFairmont(scene, { grid } = {}) {
       piece(roofs, polygon(points, id === '173950357' ? 8.5 : 6.2, .16), C.copper);
     }
   }
+  yield;
   // Eight-storey room wing, two setback attic storeys, and its end pavilion.
   wallBlock(41, 10.6, 91, 45.0, 25.55);
   wallBlock(39, 5.4, 89, 30.5, 26.1, 0, C.shadow);
@@ -240,6 +268,7 @@ export function buildFairmont(scene, { grid } = {}) {
     room(x, y, z + .34, 2.28, 1.44, 0, { balcony: true });
     putBox(roofs, 4.83, .22, 1.72, C.copper, x, y + 1.17, z + .02);
   }
+  yield;
   // Pronounced vertical projecting gables interrupt the long horizontal wing.
   for (const [x, w, top, rise] of [[1.8, 9.2, 31.5, 7.2], [80.1, 12.4, 31.1, 7.8]]) {
     wallBlock(x, 28.2, w, 17, top, 0, C.sunny);
@@ -252,6 +281,7 @@ export function buildFairmont(scene, { grid } = {}) {
     for (const sx of [-1, 1]) putBox(trim, .25, top - 1, .34, C.trim, x + sx * (w / 2 - .24), (top + 1) / 2, 36.88);
   }
 
+  yield;
   // The distinct, asymmetrical Chateau tower: a broad limestone gable in
   // front, a much taller steep copper roof behind it, and smaller setbacks.
   const towerBegin=snapshot();
@@ -287,6 +317,7 @@ export function buildFairmont(scene, { grid } = {}) {
     putBox(masonry, 1.05, h, 1.14, C.trim, x, y + h / 2, z);
     putBox(trim, 1.33, .25, 1.39, '#e8dbc0', x, y + h, z);
   }
+  yield;
   // Main gable window composition: narrow paired French doors through the
   // centre, broad rooms outside, then two upper sets and a pointed attic.
   for (let floor = 0; floor < 10; floor++) {
@@ -300,6 +331,7 @@ export function buildFairmont(scene, { grid } = {}) {
   facade(33.70,13.5,40.2,10,-Math.PI/2,{bottom:5.9});
   facade(51.30,13.5,40.2,10,Math.PI/2,{bottom:5.9});
   moveSince(towerBegin,-56.2,-12.0);
+  yield;
   // The right hand turret is recognisably smaller and has an eight-sided cap.
   wallBlock(80.4, 10.9, 9.8, 14, 34.6, 0, C.shadow, 29.2);
   const turret = new THREE.CylinderGeometry(4.9, 5.6, 2.1, 8);
@@ -308,6 +340,7 @@ export function buildFairmont(scene, { grid } = {}) {
   for (const xx of [77.4, 80.4, 83.4]) room(xx, 33.4, 17.98, 1.45, 1.62);
   metal.push(beam([80.4, 39.7, 10.9], [80.4, 40.8, 10.9], .065, .065, C.bronze));
 
+  yield;
   // West return. Its facade bends inward at 45 degrees instead of reading
   // as an extension of the long tower wing in the supplied photograph.
   wallBlock(-77, -36.4, 73, 31.4, 24.2, 0, C.shadow);
@@ -324,6 +357,7 @@ export function buildFairmont(scene, { grid } = {}) {
     const p=localPoint(side*26.05,0,0,elbowYaw,elbow);
     facade(p[0],p[2],28.5,7,elbowYaw+side*Math.PI/2,{bottom:5.95});
   }
+  yield;
   // Projecting west pavilion with a steep central gable and lower shoulders.
   wallBlock(-82.0, -21.8, 13.2, 22.3, 28.45, 0, C.sunny);
   gableRoof(-82.0, -22.0, 13.9, 24.1, 28.5, 10.5, 0, { icicles: .34 });
@@ -344,6 +378,7 @@ export function buildFairmont(scene, { grid } = {}) {
     dormer(p[0],p[2],4.2,27.1,elbowYaw,4.8);
   }
   for (let x = -101; x < -47; x += 7.7) dormer(x, -24.8, 3.3, 25.2, 0, 2.9);
+  yield;
   // Tall narrow cream chimney stacks punctuate the roof, as on the photo.
   for (const [x, z, y, h] of [[-111,-34,27,5],[-95,-34,31,4],[-64,-34,30,4.4],[-49,-18,29,6],[-29,-6,31,5.3],[-12,14,29,7.4],[12,7,35,3.2],[62,10,35,3]]) {
     putBox(masonry, 1.28, h, 1.18, C.trim, x, y + h / 2, z);
@@ -355,6 +390,7 @@ export function buildFairmont(scene, { grid } = {}) {
   for (const x of [-4, 10.7, 24.8, 59.4, 73.3, 86.4]) putBox(trim, .22, 22.0, .32, C.trim, x, 15.1, 33.54);
   for (const y of [3.8, 22.45, 24.15]) putBox(trim, 73.5, .18, .27, C.trim, -77, y, -20.4);
 
+  yield;
   // Open stone arcade and heated terrace at the base of the slopeside wing.
   putBox(stone, 100, 1.18, 13.0, '#847965', 37, -.15, 39.5);
   putBox(stone, 100.7, .20, 13.6, '#a0937b', 37, .55, 39.5);
@@ -375,6 +411,7 @@ export function buildFairmont(scene, { grid } = {}) {
   putBox(stone, 100.9, .38, 9.1, '#9a8e77', 37, 5.22, 38.3);
   roofFace([[-13.5,5.43,33.5],[87.5,5.43,33.5],[87.5,5.43,43.3],[-13.5,5.43,43.3]], '#3d5751', .24);
   eaveIce([-13.5, 5.43, 43.3], [87.5, 5.43, 43.3], .40);
+  yield;
   // Stone triangular portico under the tallest gable, rather than a flat door.
   const porticoBegin=snapshot();
   for (const z of [38.8, 50.8]) putBox(stone, 1.18, 5.4, 1.1, '#a5987e', 39.8, 3.17, z);
@@ -383,6 +420,7 @@ export function buildFairmont(scene, { grid } = {}) {
   for (const dz of [-1,1]) timber.push(beam([37.35,10.4,44.8],[37.35,5.8,44.8+dz*5],.20,.24,'#635a40'));
   putBox(timber, .26, .18, 10.0, '#635a40', 37.35, 6.0, 44.8);
   moveSince(porticoBegin,-56.2,-12);
+  yield;
   // An open glass conservatory and copper-roofed pool pavilion to the west.
   wallBlock(-54, -1.9, 33, 14, 4.2, 0, '#7e795f', .2);
   hipRoof(-54, -1.9, 35.0, 16.1, 4.3, 1.95, 0, .27);
@@ -390,6 +428,7 @@ export function buildFairmont(scene, { grid } = {}) {
   for (let x = -71; x <= -37; x += 3.9) putBox(metal, .12, 4.1, .15, C.bronze, x, 2.3, 5.35);
   piece(roofs, new THREE.ConeGeometry(3.5, 6.5, 8), '#3d756a', [-60, 8.2, -1.8], Math.PI / 8);
   putBox(stone, 40, .32, 18, '#978e79', -54, -.04, 11.9);
+  yield;
   // Low lamps, copper handrails, cafe furniture and rope-edge planters give
   // the first few metres the scale and detail needed when arriving on foot.
   const lamp = (x, z, height = 3.7, power = 28) => {
@@ -433,6 +472,7 @@ export function buildFairmont(scene, { grid } = {}) {
     for (const y of [.95,1.45]) metal.push(beam([a,y,z],[b,y,z],.055,.055,C.bronze));
     for (let x=a;x<=b;x+=1.8) putBox(metal,.06,1.18,.06,C.bronze,x,.88,z);
   }
+  yield;
   // Small sign is type, not a facade photograph or billboard.
   const {canvas,ctx}=makeCanvas(1024,240);
   ctx.fillStyle='#263a36';ctx.fillRect(0,0,1024,240);
@@ -441,11 +481,19 @@ export function buildFairmont(scene, { grid } = {}) {
   const sign=new THREE.Mesh(new THREE.PlaneGeometry(4.2,.98),new THREE.MeshStandardMaterial({map:canvasTexture(canvas),roughness:.7}));
   sign.position.set(-18.94,4.73,32.8);sign.rotation.y=-Math.PI/2;root.add(sign);
 
-  const material = (bucket, mat, name, cast = true) => {
+  function* batches(bucket) {
+    for (let i = 0; i < bucket.length; i += 240) yield mergeParts(bucket.slice(i, i + 240));
+  }
+  function* material(bucket, mat, name, cast = true) {
     if (!bucket.length) return;
-    const mesh = new THREE.Mesh(surveyGeometry(mergeParts(bucket)), mat); mesh.name=name;
-    mesh.castShadow=cast;mesh.receiveShadow=true;root.add(mesh); return mesh;
-  };
+    const total = bucket.reduce((sum, p) => sum + vertexCount(p.geo), 0);
+    const mesh = new THREE.Mesh(yield* assembleGeometry(batches(bucket), total), mat);
+    mesh.name = name;
+    mesh.castShadow = cast;
+    mesh.receiveShadow = true;
+    root.add(mesh);
+    bucket.length = 0;
+  }
   const plaster = new THREE.MeshStandardMaterial({vertexColors:true,roughness:.87,side:THREE.DoubleSide});
   plaster.onBeforeCompile = shader => {
     shader.vertexShader=shader.vertexShader.replace('#include <common>','#include <common>\nvarying vec3 chateauPoint;').replace('#include <begin_vertex>','#include <begin_vertex>\nchateauPoint=position;');
@@ -455,23 +503,25 @@ export function buildFairmont(scene, { grid } = {}) {
       float weather=.5+.5*sin(chateauPoint.y*.48+sin(chateauPoint.x*.39)*2.);
       diffuseColor.rgb *= .97+.04*weather+(fine-.5)*.055*resolve;`);
   };
-  material(masonry,plaster,'Cream stucco and stepped Chateau gables');
-  material(trim,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.78}),'Limestone surrounds, lintels and cornices');
-  material(roofs,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.51,metalness:.38,side:THREE.DoubleSide}),'Green copper standing-seam roofs');
-  material(metal,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.42,metalness:.52}),'Raised copper seams, bronze rails and window mullions');
-  material(dark,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.9}),'Deep window reveals and arcade shadow');
-  material(glass,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.20,metalness:.34,envMapIntensity:1.1}),'Cool reflecting unoccupied rooms',false);
+  yield* material(masonry,plaster,'Cream stucco and stepped Chateau gables');
+  yield* material(trim,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.78}),'Limestone surrounds, lintels and cornices');
+  yield* material(roofs,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.51,metalness:.38,side:THREE.DoubleSide}),'Green copper standing-seam roofs');
+  yield* material(metal,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.42,metalness:.52}),'Raised copper seams, bronze rails and window mullions');
+  yield* material(dark,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.9}),'Deep window reveals and arcade shadow');
+  yield* material(glass,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.20,metalness:.34,envMapIntensity:1.1}),'Cool reflecting unoccupied rooms',false);
   const roomMat=new THREE.MeshStandardMaterial({vertexColors:true,roughness:.43,metalness:.03,emissive:'#ffbb68',emissiveIntensity:.025});
   roomMat.onBeforeCompile=shader=>{shader.fragmentShader=shader.fragmentShader.replace('#include <emissivemap_fragment>','#include <emissivemap_fragment>\ntotalEmissiveRadiance *= vColor;');};
-  material(rooms,roomMat,'Individual warm hotel rooms',false);warmMaterials.push(roomMat);
-  material(curtains,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.96}),'Parted curtains at individual rooms',false);
-  material(stone,detailedMaterial('granite'),'Split stone podium, arcade and terrace');
-  material(timber,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.83}),'Portico timber, terrace chairs and planters');
+  yield* material(rooms,roomMat,'Individual warm hotel rooms',false);warmMaterials.push(roomMat);
+  yield* material(curtains,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.96}),'Parted curtains at individual rooms',false);
+  yield* material(stone,detailedMaterial('granite'),'Split stone podium, arcade and terrace');
+  yield* material(timber,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.83}),'Portico timber, terrace chairs and planters');
   const bulbMat=new THREE.MeshStandardMaterial({vertexColors:true,roughness:.3,emissive:'#ffcd87',emissiveIntensity:.02});
-  material(bulbs,bulbMat,'Warm lantern glass',false);warmMaterials.push(bulbMat);
-  const snowMesh=joinWeather(snow,'Fairmont · accumulated roof snow');if(snowMesh)root.add(snowMesh);
-  const iceMesh=joinWeather(ice,'Fairmont · uneven meltwater icicles');if(iceMesh)root.add(iceMesh);
+  yield* material(bulbs,bulbMat,'Warm lantern glass',false);warmMaterials.push(bulbMat);
+  const snowMesh=yield* joinWeather(snow,'Fairmont · accumulated roof snow');if(snowMesh)root.add(snowMesh);
+  yield;
+  const iceMesh=yield* joinWeather(ice,'Fairmont · uneven meltwater icicles');if(iceMesh)root.add(iceMesh);
 
+  yield;
   // Deliberately placed evergreens frame the hotel without a wall of trees
   // between the arrival lawn and its distinctive facade.
   const trees=[[-91,9,18],[-84,27,18],[-29,41,14],[95,29,23],[104,45,28],[118,34,24],[106,10,27],[95,-8,23],[-116,-3,19]];
@@ -503,6 +553,11 @@ export function buildFairmont(scene, { grid } = {}) {
   }
   update();
   root.userData={footprint:'50903854',windowOpenings:roomCount,height:49.46,surveyedPeak:[505.38,734.75,-420.87],origin:{...ORIGIN},ground};
+  scene.add(root);
   cacheStaticTransforms(root);
   return {group:root,update,setClimate(){update();},start:FAIRMONT_START,view:FAIRMONT_VIEW};
+}
+
+export function buildFairmont(scene, options) {
+  return finishConstruction(stageFairmont(scene, options));
 }

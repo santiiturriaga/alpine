@@ -41,6 +41,8 @@
   "beginnerRun": "montagnette",
   "references": [
     "https://www.les3vallees.com/en/guide/the-world-s-largest-ski-area/ski-area-map",
+    "https://www.meribel.net/en/history-of-meribel/",
+    "https://www.meribel.net/media/pdf/Plan_pietons_Meribel.pdf",
     "https://www.valthorens.com/app/uploads/2026/10/plan-3-vallees-avec-legende-hiver-2026-2027.pdf",
     "https://www.openstreetmap.org/node/324232145",
     "https://www.openstreetmap.org/node/1186523773",
@@ -94,6 +96,12 @@
       45.226
     ]
   },
+  "villageOsmBounds": [
+    [6.551, 45.397, 6.578, 45.411],
+    [6.548, 45.411, 6.581, 45.425],
+    [6.55, 45.425, 6.578, 45.439],
+    [6.569, 45.373, 6.589, 45.388]
+  ],
   "osmBounds": [
     [
       6.571,

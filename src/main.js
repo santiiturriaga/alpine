@@ -40,9 +40,11 @@ import { createIntroRiders } from './intro-riders.js';
 import { MountainChallenges } from './mountain-challenges.js';
 import { LIFTS, mountainAt } from './worlddata.js';
 import { Player } from './player.js';
+import { createTrickHud } from './trick-hud.js';
 import { Collectibles } from './coins.js';
 import { AudioEngine } from './audio.js';
 import { UI } from './ui.js';
+import { createMountainMenu, initFieldGuide } from './mountain-menu.js';
 import { inRoundhouseBuilding, whistlerAtlasSettings } from './whistler-atlas.js';
 import { createSkiPatrol } from './ski-patrol.js';
 import { GondolaInterior } from './gondola-interior.js';
@@ -62,11 +64,13 @@ import { GLACIER_CAVE_START } from './glacier-cave.js';
    ═══════════════════════════════════════════════════════════════ */
 
 const $ = (id) => document.getElementById(id);
+const updateTrickHud = createTrickHud($('trick-combo'), $('trick-announcement'));
 const query = new URLSearchParams(location.search);
 const destination = query.get('view') === 'valley' ? 'valley' : query.get('start');
 const arrivalButtons = [...$('mountain-panel').querySelectorAll('[data-arrival]')];
 const courseButtons = [...$('mountain-panel').querySelectorAll('[data-course]')];
 const challengeArrival = courseButtons.some(button => button.dataset.course === query.get('challenge'));
+let showMountainMenu;
 const directArrival = challengeArrival || arrivalButtons.some(button => button.dataset.arrival === destination);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const nextFrame = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -277,6 +281,7 @@ async function boot() {
   // Upload the scene the player will actually see. Other arrivals upload on approach.
   if (directArrival) {
     const pose = arrivalPose(destination);
+    await env.prepareArrival(pose);
     player.footMode = pedestrianArrival(pose);
     player.teleport(pose);
     shadowAnchor.copy(player.pos);
@@ -387,6 +392,7 @@ async function startGame(pose = startPose(), startAudio = true, { preframed = fa
     await wait(380);
   }
 
+  await env.prepareArrival(pose);
   introRiders?.hide();
   if(previousShot)climate.set(conditions,{instant:true});
   previousShot=null;
@@ -490,7 +496,7 @@ function resumeGame() {
 function openGuide() {
   const fromPause = ui.isOpen('pause');
   if (playing && !fromPause) return;
-  $('guide-drop').querySelector('.btn-label').textContent = fromPause ? 'Back to pause' : 'Drop in';
+  $('guide-drop').querySelector('.btn-label').textContent = fromPause ? 'Back to pause menu' : 'Drop in';
   ui.showModal('guide');
   audio.ui();
 }
@@ -524,7 +530,7 @@ function closeMap() {
   const returnTo = mapReturn;
   mapReturn = null;
   if (returnTo === 'pause') {
-    ui.showModal('pause');
+    ui.showModal('pause', $('pause-map'));
     paused = true;
   } else if (returnTo === 'summary') {
     ui.showModal('summary');
@@ -591,7 +597,7 @@ function pedestrianArrival(pose) {
     || pose===GLACIER_CAVE_START || pose===SKIERS_PLAZA_START || pose===WILDLIFE_START;
 }
 
-function openMountainPanel() {
+function openMountainPanel(section = 'travel') {
   const dialog=$('mountain-panel');
   if(dialog.open||transitioning||finished)return;
   releaseMouseLook();
@@ -600,7 +606,7 @@ function openMountainPanel() {
   for(const [id,key] of [['select-season','season'],['select-weather','weather'],['select-light','time'],['select-traffic','traffic']])
     $(id).value=climate.state[key];
   updateConditionsClock();
-  dialog.showModal();
+  showMountainMenu(section);
 }
 
 function closeMountainPanel(resume=true) {
@@ -665,8 +671,7 @@ function clearReferencePhoto() {
   $('scenic-load').textContent='Overlay photo';
 }
 
-async function travelTo(name,photo=false) {
-  const pose=arrivalPose(name);
+async function travelTo(name, photo = false, pose = arrivalPose(name)) {
   closeMountainPanel(false);
   if (name === 'bike') climate.set({season:'summer',weather:'clear'},{instant:true});
   if(['olympic-plaza','fairmont','creekside-slope'].includes(name))climate.set({time:'blue-hour'},{instant:true});
@@ -682,6 +687,8 @@ async function travelTo(name,photo=false) {
   if(transitioning)return;
   keysBackupClear();ui.hideModals();resetRunState(false);
   const arrival = name === 'bike' ? expeditions.arrival('bike',true) : pose;
+  transitioning = true;
+  try { await env.prepareArrival(arrival); } finally { transitioning = false; }
   player.footMode=pedestrianArrival(arrival);
   player.teleport(arrival,{resetStats:true});ui.clearToasts();ui.findNearest(player,true,displayTime);ui.setHud(true);
   lastFrame=performance.now();updatePrompt();
@@ -708,7 +715,31 @@ function bindMountainPanel() {
   }
   $('mountain-done').onclick=()=>closeMountainPanel();
   dialog.addEventListener('cancel',e=>{e.preventDefault();closeMountainPanel();});
-  $('menu-mountain').onclick=$('pause-mountain').onclick=openMountainPanel;
+  const lifts = env.lifts.lifts;
+  showMountainMenu = createMountainMenu({
+    resortName: 'Whistler Blackcomb',
+    lifts: lifts.map(({ def }) => ({
+      id: def.id,
+      name: def.name,
+      visitOnly: !def.rideable,
+      baseLabel: def.type === 'p2p' ? 'Whistler' : undefined,
+      topLabel: def.type === 'p2p' ? 'Blackcomb' : undefined,
+    })),
+    async travel(id, end) {
+      if (transitioning) return;
+      const lift = lifts.find(({ def }) => def.id === id);
+      if (!lift) return;
+      const boards = end === 'base' || lift.def.type === 'p2p';
+      const pose = boards ? liftBoardingArrival(lift, end) : liftExit({ lift, direction: 0, destination: liftDestination(lift, 0) });
+      await travelTo(`lift:${id}:${end}`, false, pose);
+      if (boards && lift.def.rideable) selectedLift = id;
+      updatePrompt();
+      ui.toast(lift.def.name, boards && lift.def.rideable ? 'Use the lift prompt to board.' : 'Arrived at the lift station.', 'blue', 'lift');
+    },
+  });
+  initFieldGuide();
+  $('menu-mountain').onclick = $('pause-mountain').onclick = () => openMountainPanel();
+  $('pause-lifts').onclick = () => openMountainPanel('lifts');
   for (const button of arrivalButtons) {
     button.onclick = () => travelTo(button.dataset.arrival, button.hasAttribute('data-photo'));
   }
@@ -822,13 +853,31 @@ function selectedBoard(choices) {
     || choices.find(({ lift }) => lift.def.id === ui.routeGuide.nextLift) || choices[0];
 }
 
+function clearLiftLanding(x, z) {
+  const y = heightAt(x, z);
+  return !env.grid.buildingsAt(x, z).length && !env.interiorAt(x, z, y) &&
+    !env.queryColliders(x, z, 3).some(c => y >= (c.minY ?? -Infinity) && y <= (c.maxY ?? Infinity) &&
+      (c.r ? Math.hypot(c.x - x, c.z - z) < c.r + .8 : env.pointInBox(x, z, c, .7, .7)));
+}
+
+function liftBoardingArrival(lift, end) {
+  const { def } = lift;
+  const site = stationSite(def, end === 'base' ? 0 : def.points.length - 1);
+  const surface = def.type === 'surface';
+  const preferred = surface ? 4 : 17;
+  for (const distance of surface ? [preferred, 7, 10, 12] : [preferred, 22, 28, 38, 48]) {
+    for (const angle of [0, .5, -.5, 1, -1, 1.55, -1.55, Math.PI]) {
+      const point = stationPoint(site, distance * Math.sin(angle), -distance * Math.cos(angle));
+      if (clearLiftLanding(point.x, point.z)) {
+        return { ...point, heading: Math.atan2(site.x - point.x, site.z - point.z), footMode: true };
+      }
+    }
+  }
+  return { ...stationPoint(site, 0, -preferred), heading: site.yaw, footMode: true };
+}
+
 function liftExit({ lift, direction, destination }) {
-  const open = (x, z) => {
-    const y = heightAt(x, z);
-    return !env.grid.buildingsAt(x, z).length && !env.interiorAt(x, z, y) &&
-      !env.queryColliders(x, z, 3).some(c => y >= (c.minY ?? -Infinity) && y <= (c.maxY ?? Infinity) &&
-        (c.r ? Math.hypot(c.x - x, c.z - z) < c.r + .8 : env.pointInBox(x, z, c, .7, .7)));
-  };
+  const open = clearLiftLanding;
   if (destination.pose && open(destination.pose.x, destination.pose.z)) return destination.pose;
   if (destination.trail) {
     const run = runFromSource(destination.trail);
@@ -1092,21 +1141,13 @@ function onPlayerEvent(event) {
     for (const key of trickKeys) if (keys[key]) heldAtTakeoff.add(key);
     if (event.type === 'launch') audio.launch();
   } else if (event.type === 'land') {
-    const mult = comboMultiplier();
-    const gained = Math.round((event.points || 0) * mult * (player.landingTrickMultiplier ?? 1));
-    trickScore += gained;
+    trickScore += event.points;
     audio.land(event.impact, event.points);
-    if (event.airTime > 0.55) {
-      const label = event.label || 'CLEAN AIR';
-      ui.floaty(label, { big: true, x: 50, y: 40 });
-      if (gained > 40) ui.floaty(`+${formatNumber(gained)}`, { x: 50, y: 47 });
-        if (event.boost) {
-          ui.toast(label, `${event.boost.toFixed(1)}s boost · +${formatNumber(gained)}`, 'gold', 'star');
-        audio.tone(880, { dur: 0.18, type: 'triangle', gain: 0.02, when: 0.08 });
-      }
+    if (event.airTime > .55 && event.boost) {
+      ui.toast(event.label, `${event.boost.toFixed(1)}s boost · +${formatNumber(event.points)}`, 'gold', 'star');
+      audio.tone(880, { dur: 0.18, type: 'triangle', gain: 0.02, when: 0.08 });
     }
   } else if (event.type === 'crash') {
-    trickScore = 0;
     streak = 0;
     comboTimer = 0;
     comboFraction = 0;
@@ -1232,7 +1273,9 @@ function checkFinish(dt) {
 
 function bindKeys() {
   window.addEventListener('keydown', (event) => {
-    if ((event.code === 'Enter' || event.code === 'Space') && event.target.closest?.('.touch-controls button')) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if ((event.code === 'Enter' || event.code === 'Space') && event.target.closest?.('button, select, input, textarea, summary, a[href]')) return;
+    if (ui.isOpen('pause') && (event.code === 'ArrowUp' || event.code === 'ArrowDown')) return;
     if(outfitter?.dialog.open)return;
     if (ui.isOpen('guide')) {
       if (event.code === 'Escape' && !event.repeat) closeGuide();
@@ -1432,7 +1475,7 @@ function bindUI() {
       else if (expeditions.active) expeditions.changeView();
       else ui.setCameraLabel(player.cycleCamera());
     },
-    openMountain: openMountainPanel, pause: pauseGame,
+    openMountain: () => openMountainPanel(), pause: pauseGame,
   });
   $('drop-in')?.addEventListener('click', () => startGame());
   $('village-start')?.addEventListener('click', () => startGame(VILLAGE_START));
@@ -1630,6 +1673,7 @@ function frame(now, vsync) {
   }
   if (ui.isOpen('map') || document.getElementById('destination-selector')?.open || document.getElementById('sled-game')?.open) {
     performanceCalibration.interrupt();
+    updateTrickHud(player, camera, false);
     lastFrame = now;
     if(playing){
       if(!transitioning && quests.winchLive)quests.update(dt);
@@ -1687,6 +1731,7 @@ function frame(now, vsync) {
     }
   } else if (!paused && !finished && !ride && !transitioning && !scenicPose) {
     buildInput();
+    player.trickContextMultiplier = comboMultiplier();
     player.update(dt, input, displayTime);
     if (!player.footMode && player.grounded && (player.surfaceType === 'ground' ||
         env.interiorAt?.(player.pos.x, player.pos.z, player.pos.y))) {
@@ -1710,6 +1755,7 @@ function frame(now, vsync) {
   env.people?.setListener({position:player.pos,audioEnabled:audio.enabled,audioReady:audio.ready,paused:paused || !!ride});
   const indoors = !!env.interiorAt?.(player.pos.x, player.pos.z, player.pos.y);
   const movingOnMountain = !paused && !transitioning && !scenicPose && !ride && !mounted && !indoors;
+  updateTrickHud(player, camera, movingOnMountain && !finished && !player.footMode);
   const nearest = ui.findNearest(player, false, displayTime);
   travelTracker.update(dt, player, { active: movingOnMountain, nearest });
   if (!paused && !transitioning) snowTraffic.update(dt, player, env.people.people, conditionsNow, movingOnMountain);

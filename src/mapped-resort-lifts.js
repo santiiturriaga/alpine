@@ -137,7 +137,7 @@ function planLift(source, ground, index, resortId, env) {
     sideDifference+=ground.heightAt(p.x+x,p.z+z)-ground.heightAt(p.x-x,p.z-z);
   }
   const valleySide=sideDifference>1.5?-1:1;
-  const lift={ def,profile,carpet,surface,gondola,gauge,seats,speed,detachable,vintage,paint,stationStyle,
+  const lift={ def,profile,carpet,surface,gondola,gauge,seats,speed,detachable,vintage,paint,stationStyle,resortId,
     length:profile.length,clearance:profile.clearance,at:profile.at,wheels:[],valleySide };
   lift.timing=clockCurve(lift);
   lift.duration=lift.timing.duration;

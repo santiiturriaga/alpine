@@ -1,3 +1,4 @@
+import { jacketFinishes } from './garment-marks.js';
 import { createGearPreview } from './gear-preview.js';
 import { SNOW_SHOES } from './snow-shoes.js';
 
@@ -13,7 +14,7 @@ export const SKIS={
 const colors={jacket:[['Clay','#ad4939'],['Alpine blue','#3b7190'],['Spruce','#3d6e54'],['Ochre','#ce933e'],['Graphite','#404348'],
     ['The North Face · Summit shell','summit-shell']],
   pants:[['Slate','#323e48'],['Sand','#a89a81'],['Navy','#24364a']],helmet:[['Chalk','#d6d6d1'],['Charcoal','#333a40'],['Copper','#9a6852']],
-  backpack:[['Charcoal','#363d40'],['Cedar','#694e42'],['Ochre','#bc8340']]};
+  backpack:[['Arc’teryx · Black','#24282a'],['Charcoal','#363d40'],['Cedar','#694e42'],['Ochre','#bc8340']]};
 const questJackets = {
   'quest.overlook':['Glacier teal','#348d90'],
   'quest.wildlife':['Fireweed','#965387'],
@@ -22,7 +23,6 @@ const questJackets = {
   'quest.patrol-shell':['Arc’teryx · Alpine Patrol Shell · 2× tricks','patrol-shell'],
 };
 const patrolShell = questJackets['quest.patrol-shell'][1];
-const jacketFinishes = { [patrolShell]: '#323538', 'summit-shell': '#4a676c' };
 function jacketPalette(finds) {
   return [...colors.jacket,...Object.entries(questJackets).filter(([key])=>finds.includes(key)).map(([,value])=>value)];
 }

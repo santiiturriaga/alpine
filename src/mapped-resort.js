@@ -31,7 +31,9 @@ import { applyInternationalLandmarkSites } from './international-landmark-sites.
 import { Outfitter } from './outfitter.js';
 import { Expeditions } from './expeditions.js';
 import { Player } from './player.js';
+import { createTrickHud } from './trick-hud.js';
 import { UI } from './ui.js';
+import { createMountainMenu, initFieldGuide } from './mountain-menu.js';
 import { mappedAtlasSettings } from './resort-map.js';
 import { clamp, formatNumber } from './util.js';
 import { initWorldData, runPointAt } from './worlddata.js';
@@ -124,56 +126,29 @@ function prepareTitle(mountain, config, startName, base, baseHeight, vertical, l
   label('.hero-meta > :last-child span', terrainOnly ? 'MAPPED SUMMIT ELEVATION' : 'LIFT-SERVED VERTICAL');
   label('.start-card .mini-kicker', terrainOnly ? 'EXPEDITION START' : `${name.toUpperCase()} BASE`);
   label('.start-card .elevation strong', formatNumber(baseHeight));
-  label('.start-card-head p', base?.def.name ?? 'Mountain approach');
+  label('.start-card-head p', base?.def.name ?? startName ?? 'Mountain approach');
   label('.village-copy', terrainOnly ? 'Set out in boots and open Mountain for the nearby viewpoints.' :
     liftCount > 1 ? 'Board here or find another lift or trail under Mountain.' : 'Board here to ride up the mountain.');
   label('#village-start span', terrainOnly ? 'Start on foot' : 'Start at the base');
   document.querySelector('.hero-tags').classList.add('hidden');
-  $('pause-mountain').firstChild.textContent = 'Resort, weather & travel ';
   $('pause-reset').firstChild.textContent = `Return to ${startName ?? 'the start'} `;
-  $('mountain-outfitter').firstChild.textContent = 'Outfitter ';
 }
 
-function prepareFieldGuide(name, startRun, terrainOnly) {
-  const blocks = document.querySelectorAll('.guide-block');
-  const instructions = {
-    R: `Return to ${startRun || 'the starting trail'}.`,
-    E: terrainOnly ? 'Interact when a prompt appears.' : 'Board a nearby lift. Press E again to skip to the unload.',
-    C: 'Change the camera or the lift viewpoint. Click or drag on the snow to look around.',
-    L: 'Visit the outfitter for skis and outerwear.',
-    G: 'Find lift stations, trail starts, conditions and resorts.',
-  };
-  for (const row of blocks[0].querySelectorAll('.key-row')) {
-    const key = row.querySelector('kbd').textContent;
-    if (instructions[key]) row.querySelector('span').textContent = instructions[key];
-    if (key === 'C') row.querySelector('kbd:nth-child(2)')?.remove();
-  }
-  label('.guide-block:nth-child(2) h3', 'The mountain');
-  const paragraphs = blocks[1].querySelectorAll('p');
-  paragraphs[0].textContent = terrainOnly ? `Explore ${name} on foot or pick a viewpoint under Mountain.` :
-    `Explore ${name} using the lift network or choose a trail start from Mountain.`;
-  paragraphs[1].textContent = terrainOnly ? 'Walk with W and S. Press B to switch between boots and skis.' :
-    'At an unload, push off with W. Press B to switch to boots and walk around the terminals.';
-  blocks[1].querySelector('.guide-note').remove();
-  blocks[2].querySelector('p').textContent = 'Ride within your ability, give downhill skiers room, and look before you drop in.';
-}
-
-function prepareExploration(panel, sections, travel) {
-  const resortFields = Array.from(panel.querySelectorAll(':scope > fieldset')).filter((field) =>
-    ['Explore', 'Scenic viewpoints', 'Challenges'].includes(field.querySelector('legend')?.textContent.trim()));
-  const explore = resortFields.shift();
-  for (const field of resortFields) field.remove();
+function prepareExploration(sections, travel) {
+  const parent = $('mountain-destinations');
   const field = document.createElement('fieldset');
+  field.className = 'arrivals';
   const legend = document.createElement('legend');
-  legend.textContent = 'Explore';
+  legend.textContent = 'Travel on this mountain';
   field.append(legend);
   for (const [name, options] of sections) {
     if (!options.length) continue;
     const row = document.createElement('div');
     row.className = 'resort-switch';
+    const label = document.createElement('label');
+    label.textContent = name;
     const select = document.createElement('select');
-    select.setAttribute('aria-label', name);
-    select.add(new Option(name, '', true, true));
+    select.add(new Option('Choose a destination', '', true, true));
     select.options[0].disabled = true;
     const groups = new Map();
     for (const item of options) {
@@ -191,14 +166,15 @@ function prepareExploration(panel, sections, travel) {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = 'Go';
-    button.setAttribute('aria-label', `Travel to ${name.toLowerCase()}`);
+    button.setAttribute('aria-label', name === 'Quick travel' ? 'Go to selected destination' : `Go to selected ${name.toLowerCase()}`);
     button.disabled = true;
     select.addEventListener('change', () => { button.disabled = !select.value; });
     button.addEventListener('click', () => travel(select.value));
-    row.append(select, button);
+    label.append(select);
+    row.append(label, button);
     field.append(row);
   }
-  explore.replaceWith(field);
+  parent.replaceChildren(field);
 }
 
 export async function startMappedResort(mountain) {
@@ -266,7 +242,7 @@ export async function startMappedResort(mountain) {
   const vertical = config.terrainOnly ? Math.round(peak?.elevation ?? baseHeight) :
     config.verticalMeters ?? Math.round(Math.max(...liftHeights) - Math.min(...liftHeights));
   prepareTitle(mountain, config, startName, base, baseHeight, vertical, lifts.length);
-  prepareFieldGuide(mountain.label, startName, config.terrainOnly);
+  initFieldGuide({ resortName: mountain.label, startName, terrainOnly: config.terrainOnly });
   if (config.terrainOnly) document.querySelector('.trail-key').hidden = true;
 
   const tracks = new SkiTracks(scene, 8000, ground);
@@ -276,6 +252,7 @@ export async function startMappedResort(mountain) {
   const slopeFixtures = buildMappedSlopeFixtures(world.root, config, ground, env);
   const climate = createClimate({ scene, renderer, lighting, sky, storm, terrain: ground, slopeFixtures });
   const player = new Player(scene, camera, { ground, env, fx, tracks, audio });
+  const updateTrickHud = createTrickHud($('trick-combo'), $('trick-announcement'));
   const travelTracker = createTravelTracker({ resortId: mountain.id, resortName: mountain.label, mountainAt: () => mountain.label });
   const mountainPanel = $('mountain-panel');
   const outfitter = new Outfitter(player, () => outfitter.dialog.close(), renderer);
@@ -319,6 +296,7 @@ export async function startMappedResort(mountain) {
   let selectedLift = null, stationLabel = '', stationPose = null;
   let ollie = false, signs = true, drag = null;
   let wasPaused = false;
+  let openingBlueHour = config.id === 'les-3-vallees' && !['time','hour','start'].some(key => query.has(key));
 
   const conditions = { hour: query.has('hour') ? Number(query.get('hour')) : 10.5 };
   for (const [key, id, presets, fallback] of [
@@ -332,9 +310,12 @@ export async function startMappedResort(mountain) {
     select.replaceChildren(...Object.entries(presets).map(([value, { label: title }]) => new Option(title, value)));
     const requested = query.get(key);
     select.value = conditions[key] = Object.hasOwn(presets, requested) ? requested : fallback;
-    select.addEventListener('change', () => climate.set({ [key]: select.value }));
+    select.addEventListener('change', () => {
+      if (key === 'time') openingBlueHour = false;
+      climate.set({ [key]: select.value });
+    });
   }
-  climate.set(conditions, { instant: true });
+  climate.set(openingBlueHour ? { ...conditions, time: 'blue-hour' } : conditions, { instant: true });
   const updateConditionsClock = bindConditionsClock(climate, $('resort-clock'));
 
   const arrivals = new Map();
@@ -363,14 +344,14 @@ export async function startMappedResort(mountain) {
     arrivals.set(destination,{pose,name,summer:true,footMode:true});
     return {id:destination,label:name,section};
   });
-  const stationChoices = [];
+  const travelLifts = [];
   for (const lift of lifts) {
     const section = lift.def.section ?? ui.findNearest({ pos: lift.boardPose }, true)?.run.section;
+    travelLifts.push({ id: lift.def.id, name: lift.def.name, section, visitOnly: !lift.def.rideable });
     for (const [end, footMode, pose] of [['base', true, lift.boardPose], ['top', false, lift.exitPose]]) {
       const id = `${end}:${lift.def.id}`;
       const name = `${lift.def.name} · ${footMode ? 'base' : 'top'}`;
       arrivals.set(id, { pose: { ...pose, holdAtUnload: !footMode }, name, footMode: footMode || !!pose.footMode });
-      stationChoices.push({ id, label: name, section });
     }
   }
   ui.nearest = null;
@@ -391,7 +372,7 @@ export async function startMappedResort(mountain) {
   const start = { pose: defaultPose, name: startName, footMode: config.terrainOnly };
   arrivals.set('base', base ? arrivals.get(`base:${base.def.id}`) : start);
   arrivals.set('default', start);
-  const quickChoices = config.terrainOnly ? [{ id: 'default', label: 'Mountain approach' }]
+  const quickChoices = config.terrainOnly ? [{ id: 'default', label: startName ?? 'Mountain approach' }]
     : [{ id: 'base', label: `${mountain.label} base` }, { id: 'default', label: startName ?? 'Default ski start' }];
   for (const spot of config.landmarks ?? []) {
     if (!spot.point || (!config.terrainOnly && !spot.view)) continue;
@@ -427,20 +408,29 @@ export async function startMappedResort(mountain) {
   if (preferredBike && preferredBike.destination !== 'bike') arrivals.set('bike', {
     ...arrivals.get(preferredBike.destination), destination:preferredBike.destination,
   });
-  const choices = [['Quick travel', quickChoices], ['Choose a lift station', stationChoices], ['Choose a trail start', runChoices]];
-  if (summerBikeChoices.length) choices.push(['Choose a bike trail',summerBikeChoices]);
-  if (summerHikeChoices.length) choices.push(['Choose a summer hike',summerHikeChoices]);
-  prepareExploration(mountainPanel, choices, travel);
-  const sledButton = document.createElement('button');
-  sledButton.type = 'button';
-  sledButton.dataset.minigame = 'sled';
-  sledButton.textContent = 'Sled Run';
+  const choices = [['Quick travel', quickChoices], ['Ski trail', runChoices]];
+  if (summerBikeChoices.length) choices.push(['Bike trail', summerBikeChoices]);
+  if (summerHikeChoices.length) choices.push(['Summer hike', summerHikeChoices]);
+  prepareExploration(choices, travel);
+  const showMountainMenu = createMountainMenu({
+    resortName: mountain.label,
+    lifts: travelLifts,
+    travel(id, end) {
+      if (!travel(`${end}:${id}`)) return;
+      const canBoard = end === 'base' && !travelLifts.find((lift) => lift.id === id).visitOnly;
+      if (canBoard) selectedLift = id;
+      updatePrompt();
+      ui.toast(stationLabel, canBoard ? 'Use the lift prompt to board.' : 'Arrived at the lift station.', 'blue', 'lift');
+    },
+  });
+  const courses = $('mountain-challenges').querySelector('.course-links');
+  const sledButton = courses.querySelector('[data-minigame="sled"]');
+  courses.replaceChildren(sledButton);
   sledButton.onclick = async () => {
     releaseLook();
     const { openSledGame } = await import('./sled-game.js');
     openSledGame();
   };
-  mountainPanel.querySelector('#mountain-outfitter').before(sledButton);
 
   function resize() {
     const quality = graphicsProfiles[qualityIndex];
@@ -477,10 +467,10 @@ export async function startMappedResort(mountain) {
   const readyToLook = () => playing && !paused();
   const readyToMove = () => readyToLook() && !liftSystem.active && !expeditions.active;
 
-  function showModal(name) {
+  function showModal(name, focusTarget) {
     releaseLook();
     clearInput();
-    if (name) ui.showModal(name);
+    if (name) ui.showModal(name, focusTarget);
     else {
       ui.hideModals();
       if (!playing) $('drop-in').focus({ preventScroll: true });
@@ -490,6 +480,8 @@ export async function startMappedResort(mountain) {
   function openPanel(name) {
     panelReturn = modal() ?? null;
     showModal(name);
+    if (name === 'guide') $('guide-drop').querySelector('.btn-label').textContent =
+      playing ? 'Back to pause menu' : config.terrainOnly ? 'Explore the mountain' : 'Drop in';
     if (name === 'map') {
       ui.resortMap.setSeason(climate.state.season);
       ui.drawBigMap(playing ? player : null, simTime);
@@ -497,16 +489,19 @@ export async function startMappedResort(mountain) {
   }
 
   function closePanel() {
-    showModal(panelReturn);
+    const current = modal();
+    const focusTarget = panelReturn === 'pause' ? $(`pause-${current}`) : undefined;
+    showModal(panelReturn, focusTarget);
+    if (current === 'guide' && !playing) $('how-to-btn').focus({ preventScroll: true });
     panelReturn = null;
   }
 
-  function openMountain() {
+  function openMountain(section = 'travel') {
     updateConditionsClock();
     if (mountainPanel.open || outfitter.dialog.open) return;
     releaseLook();
     clearInput();
-    mountainPanel.showModal();
+    showMountainMenu(section);
   }
 
   function activateAudio() { audio.resume().catch(() => {}); }
@@ -522,6 +517,7 @@ export async function startMappedResort(mountain) {
   }
 
   function restartSession() {
+    trickScore = 0;
     tracks.clear();
     fx.clear();
     collectibles.reset();
@@ -532,6 +528,10 @@ export async function startMappedResort(mountain) {
   function travel(id, initializeAudio = true) {
     const arrival = arrivals.get(id);
     if (!arrival) return false;
+    if (openingBlueHour) {
+      openingBlueHour = false;
+      climate.set({ time: conditions.time }, { instant: true });
+    }
     if (initializeAudio) activateAudio();
     if (mountainPanel.open) mountainPanel.close();
     if (outfitter.dialog.open) outfitter.dialog.close();
@@ -696,6 +696,21 @@ export async function startMappedResort(mountain) {
   }
 
   function animateMenu(time) {
+    if (config.id === 'les-3-vallees') {
+      const sway = Math.sin(time * .11);
+      camera.position.set(-2988 + sway*91, 1758 + sway*19, -7674 + sway*83);
+      menuCenter.set(-1960, 1548, -6982);
+      camera.lookAt(menuCenter);
+      return;
+    }
+    if (config.terrainOnly) {
+      const { x, z, heading } = defaultPose;
+      const yaw = heading + .18 + Math.sin(time*.11)*.13;
+      camera.position.set(x - Math.sin(yaw)*48, baseHeight+17, z - Math.cos(yaw)*48);
+      menuCenter.set(x + Math.sin(heading)*135, baseHeight+41, z + Math.cos(heading)*135);
+      camera.lookAt(menuCenter);
+      return;
+    }
     const [peakX,peakZ] = peak?.point ?? [defaultPose.x, defaultPose.z + 300];
     const end = base?.exitPose ?? { x: peakX, z: peakZ };
     const { x, z } = basePose;
@@ -703,8 +718,7 @@ export async function startMappedResort(mountain) {
     const yaw = heading - .36 + Math.sin(time * .09) * .065;
     const offset = 220 + Math.sin(time * .11) * 20;
     camera.position.set(x - Math.sin(yaw) * offset, baseHeight + 136, z - Math.cos(yaw) * offset);
-    if (config.terrainOnly) menuCenter.set(end.x, ground.heightAt(end.x,end.z) - 60, end.z);
-    else menuCenter.set(x + Math.sin(heading + .15) * 410, baseHeight + 204, z + Math.cos(heading + .15) * 410);
+    menuCenter.set(x + Math.sin(heading + .15) * 410, baseHeight + 204, z + Math.cos(heading + .15) * 410);
     camera.lookAt(menuCenter);
   }
 
@@ -725,6 +739,7 @@ export async function startMappedResort(mountain) {
     if (document.hidden) { performanceCalibration.interrupt(); return; }
     if (ui.isOpen('map') || document.getElementById('destination-selector')?.open || document.getElementById('sled-game')?.open) {
       performanceCalibration.interrupt();
+      updateTrickHud(player, camera, false);
       if(playing)multiplayer.update(0,trickScore,outfitter.broadcastOutfit ?? outfitter.state.outfit,expeditions.active?.model,false);
       lastFrame = now;
       return;
@@ -765,6 +780,7 @@ export async function startMappedResort(mountain) {
     people.setDensity(conditionsNow.crowd);
     if (mountainPanel.open) updateConditionsClock();
     const movingOnMountain = playing && !frozen && !ride && !vehicle;
+    updateTrickHud(player, camera, movingOnMountain && !player.footMode);
     travelTracker.update(dt, player, { active: movingOnMountain, nearest: movingOnMountain ? ui.findNearest(player, false, simTime) : null });
     if (playing && !frozen) snowTraffic.update(dt, player, people.people, conditionsNow, movingOnMountain);
     ground.streamBackcountry?.(playing ? player.pos : camera.position, camera.position);
@@ -801,11 +817,9 @@ export async function startMappedResort(mountain) {
       for (const key of turnKeys) if (keys[key]) heldAtTakeoff.add(key);
       audio.launch();
     } else if (event.type === 'land' || event.type === 'touchdown') {
-      trickScore += (event.points || 0) * (player.landingTrickMultiplier ?? 1);
+      trickScore += event.points ?? 0;
       audio.land(event.impact, event.points ?? 0);
-      if (event.label) ui.floaty(event.label, { big: true });
     } else if (event.type === 'crash') {
-      trickScore = 0;
       audio.crash();
       ui.toast('Wipeout', 'Stand up and continue or press R to reset.', '', 'crash');
     }
@@ -821,7 +835,8 @@ export async function startMappedResort(mountain) {
 
   const bindings = {
     'drop-in': () => travel('default'), 'village-start': () => travel('base'),
-    'menu-mountain': openMountain, 'pause-mountain': openMountain,
+    'menu-mountain': () => openMountain(), 'pause-mountain': () => openMountain(),
+    'pause-lifts': () => openMountain('lifts'),
     'mountain-done': () => mountainPanel.close(), 'mountain-outfitter': openOutfitter,
     'how-to-btn': () => openPanel('guide'), 'pause-guide': () => openPanel('guide'),
     'guide-drop': () => playing ? closePanel() : travel('default'),
@@ -844,7 +859,6 @@ export async function startMappedResort(mountain) {
     document.querySelectorAll(`[data-close="${name}-screen"]`).forEach((button) =>
       button.addEventListener('click', () => name === 'pause' ? showModal(null) : closePanel()));
   }
-  $('guide-drop').querySelector('.btn-label').textContent = 'Go skiing';
   $('pause-markers').closest('.setting-row').hidden = !env.setSignsVisible;
   ui.hideModals();
   ui.setAudio(audio.enabled);
@@ -866,7 +880,7 @@ export async function startMappedResort(mountain) {
 
   window.addEventListener('keydown', (event) => {
     const { code } = event;
-    if ((code === 'Enter' || code === 'Space') && event.target.closest?.('.touch-controls button')) return;
+    if ((code === 'Enter' || code === 'Space') && event.target.closest?.('button, select, input, textarea, summary, a[href]')) return;
     if (outfitter.dialog.open || mountainPanel.open || event.ctrlKey || event.metaKey || event.altKey) return;
     const shown = modal();
     if (shown === 'map' || shown === 'guide') {
@@ -933,7 +947,7 @@ export async function startMappedResort(mountain) {
   for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) {
     canvas.addEventListener(event, () => { drag = null; });
   }
-  touchControls = installTouchButtons({ keys, queueJump, cycleCamera, openMountain, pause: () => showModal('pause'),
+  touchControls = installTouchButtons({ keys, queueJump, cycleCamera, openMountain: () => openMountain(), pause: () => showModal('pause'),
     clearJump: () => { ollie = false; }, releaseKey: code => heldAtTakeoff.delete(code) });
 
   applyQuality();

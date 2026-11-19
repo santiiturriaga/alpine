@@ -3,6 +3,8 @@ import { clamp, makeCanvas, mulberry32, makeRadialTexture } from './util.js';
 import { heightAt, normalAt, terrain } from './terrain.js';
 import { WORLD } from './worlddata.js';
 import { climateUniforms } from './climate-state.js';
+import { coniferGeometry } from './conifers.js';
+import { strikeTreeSnow, updateTreeSnow } from './tree-snow.js';
 
 export const SUN_DIR = climateUniforms.snowSunDirection.value;
 const middayDirection = SUN_DIR.clone(), skySunDirection = SUN_DIR.clone();
@@ -458,7 +460,7 @@ class ParticlePool {
     return mat;
   }
 
-  spawn(x, y, z, vx, vy, vz, size, life, color) {
+  spawn(x, y, z, vx, vy, vz, size, life, color, airborne = false) {
     const i = this.cursor;
     this.cursor = (this.cursor + 1) % this.count;
     this.liveSlots = Math.min(this.count, this.liveSlots + 1);
@@ -483,7 +485,7 @@ class ParticlePool {
       this.normal[i*3+2]=this.sampleNormal.z;
       // Advected powder retains the ski surface's downhill/uphill velocity,
       // then receives its extra lift; it does not float level over a drop.
-      this.vel[i*3+1]+=clamp(-(this.sampleNormal.x*vx+this.sampleNormal.z*vz)/Math.max(.4,this.sampleNormal.y),-2.8,2.8);
+      if (!airborne) this.vel[i*3+1]+=clamp(-(this.sampleNormal.x*vx+this.sampleNormal.z*vz)/Math.max(.4,this.sampleNormal.y),-2.8,2.8);
       const map=this.ground.mountainShade?.image;
       if(map?.data) {
         const { minX, minZ, maxX, maxZ } = this.ground.bounds ?? WORLD;
@@ -1151,7 +1153,42 @@ export class ParticleFX {
     }
   }
 
+  shedTreeSnow(tree, contact) {
+    const retained = strikeTreeSnow(tree);
+    if (!retained) return;
+    const height = tree.height ?? tree.apex;
+    const yaw = tree.yaw ?? tree.rotation ?? 0;
+    const width = tree.spread ?? tree.stretch ?? tree.width ?? 1;
+    const cosine = Math.cos(yaw), sine = Math.sin(yaw);
+    const broadleaf = tree.kind === 'deciduous';
+    const species = ['fir', 'spruce', 'hemlock'];
+    const deposits = broadleaf ? [
+      { center: [.064, .32, -.048], width: .017 },
+      { center: [-.082, .36, -.044], width: .014 },
+      { center: [.021, .42, .097], width: .012 },
+    ] : coniferGeometry(species[tree.kind % 3], -.5, Math.floor(tree.kind / 3)).userData.snowDeposits;
+    const sites = deposits.map(({ center: [a, b, c], width: radius }) => {
+      const x = (a * cosine + c * sine) * height * width, z = (-a * sine + c * cosine) * height * width;
+      return { x: tree.x + x, y: tree.y + b * height, z: tree.z + z, xOffset: x, zOffset: z, radius: radius * height };
+    }).filter(site => site.y > this.sampleHeight(site.x, site.z) + .38)
+      .sort((a, b) => Math.abs(a.y - contact.y - 1.1) - Math.abs(b.y - contact.y - 1.1));
+    const rand = this.rand;
+    for (const { x, y, z, xOffset, zOffset, radius } of sites.slice(0, broadleaf ? 3 : 4)) {
+      const count = Math.ceil((broadleaf ? 9 : 17) * retained);
+      const heightAboveGround = y - this.sampleHeight(x, z);
+      for (let i = 0; i < count; i++) {
+        const spread = Math.max(.11, radius * 2);
+        this.spray.spawn(x + (rand() - .5) * spread, y + (rand() - .5) * spread * .47,
+          z + (rand() - .5) * spread, (rand() - .5) * 2 + xOffset * .22,
+          -.65 - rand() * 1.15, (rand() - .5) * 2 + zOffset * .22,
+          .085 + rand() * (broadleaf ? .18 : .31), .68 + Math.min(1.4, heightAboveGround * .13) + rand() * .48,
+          white, true);
+      }
+    }
+  }
+
   update(dt) {
+    updateTreeSnow(dt);
     this.spray.update(dt, -4.2, 1.9);
     this.spark.update(dt, -1.5, 2.6);
   }

@@ -1,6 +1,7 @@
-<a href="https://santiiturriaga.github.io/alpine/assets/opening.mp4"><img src="docs/opening-poster.jpg" width="100%" alt="Watch the Whistler Blackcomb preview, with footage of Creekside, a skier’s jump, the PEAK 2 PEAK gondola, and the summit inukshuk"></a>
-
-[Download the 24-second 1080p preview](assets/opening.mp4?raw=true)
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="docs/opening-poster.jpg">
+  <img src="docs/opening.webp" width="100%" alt="In-game flyover of Creekside, a ski jump, the PEAK 2 PEAK gondola and the summit inukshuk">
+</picture>
 
 # Alpine Descent
 
@@ -16,7 +17,7 @@ On a phone, steer with your left thumb and use the right-hand buttons to push, b
 
 Press **M** to open the trail map. Pick a run, lift, or landmark and choose **Set destination**. Amber arrows on the snow guide you there. At a lift, **E** boards or skips the ride. Inside a gondola you can walk to the window and look down at the valley.
 
-For company, have a friend open the same resort and drop in. You’ll join the same lobby automatically. Open **G → Multiplayer** to copy the mountain link, check the leaderboard, or switch to solo play. A wipeout resets your trick streak. Set your name and units under **Skier profile**, where you can also see your explored runs, mountains, and lifetime distance.
+For company, have a friend open the same resort and drop in. You’ll join the same lobby automatically. Open **G → Multiplayer** to copy the mountain link, check the leaderboard, or switch to solo play. Clean landings bank trick points for the leaderboard. A wipeout loses the current airborne combo. Set your name and units under **Skier profile**, where you can also see your explored runs, mountains, and lifetime distance.
 
 ## Around the mountain
 
