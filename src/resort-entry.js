@@ -2,7 +2,7 @@ import { activeResort,bindResortTravel,resortTravelURL,RESORTS } from './resorts
 import { compactDevice } from './device-budget.js';
 import { skierName } from './skier-profile.js';
 import { enterRenderer } from './renderer-recovery.js';
-import { loadingProgress } from './mountain-loading.js';
+import { failMountainLoading, loadingProgress } from './mountain-loading.js';
 
 document.getElementById('load-skier').textContent = skierName() || 'Guest Skier';
 
@@ -25,9 +25,8 @@ if(standalone){
     }
   }catch(error){
     console.error(error);
-    document.getElementById('load-status').textContent='Could not load '+mountain.label+'. Reload to retry.';
+    failMountainLoading('Could not load '+mountain.label+'. Reload to retry.');
     const back=document.createElement('a');back.href=resortTravelURL(RESORTS[0]);back.textContent='Return to Whistler Blackcomb';
     document.getElementById('loading-screen').append(back);
-    document.getElementById('load-destinations').hidden = false;
   }
 }

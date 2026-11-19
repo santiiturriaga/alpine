@@ -207,9 +207,8 @@ export async function startMappedResort(mountain) {
   document.querySelector('meta[name="description"]')?.setAttribute('content',
     `Ski real trail routes and ride mapped lifts at ${mountain.label}.`);
   label('.loading-copy .kicker', mountain.label);
-  label('#load-status', `Loading ${mountain.label} terrain…`);
   label('#load-tip', 'Press G to choose a lift or trail, or M to open the resort map.');
-  loadingProgress(.12);
+  loadingProgress(.12, `Loading ${mountain.label} terrain…`);
   await paint();
   const dataUrl = new URL(mountain.data, document.baseURI);
   const response = await fetch(dataUrl);

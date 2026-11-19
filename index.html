@@ -51,7 +51,7 @@
         </div>
       </div>
       <div class="loading-meta">
-        <p id="load-status" role="status">Shaping the Coast Mountains…</p>
+        <p id="load-status" role="status">Preparing the mountain…</p>
         <p id="load-skier">Guest Skier</p>
       </div>
     </div>
@@ -549,6 +549,18 @@
     </footer>
   </div>
 </dialog>
-<script type="module" src="./src/resort-entry.js"></script>
+<script type="module">
+  if (new URLSearchParams(location.search).get('benchmark') === 'ego-bowl') {
+    try {
+      const { launchSkiBenchmark } = await import('./src/benchmark-entry.js');
+      await launchSkiBenchmark();
+    } catch (error) {
+      console.error(error);
+      document.getElementById('load-status').textContent = 'Could not load the benchmark. Reload to retry.';
+    }
+  } else {
+    await import('./src/resort-entry.js');
+  }
+</script>
 </body>
 </html>

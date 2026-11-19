@@ -1,4 +1,5 @@
 import { installTouchButtons } from './touch-controls.js';
+import { failMountainLoading } from './mountain-loading.js';
 import { rendererUnavailable } from './renderer-recovery.js';
 import { updatePassGates } from './pass-gates.js';
 import { updateChaseFoliage } from './chase-foliage.js';
@@ -82,6 +83,7 @@ function renderTerrainFrame() {
 
 const COMBO_TIME = 4.8;
 let renderer, scene, camera;
+let frameObserver;
 let terrain, env, sky, lighting, fx, tracks, storm, tuckWind, skiContact;
 let valley;
 let outfitter,fieldNotes,shopReturn=null;
@@ -302,6 +304,7 @@ async function boot() {
 
   // handy for debugging in the console
   window.__alpine = {
+    setFrameObserver(observer) { frameObserver = observer; },
     ...(capturingIntro ? { filmDuration:INTRO_SECONDS, filmFrame(seconds,dt=1/24) {
       introTime=seconds-dt;displayTime=seconds;
       updateIntroCamera(dt); climate.update(dt,camera);
@@ -363,14 +366,7 @@ async function boot() {
 
 function showFatal(message, err) {
   console.error(err || message);
-  const status = $('load-status');
-  if (status) {
-    status.textContent = message;
-    status.style.color = '#ffb4a0';
-  }
-  const bar = $('load-bar');
-  if (bar) bar.style.background = '#b23a2b';
-  $('load-destinations').hidden = false;
+  failMountainLoading(message);
 }
 
 /* ── flow ───────────────────────────────────────────────────── */
@@ -1619,6 +1615,7 @@ function scheduleFrame() {
 
 function frame(now, vsync) {
   if (rendererUnavailable) return;
+  const callbackStart = frameObserver ? performance.now() : 0;
   const raw = (now - lastFrame) / 1000;
   const dt = clamp(Number.isFinite(raw) ? raw : 0.016, 0.001, 0.12);
   if (document.hidden) {
@@ -1647,6 +1644,7 @@ function frame(now, vsync) {
     return;
   }
   lastFrame = now;
+  frameObserver?.(callbackStart, vsync);
   climate.update(dt,camera, playing && !paused && !transitioning ? Math.min(.5, Math.max(0, raw)) : 0);
   const conditionsNow = climate.state;
   env.people.setDensity(conditionsNow.crowd);

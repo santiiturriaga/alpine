@@ -35,6 +35,8 @@ On a new setup, Auto starts in **Budget** and measures frames after you enter th
 
 The small FPS readout under the mountain name shows the frames your browser renders. In **Esc → Graphics**, you can choose a detail level, set a frame cap, and enable edge smoothing (MSAA). Budget simplifies distant lifts, buildings, and trees while keeping nearby equipment and the shape of the mountain.
 
+Run the [native Ego Bowl benchmark](https://santiiturriaga.github.io/alpine/?benchmark=ego-bowl) to measure a full descent with Budget graphics and a 60 FPS cap. For a lower-resolution comparison on the same computer, run the [480p benchmark](https://santiiturriaga.github.io/alpine/?benchmark=ego-bowl&resolution=480p) at the same browser window size. Both preserve your progress and settings. **Reload benchmark** starts a fresh game with the browser’s asset cache still available.
+
 For integrated graphics, try **Budget** with **3D resolution → Adaptive · 60 FPS**. Adaptive starts at native resolution and adjusts the 3D image when the frame rate falls short. The map, text, and touch controls stay at display resolution. The graphics panel shows the actual render dimensions. Desktop defaults to **Native**, and you can also choose a fixed ceiling from 480p to 900p.
 
 You can ski past the marked runs and keep walking or riding beyond the resort map. The surrounding mountains follow elevation surveys up to their coverage limit. Farther out, the game generates backcountry as you approach. The trail map marks where generated terrain begins.

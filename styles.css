@@ -95,6 +95,7 @@ svg { display: block; }
 
 /* ───────────────────────── LOADING ───────────────────────── */
 .loading-screen {
+  --loader-travel-duration: 0ms;
   z-index: 90; display: flex; flex-direction: column; align-items: center; justify-content: center;
   background:
     radial-gradient(ellipse 80% 70% at 50% 30%, rgba(30, 78, 96, .55), transparent 65%),
@@ -115,12 +116,16 @@ svg { display: block; }
 .snowball-path { position: absolute; inset: 0 calc(var(--snowball-diameter) / 2) 0 13px; }
 .snowball-carriage {
   position: absolute; inset: 0; pointer-events: none; will-change: transform;
+  transform: translateX(0%);
 }
 .forming-snowball {
   position: absolute; width: var(--snowball-diameter); height: var(--snowball-diameter);
   bottom: calc(-.07 * var(--snowball-diameter)); left: calc(-.5 * var(--snowball-diameter));
-  transform: translateY(37%) scale(.14); will-change: transform;
+  transform: translateY(36.98%) scale(.14) rotate(-16deg); will-change: transform;
 }
+.snowball-carriage, .forming-snowball, #load-bar { transition: transform var(--loader-travel-duration) linear; }
+.loading-screen:is([data-recovering], [data-loading-failed]) .snowball-loader { visibility: hidden; }
+.loading-screen[data-loading-failed] #load-status { color: #ffb4a0; }
 .graphics-control { display: flex; align-items: center; gap: 9px; }
 .graphics-control :is(input, .setting-check) { accent-color: #bbdadc; cursor: pointer; }
 .graphics-control input[type="range"] { width: clamp(50px,19vw,140px); }
@@ -167,7 +172,7 @@ svg { display: block; }
 .loading-copy h1 em { font-style: normal; color: transparent; -webkit-text-stroke: 1.4px rgba(231,245,252,.62); }
 .load-track { position: absolute; inset: auto 0 0; height: 2px; background: #d6ecf33d; }
 #load-bar { height: 100%; width: 100%; transform: scaleX(0); transform-origin: left; background: linear-gradient(90deg, #b6d6e93b, #e8f6ff); box-shadow: 0 0 10px #c8e5ff63; }
-.loading-meta { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 6px 18px; margin-top: 16px; }
+.loading-meta { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 6px 18px; min-height: 34px; margin-top: 16px; }
 #load-status { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: #e1f1f8bd; }
 #load-skier { font-size: 12px; font-weight: 600; letter-spacing: .04em; color: #f3d49b; overflow-wrap: anywhere; }
 .loading-tip {
