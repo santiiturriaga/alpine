@@ -19,7 +19,7 @@ const smooth = (a, b, value) => {
   return t * t * (3 - 2 * t);
 };
 
-function skiSection(s, channel) {
+function skiSection(profile, s, channel) {
   if (s <= profile[0][0]) return profile[0][channel];
   for (let i = 1; i < profile.length; i++) {
     if (s > profile[i][0]) continue;
@@ -30,10 +30,15 @@ function skiSection(s, channel) {
   return profile.at(-1)[channel];
 }
 
-const rowWidths = rows.map((s) => skiSection(s, 1) + .005);
+const profileWidths = new WeakMap();
+function widthsFor(profile) {
+  if (!profileWidths.has(profile)) profileWidths.set(profile, rows.map(s => skiSection(profile, s, 1) + .005));
+  return profileWidths.get(profile);
+}
 const shoulderFractions = [0, .13, .34, .58, .8, 1];
 
 function rockerAt(ski, projectedS) {
+  const { profile } = ski;
   let a = profile[0], qa = a[0] + ski.rockerProjection * a[2];
   if (projectedS <= qa) return a[2];
   for (let i = 1; i < profile.length; i++) {
@@ -113,8 +118,8 @@ export function createSkiSnowSurface({ snowMaps, heightAt, surfaceAt, sampleSurf
         - ski.crossGrade * acrossPoint
         - rockerAt(ski, s - ski.crossLong * acrossPoint) / ski.upY + .004))
       : THREE.MathUtils.lerp(ski.depthRows[row], ski.depthRows[row + 1], u);
-    const along = smooth(back, -.82, s) * (1 - smooth(1.0, front, s));
-    const across = 1 - smooth(THREE.MathUtils.lerp(rowWidths[row], rowWidths[row + 1], u), halfWidth, t);
+    const along = smooth(back, ski.profile[0][0], s) * (1 - smooth(ski.profile.at(-1)[0], front, s));
+    const across = 1 - smooth(THREE.MathUtils.lerp(ski.rowWidths[row], ski.rowWidths[row + 1], u), halfWidth, t);
     return depth * along * across;
   }
 
@@ -132,7 +137,7 @@ export function createSkiSnowSurface({ snowMaps, heightAt, surfaceAt, sampleSurf
       const s = rows[row];
       const cx = ski.contact.x + ski.axis.x * s;
       const cz = ski.contact.z + ski.axis.z * s;
-      const width = rowWidths[row];
+      const width = ski.rowWidths[row];
       const soft = smooth(.023,.071,ski.sink);
       const forebody = smooth(-.87,-.53,s) * (1 - smooth(.61,.94,s));
       for (let col = 0; col <= lateralSteps; col++) {
@@ -180,12 +185,16 @@ export function createSkiSnowSurface({ snowMaps, heightAt, surfaceAt, sampleSurf
   function update(player, visible = true) {
     const rig = player?.rig;
     const enabled = visible && !!player?.grounded && !player.crash && !player.footMode && !player.riding;
+    const board = player?.boarding ? rig?.boardContact : null;
+    const runtimeProfile = (board ? board.profile : rig?.skiContact?.profile) ?? profile;
     let dirty = false;
     for (let i = 0; i < skis.length; i++) {
-      const ski = skis[i], point = rig?.contactPoints?.[i], axis = rig?.skiAxes?.[i];
-      const sink = rig?.skiSink?.[i] ?? player?.snowSink ?? 0;
+      const ski = skis[i];
+      const point = board ? board.point : rig?.contactPoints?.[i];
+      const axis = board ? board.axis : rig?.skiAxes?.[i];
+      const sink = (board ? board.compression : rig?.skiSink?.[i]) ?? player?.snowSink ?? 0;
       const wasActive = ski.active;
-      ski.active = !!(enabled && point && axis && sink > .001 && rig.skiPlanted?.[i] !== false
+      ski.active = !!(enabled && point && axis && sink > .001 && (board ? i === 0 : rig.skiPlanted?.[i] !== false)
         && surfaceAt(point.x, point.z, surface).id !== 'ice');
       if (ski.active) {
         ski.contact.copy(point);
@@ -197,11 +206,17 @@ export function createSkiSnowSurface({ snowMaps, heightAt, surfaceAt, sampleSurf
       dirty ||= wasActive !== ski.active;
       uniformData.scale[i].set(ski.active ? 1 / ski.horizontal : 1, Number(ski.active));
       if (!ski.active) continue;
+      if (ski.profile !== runtimeProfile) {
+        ski.profile = runtimeProfile;
+        ski.rowWidths = widthsFor(runtimeProfile);
+        dirty = true;
+      }
       ski.rightX = ski.axis.z / ski.horizontal;
       ski.rightZ = -ski.axis.x / ski.horizontal;
-      ski.hasRight = !!rig.skiRights?.[i];
+      const right = board ? board.right : rig.skiRights?.[i];
+      ski.hasRight = !!right;
       if (ski.hasRight) {
-        ski.right.copy(rig.skiRights[i]).normalize();
+        ski.right.copy(right).normalize();
         const alongRight = (ski.right.x * ski.axis.x + ski.right.z * ski.axis.z) / ski.horizontal ** 2;
         const acrossRight = ski.right.x * ski.rightX + ski.right.z * ski.rightZ;
         ski.crossGrade = (ski.right.y - ski.axis.y * alongRight) / acrossRight;
@@ -235,8 +250,8 @@ export function createSkiSnowSurface({ snowMaps, heightAt, surfaceAt, sampleSurf
         // shift before sampling, then put the bed just below the physical base.
         const projectedRocker = -ski.axis.y / ski.upY;
         let localS = s;
-        for (let solve = 0; solve < 3; solve++) localS = s - projectedRocker * skiSection(localS, 2);
-        const base = point.y + ski.axis.y * s + skiSection(localS, 2) / ski.upY - .004;
+        for (let solve = 0; solve < 3; solve++) localS = s - projectedRocker * skiSection(ski.profile, localS, 2);
+        const base = point.y + ski.axis.y * s + skiSection(ski.profile, localS, 2) / ski.upY - .004;
         ski.depthRows[row] = Math.max(0, Math.min(.19, heightAt(x, z) - base));
       }
     }

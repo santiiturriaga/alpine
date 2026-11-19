@@ -307,7 +307,8 @@ export function makeGondolaShell(color = '#26343a', accent = '#d1d3ce', big = fa
   const n=perimeter.length, at=(i,y,scale=1)=>{
     const p=perimeter[(i+n)%n];return[p[0]*w*scale,y,p[1]*d*scale];
   };
-  const opaque=[], panes=[], frost=[], graphics=[];
+  const opaque=[], panes=[], frost=[], graphics=[], fleetGear=[];
+  const rack=big?null:{ x:w*.34, shelfY:floor+.1975, z:d+.205 };
   const leaves=[-1,1].flatMap(side=>[-1,1].map(direction=>({side,direction,
     x:side*(big?.13:.16),z:direction*(doorHalf+.028),hull:[],glass:[],frost:[]})));
   const doorSegments=perimeter.map((a,i)=>{
@@ -442,8 +443,8 @@ export function makeGondolaShell(color = '#26343a', accent = '#d1d3ce', big = fa
     opaque.push(beam([-.27,.04,z],[.09,.04,z],.050,.050,'#626e71'));
     opaque.push(part(new THREE.CylinderGeometry(.056,.056,.10,10),'#27383c',[.17,.035,z],[Math.PI/2,0,0]));
   }
-  // External ski cradle with actual U rails, drain slots and three pairs of skis.
-  const rackX=w*.34,rackZ=d+.16;
+  // The external cradle is shared. The fleet carries three display pairs.
+  const rackX=rack.x,rackZ=d+.16;
   opaque.push(box(.72,.075,.31,'#344449',[rackX,floor+.16,rackZ]));
   for(const x of [rackX-.32,rackX+.32]) {
     opaque.push(beam([x,floor+.68,d*.97],[x,floor+.68,d+.28],.034,.034,'#9eacad'));
@@ -453,11 +454,11 @@ export function makeGondolaShell(color = '#26343a', accent = '#d1d3ce', big = fa
   for(let i=0;i<6;i++) {
     const x=rackX+(i-2.5)*.104,z=rackZ+.025+(i%2)*.025,h=1.72+(i%3)*.08;
     const tint=['#4d9d9a','#d6b96b','#a0b65f'][Math.floor(i/2)];
-    opaque.push(box(.07,h,.055,tint,[x,floor+.20+h/2,z],[.072,0,0]));
-    opaque.push(beam([x,floor+.16+h,z+.059],[x,floor+.30+h,z+.015],.072,.056,tint));
-    opaque.push(box(.085,.16,.081,'#202d31',[x,floor+.98,z+.025]));
-    opaque.push(box(.10,.065,.079,'#c3cac6',[x,floor+.85,z+.025]));
-    opaque.push(box(.074,.28,.058,'#263b45',[x,floor+h-.02,z+.042],[.072,0,0]));
+    fleetGear.push(box(.07,h,.055,tint,[x,floor+.20+h/2,z],[.072,0,0]));
+    fleetGear.push(beam([x,floor+.16+h,z+.059],[x,floor+.30+h,z+.015],.072,.056,tint));
+    fleetGear.push(box(.085,.16,.081,'#202d31',[x,floor+.98,z+.025]));
+    fleetGear.push(box(.10,.065,.079,'#c3cac6',[x,floor+.85,z+.025]));
+    fleetGear.push(box(.074,.28,.058,'#263b45',[x,floor+h-.02,z+.042],[.072,0,0]));
   }
   } else {
     // A 3S carriage rides on two fixed track ropes. It is not the monocable
@@ -502,14 +503,20 @@ export function makeGondolaShell(color = '#26343a', accent = '#d1d3ce', big = fa
   const materials={...cabinMaterials(creekside),snow:snow.material};
   if(big)materials.logo=materials.peakLogo;
   const shell={fleet:{},leaves:leaves.map(({side,direction,x,z})=>({side,direction,x,z})),logo:mergeTextured(graphics),
-    snow:snow.geometry,materials,w,d,floor,sill,top,perimeter,doorBays:doorSegments.map(Boolean)};
+    snow:snow.geometry,materials,w,d,floor,sill,top,perimeter,rack,doorBays:doorSegments.map(Boolean)};
   shell.logo.userData.gondolaShared=shell.snow.userData.gondolaShared=true;
   for(const [key,parts] of Object.entries({hull:opaque,glass:panes,frost})){
     const build=key==='hull'?mergeParts:mergeTextured;
-    const geometry=build(parts.concat(...leaves.map(leaf=>leaf[key])));
+    const parked=key==='hull'?fleetGear:[];
+    const geometry=build(parts.concat(parked,...leaves.map(leaf=>leaf[key])));
     const motion=new Float32Array(geometry.attributes.position.count*2);
     const countParts=parts=>parts.reduce((count,{geo})=>count+(geo.index?.count??geo.attributes.position.count),0);
     let start=countParts(parts);
+    if(parked.length){
+      shell.rackHull=geometryView(geometry);
+      shell.rackHull.setDrawRange(0,start);
+      start+=countParts(parked);
+    }
     const fixed=shell[key]=geometryView(geometry);
     fixed.setDrawRange(0,start);
     for(let j=0;j<leaves.length;j++){
@@ -525,7 +532,7 @@ export function makeGondolaShell(color = '#26343a', accent = '#d1d3ce', big = fa
   shellCache.set(cacheKey,shell);return shell;
 }
 
-export function addGondolaShell(group, shell) {
+export function addGondolaShell(group, shell, emptyRack = false) {
   const addLayer=(parent,key,geometry)=>{
     const mesh=new THREE.Mesh(geometry,shell.materials[key]);
     mesh.name='Gondola · '+key;mesh.castShadow=key==='hull';
@@ -533,7 +540,9 @@ export function addGondolaShell(group, shell) {
     if(key==='glass')mesh.onBeforeRender=()=>{if(shell.materials.glass===localGlass)cabinMaterials(true);};
     parent.add(mesh);
   };
-  for(const key of ['hull','glass','frost','logo','snow'])addLayer(group,key,shell[key]);
+  for(const key of ['hull','glass','frost','logo','snow']){
+    addLayer(group,key,key==='hull'&&emptyRack&&shell.rackHull?shell.rackHull:shell[key]);
+  }
   const doors=shell.leaves.map(leaf=>{
     const door=new THREE.Group();
     door.name=`Gondola door · ${leaf.side<0?'left':'right'} ${leaf.direction<0?'rear':'front'}`;

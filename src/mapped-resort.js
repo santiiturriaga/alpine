@@ -430,7 +430,7 @@ export async function startMappedResort(mountain) {
   sledButton.onclick = async () => {
     releaseLook();
     const { openSledGame } = await import('./sled-game.js');
-    openSledGame({ resortRenderer: renderer, audio });
+    openSledGame({ resortRenderer: renderer, audio, outfit: outfitter.appearance });
   };
 
   function resize() {
@@ -464,7 +464,7 @@ export async function startMappedResort(mountain) {
   }
 
   const modal = () => ['map', 'guide', 'pause'].find((name) => ui.isOpen(name));
-  const paused = () => !!(modal() || mountainPanel.open || outfitter.dialog.open);
+  const paused = () => !!(modal() || mountainPanel.open || outfitter.dialog.open || outfitter.customizing);
   const readyToLook = () => playing && !paused();
   const readyToMove = () => readyToLook() && !liftSystem.active && !expeditions.active;
 
@@ -657,11 +657,11 @@ export async function startMappedResort(mountain) {
   function toggleFoot() {
     if (!readyToMove()) return;
     if (!player.canChangeFootMode()) {
-      ui.toast('Slow down to change gear','Switch between boots and skis on the ground.','','check');
+      ui.toast('Slow down to change gear','Come to a stop on the ground to change equipment.','','check');
       return;
     }
     if (player.footMode && player.surfaceType === 'ground') {
-      ui.toast('On foot','Reach a snow-covered trail to put your skis on.','','check');
+      ui.toast('On foot','Reach a snow-covered trail to ride again.','','check');
       return;
     }
     player.toggleFootMode();
@@ -744,7 +744,7 @@ export async function startMappedResort(mountain) {
     if (rendererUnavailable) return;
     const raw = Math.max(0, (now - lastFrame) / 1000);
     if (document.hidden) { performanceCalibration.interrupt(); return; }
-    if (ui.isOpen('map') || document.getElementById('destination-selector')?.open || document.getElementById('sled-game')?.open) {
+    if (ui.isOpen('map') || outfitter.customizing || document.getElementById('destination-selector')?.open || document.getElementById('sled-game')?.open) {
       performanceCalibration.interrupt();
       updateTrickHud(player, camera, false);
       if(playing)multiplayer.update(0,trickScore,outfitter.broadcastOutfit ?? outfitter.state.outfit,expeditions.active?.model,false);
@@ -832,9 +832,14 @@ export async function startMappedResort(mountain) {
     }
   };
 
+  function openCustomizer(trigger) {
+    releaseLook();
+    clearInput();
+    outfitter.openCustomizer(trigger);
+  }
+
   function openOutfitter() {
     if (outfitter.dialog.open) return;
-    if (mountainPanel.open) mountainPanel.close();
     releaseLook();
     clearInput();
     outfitter.open();
@@ -842,6 +847,8 @@ export async function startMappedResort(mountain) {
 
   const bindings = {
     'drop-in': () => travel('default'), 'village-start': () => travel('base'),
+    'menu-customize': () => openCustomizer($('menu-customize')),
+    'pause-customize': () => openCustomizer($('pause-customize')),
     'menu-mountain': () => openMountain(), 'pause-mountain': () => openMountain(),
     'pause-lifts': () => openMountain('lifts'),
     'mountain-done': () => mountainPanel.close(), 'mountain-outfitter': openOutfitter,
@@ -888,7 +895,7 @@ export async function startMappedResort(mountain) {
   window.addEventListener('keydown', (event) => {
     const { code } = event;
     if ((code === 'Enter' || code === 'Space') && event.target.closest?.('button, select, input, textarea, summary, a[href]')) return;
-    if (outfitter.dialog.open || mountainPanel.open || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (outfitter.customizing || outfitter.dialog.open || mountainPanel.open || event.ctrlKey || event.metaKey || event.altKey) return;
     const shown = modal();
     if (shown === 'map' || shown === 'guide') {
       if (!event.repeat && (code === 'Escape' || (shown === 'map' && code === 'KeyM'))) closePanel();

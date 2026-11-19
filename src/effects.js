@@ -621,16 +621,18 @@ export class SkiContact {
 
   update(player, active) {
     const sin = Math.sin(player.heading), cos = Math.cos(player.heading);
+    const board = player.boarding ? player.rig.boardContact : null;
     this.planes.forEach((mesh, i) => {
-      mesh.visible = active && player.grounded && !player.crash && (player.footMode || player.rig.skiPlanted?.[i] !== false);
+      mesh.visible = active && player.grounded && !player.crash &&
+        (board ? i === 0 : player.footMode || player.rig.skiPlanted?.[i] !== false);
       if (!mesh.visible) return;
-      const p = player.rig.contactPoints[i];
-      const axis = player.rig.skiAxes?.[i];
+      const p = board?.point ?? player.rig.contactPoints[i];
+      const axis = board?.axis ?? player.rig.skiAxes?.[i];
       const sx = axis ? axis.x : sin, sz = axis ? axis.z : cos;
       const positions = mesh.geometry.attributes.position, uv = mesh.geometry.attributes.uv;
-      const heel = player.footMode ? .30 : .88;
-      const width = player.footMode ? .19 : .14;
-      const sink = player.rig.skiSink?.[i] ?? player.snowSink ?? 0;
+      const heel = board ? (board.end - board.start) * .5 : player.footMode ? .30 : .88;
+      const width = board ? player.snowboardModel.waistMm * .00090 : player.footMode ? .19 : .14;
+      const sink = board?.compression ?? player.rig.skiSink?.[i] ?? player.snowSink ?? 0;
       mesh.material.uniforms.strength.value = (player.footMode ? .28 : .18 + Math.min(.18,sink*2))
         * (1 - clamp((p.y-this.ground.heightAt(p.x,p.z))/.18,0,1));
       mesh.material.uniforms.softSnow.value = player.powder;
@@ -1424,7 +1426,8 @@ export class SkiTracks {
       const row = {
         x:p.x, z:p.z, time, rx:acrossSlip ? motion.z/slipSpeed : axis ? axis.z/horizontal : Math.cos(heading),
         rz:acrossSlip ? -motion.x/slipSpeed : axis ? -axis.x/horizontal : -Math.sin(heading),
-        soft, carve, stop, compression:clamp(options.compression?.[ski] ?? options.compression ?? soft*.075,0,.15),
+        soft, carve, stop, widthScale: options.widthScale ?? 1,
+        compression:clamp(options.compression?.[ski] ?? options.compression ?? soft*.075,0,.15),
       };
       const length = previous ? Math.hypot(row.x-previous.x,row.z-previous.z) : 0;
       // Teleports, landings and an individually lifted ski start a fresh strip.
@@ -1446,6 +1449,7 @@ export class SkiTracks {
           soft:previous.soft+(soft-previous.soft)*t,
           carve:previous.carve+(carve-previous.carve)*t,
           stop:previous.stop+(stop-previous.stop)*t,
+          widthScale:previous.widthScale+(row.widthScale-previous.widthScale)*t,
           compression:previous.compression+(row.compression-previous.compression)*t,
         };
         this.writeSegment(this.last[ski],next);
@@ -1465,7 +1469,7 @@ export class SkiTracks {
       const p=row === 0 ? a : b;
       const skim = Math.sin(p.x*1.6+p.z*.92 + 1.2*Math.sin(p.z*.81-p.x*.4));
       const brokenSnow = Math.sin(p.z*5.3 - p.x*2.7 + 2.8*skim);
-      const width=(.112+p.soft*.074+p.carve*p.soft*.022+p.stop*.37) * (1 + p.soft*.095*skim);
+      const width=(.112+p.soft*.074+p.carve*p.soft*.022+p.stop*.37) * (1 + p.soft*.095*skim) * (p.widthScale ?? 1);
       const berm=(.001+p.soft*.020+p.compression*.16+p.stop*p.soft*.09)*(1+p.carve*.25);
       this.sampleColor.setRGB(.85,.91,.96);
       this.sampleNormal.set(0,1,0);

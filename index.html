@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="./mountain-menu.css" />
 <link rel="stylesheet" href="./trail-map.css" />
 <link rel="stylesheet" href="./sled-game.css" />
+<link rel="stylesheet" href="./character-customizer.css" />
 <link rel="stylesheet" href="./destination-selector.css" />
 </head>
 <body>
@@ -73,6 +74,7 @@
           <svg class="ico-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 9h4l5-4v14l-5-4H4V9Z"/><path d="m16 9 5 6m0-6-5 6"/></svg>
         </button>
         <button class="text-btn destination-menu-link" type="button" data-destination-open>Destinations</button>
+        <button class="text-btn" type="button" id="menu-customize">Customize</button>
         <button class="text-btn" id="menu-mountain">Mountain</button>
         <button class="text-btn" id="how-to-btn">Field Guide</button>
       </nav>
@@ -368,6 +370,7 @@
         </article>
         <h3>Footwear</h3><article class="gear-card snow-shoe-card" data-footwear></article>
         <h3>Skis</h3><div class="ski-catalog" data-skis></div>
+        <h3>Snowboards</h3><div class="ski-catalog" data-snowboard></div>
         <h3>Field notes</h3><ul data-finds></ul>
       </section>
       <section data-shop-barber hidden aria-label="Hair customization">
@@ -408,10 +411,10 @@
               <h3>Skiing</h3>
               <dl>
                 <div class="key-row" data-guide-action="steer"><dt><kbd>A</kbd><kbd>D</kbd></dt><dd>Carve left or right.</dd></div>
-                <div class="key-row" data-guide-action="forward"><dt><kbd>W</kbd></dt><dd>Push off on flats. Hold to tuck once you are moving.</dd></div>
-                <div class="key-row" data-guide-action="brake"><dt><kbd>S</kbd></dt><dd>Brake. At speed, add A or D to pick the side of your hockey stop.</dd></div>
-                <div class="key-row" data-guide-action="walk"><dt><kbd>B</kbd></dt><dd>Switch between skis and boots. Walk with W and S.</dd></div>
-                <div class="key-row" data-guide-action="pole"><dt><kbd>Click</kbd></dt><dd>Swing a pole while standing, walking or gliding slowly.</dd></div>
+                <div class="key-row" data-guide-action="forward"><dt><kbd>W</kbd></dt><dd>Push off on flats or skate with one foot on a snowboard. Hold to tuck at speed.</dd></div>
+                <div class="key-row" data-guide-action="brake"><dt><kbd>S</kbd></dt><dd>Brake on an edge. Add A or D to choose the side of your stop.</dd></div>
+                <div class="key-row" data-guide-action="walk"><dt><kbd>B</kbd></dt><dd>On foot, walk with W and S. Stop on snow to put on your skis or strap into your board.</dd></div>
+                <div class="key-row" data-guide-action="pole"><dt><kbd>Click</kbd></dt><dd>With skis equipped, swing a pole while standing, walking or gliding slowly.</dd></div>
               </dl>
             </section>
             <section class="guide-block">
@@ -534,6 +537,7 @@
         <button class="ghost-btn" id="pause-lifts" hidden>Go to a lift</button>
         <button class="ghost-btn" id="pause-map">Trail map <kbd>M</kbd></button>
         <button class="ghost-btn" id="pause-guide">Field Guide</button>
+        <button class="ghost-btn" id="pause-customize" type="button">Customize</button>
       </div>
       <div class="pause-settings">
         <details class="pause-group"><summary>Audio</summary>

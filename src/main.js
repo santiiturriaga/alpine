@@ -244,6 +244,7 @@ async function boot() {
     mountainAt: position => mountainAt(position.x, position.z),
   });
   outfitter=new Outfitter(player,closeShop,renderer);
+  outfitter.dialog.addEventListener('outfitterchange', () => ride?.cabin?.setGear(outfitter.appearance));
   multiplayer=createMultiplayer(scene,'whistler-blackcomb',()=>player);
   challenges.onWin=id=>{const coins=id==='avalanche'?12:id==='race'?8:5;outfitter.credit(coins);
     ui.toast('FINISH BONUS',coins+' mountain coins','green','check');};
@@ -620,8 +621,8 @@ function closeMountainPanel(resume=true) {
 function openShop(shop){
   if(!outfitter||outfitter.dialog.open||transitioning)return;
   if(scenicPose)leaveScenicView();
-  shopReturn=$('mountain-panel').open ? panelReturn : paused?'pause':playing?'game':'menu';
-  closeMountainPanel(false);releaseMouseLook();keysBackupClear();
+  shopReturn=$('mountain-panel').open ? 'mountain' : paused?'pause':playing?'game':'menu';
+  releaseMouseLook();keysBackupClear();
   if(playing)paused=true;
   outfitter.open(shop);
 }
@@ -740,6 +741,11 @@ function bindMountainPanel() {
     },
   });
   initFieldGuide();
+  $('menu-customize').onclick = $('pause-customize').onclick = event => {
+    releaseMouseLook();
+    keysBackupClear();
+    outfitter.openCustomizer(event.currentTarget);
+  };
   $('menu-mountain').onclick = $('pause-mountain').onclick = () => openMountainPanel();
   $('pause-lifts').onclick = () => openMountainPanel('lifts');
   for (const button of arrivalButtons) {
@@ -767,7 +773,7 @@ function bindMountainPanel() {
   dialog.querySelector('[data-minigame="sled"]').onclick = async () => {
     releaseMouseLook();
     const { openSledGame } = await import('./sled-game.js');
-    openSledGame({ resortRenderer: renderer, audio });
+    openSledGame({ resortRenderer: renderer, audio, outfit: outfitter.appearance });
   };
   $('course-retry').onclick=()=>{if(challenges.state)startCourse(challenges.state.id);};
   $('course-explore').onclick=()=>challenges.clear();
@@ -939,7 +945,7 @@ async function boardLift(choice = selectedBoard(nearbyLifts())) {
     inside: lift.def.type === 'gondola' || lift.def.type === 'p2p',
   };
   if (ride.inside) {
-    ride.cabin = new GondolaInterior(scene, lift.def.type === 'p2p', lift.def.name === 'Creekside Gondola', lift.def.name);
+    ride.cabin = new GondolaInterior(scene, lift.def.type === 'p2p', lift.def.name === 'Creekside Gondola', lift.def.name, outfitter.appearance);
     camera.near = .045;
     camera.updateProjectionMatrix();
   }
@@ -1277,7 +1283,7 @@ function bindKeys() {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     if ((event.code === 'Enter' || event.code === 'Space') && event.target.closest?.('button, select, input, textarea, summary, a[href]')) return;
     if (ui.isOpen('pause') && (event.code === 'ArrowUp' || event.code === 'ArrowDown')) return;
-    if(outfitter?.dialog.open)return;
+    if(outfitter?.dialog.open || outfitter?.customizing)return;
     if (ui.isOpen('guide')) {
       if (event.code === 'Escape' && !event.repeat) closeGuide();
       return;
@@ -1433,15 +1439,15 @@ function keysBackupClear() {
 function toggleFootMode() {
   if (!playing || paused || finished || ride || expeditions.active || quests.winchPassenger || transitioning || player.crash) return;
   if (!player.canChangeFootMode()) {
-    ui.toast('Slow down to change gear', 'Switch between boots and skis on the ground.', '', 'check');
+    ui.toast('Slow down to change gear', 'Come to a stop on the ground to change equipment.', '', 'check');
     return;
   }
   if (player.footMode && env.interiorAt?.(player.pos.x, player.pos.z, player.pos.y)) {
-    ui.toast('Skis off indoors', 'Step outside to put your skis on.', '', 'check');
+    ui.toast('On foot indoors', 'Step outside to ride again.', '', 'check');
     return;
   }
   if (player.footMode && player.surfaceType === 'ground') {
-    ui.toast('On foot', 'Reach a snow-covered trail to put your skis on.', '', 'check');
+    ui.toast('On foot', 'Reach a snow-covered trail to ride again.', '', 'check');
     return;
   }
   player.toggleFootMode();
@@ -1689,7 +1695,7 @@ function frame(now, vsync) {
     scheduleFrame();
     return;
   }
-  if (ui.isOpen('map') || document.getElementById('destination-selector')?.open || document.getElementById('sled-game')?.open) {
+  if (ui.isOpen('map') || outfitter?.customizing || document.getElementById('destination-selector')?.open || document.getElementById('sled-game')?.open) {
     performanceCalibration.interrupt();
     updateTrickHud(player, camera, false);
     lastFrame = now;

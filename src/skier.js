@@ -1,10 +1,13 @@
 import * as THREE from 'three';
 import { canvasTexture, clamp, damp, makeCanvas, mulberry32 } from './util.js';
-import { baseThickness, isSkiStyle, skiDeck } from './skier-equipment.js';
+import { baseThickness, isSkiStyle, skiDeck, snowboardDeck } from './skier-equipment.js';
+import { DEFAULT_SNOWBOARD_ID, SNOWBOARD_MODELS } from './gear-catalog.js';
 import { embroideredMaterial } from './garment-marks.js';
 import { buildSnowShoe } from './snow-shoes.js';
 import { buildSkiGoggles } from './ski-goggles.js';
+import { buildSkierBackpack } from './skier-backpacks.js';
 import { batchRigidParts } from './skier-hardware.js';
+import { frontBindingSide } from './ride-dynamics.js';
 
 export { skiProfile } from './skier-equipment.js';
 
@@ -479,7 +482,7 @@ function helmetTrim(profile, start, end, minY, maxY, ribbon = false) {
 export function createSkier({
   jacket: jacketColor = 0x925041, pants: pantsColor = 0x2e3237,
   helmet: helmetColor = 0xddd9cc, backpack: backpackColor = 0x24282a, accessories = true,
-  snowDetail = false,
+  snowDetail = false, backpackModel: initialBackpackModel,
 } = {}) {
   const group = new THREE.Group();
   group.name = 'Skier';
@@ -499,11 +502,7 @@ export function createSkier({
   const steel = material(0x9caab1, .36, .65), accent = material(0xdcaf6d, .6);
   const poleShaft = material(0xc8d5dc, .46, .19);
   const helmetMaterial = material(helmetColor, .46);
-  const bag = textile(backpackColor, .002);
-  const bagPanel = textile(new THREE.Color(backpackColor).multiplyScalar(.72));
   const helmetDecalMaterial = material(0x364048, .64);
-  const bagDecalMaterial = material(0xe8e2d6, .87);
-  let bagDecals = {};
 
   const body = new THREE.Group();
   const torso = new THREE.Group();
@@ -525,7 +524,7 @@ export function createSkier({
     });
   };
   const jacketMesh = put(torso, shapeJacket(shell(jacketProfile, .021, 40, true)), jacket);
-  let rescueTrim, packFace, packMark;
+  let rescueTrim;
   const jacketMarks = new Map();
   function patrolTrim() {
     const group = new THREE.Group();
@@ -553,33 +552,10 @@ export function createSkier({
     piping(torso, accent, jacketFront([[side*.079,.24],[side*.076,.254]], .010), .0019);
   }
 
-  if (accessories) {
-    // A compact weatherproof pack, with a sewn front panel and tool straps.
-    put(torso, shell([[.062,.063,.031,-.158],[.096,.107,.055,-.161],[.15,.127,.062,-.169],
-      [.232,.127,.063,-.169],[.317,.126,.055,-.162],[.39,.113,.047,-.156],[.438,.079,.029,-.145]], .027), bag);
-    packMark = embroideredMaterial(bagPanel, 'fossil', 0, .279, .147, true);
-    packFace = put(torso, shell([[.096,.053,.018,-.191],[.132,.092,.042,-.198],[.22,.105,.049,-.198],
-      [.298,.101,.043,-.196],[.363,.093,.036,-.180],[.405,.05,.017,-.177]], .028), packMark);
-    for (const side of [-1, 1]) {
-      piping(torso, black, [[side*.075,.127,-.224],[side*.099,.222,-.237],[side*.097,.315,-.217],
-        [side*.076,.373,-.204],[side*.042,.395,-.194]], .0032);
-      piping(torso, black, [[side*.106,.132,-.218],[side*.137,.165,-.167],[side*.141,.173,-.102]], .0063);
-      piping(torso, bagPanel, [[side*.075,.438,-.159],[side*.094,.481,-.113],
-        [side*.103,.535,-.074],[side*.107,.577,-.002],[side*.105,.542,.07],
-        ...jacketFront([[side*.107,.491],[side*.127,.406],[side*.133,.277],[side*.139,.175]], .0056)], .0102);
-      piping(torso, seamThread, jacketFront([[side*.102,.467],[side*.123,.395],[side*.13,.277]], .0147), .0011);
-      rounded(torso, black, .024, .026, .010, ...jacketFront([[side*.135,.231],[side*.135,.23]], .015)[0], .0026);
-    }
-    piping(torso, black, jacketFront([[-.132,.326],[-.056,.325],[0,.324],[.066,.325],[.132,.326]], .012), .006);
-    rounded(torso, bootShell, .032, .016, .010, .018, .325, .141, .002);
-    piping(torso, accent, [[.038,.357,-.223],[.045,.341,-.233],[.050,.333,-.229]], .0022);
-    const decal = new THREE.Group();
-    decal.position.set(0, .264, -.25);
-    decal.rotation.y = Math.PI;
-    decal.scale.setScalar(.032);
-    torso.add(decal);
-    bagDecals = decalShapes(decal, bagDecalMaterial);
-  }
+  const pack = accessories ? buildSkierBackpack(torso, {
+    color: backpackColor, model: initialBackpackModel, textile, material, shell, put, piping, rounded,
+    jacketFront, seamThread, black, bootShell, accent, decalShapes,
+  }) : null;
 
   const head = new THREE.Group();
   head.position.set(0, .563, .015);
@@ -646,13 +622,24 @@ export function createSkier({
   }
 
   let activeStyle = 'all-mountain', activeDeck = skiDeck(activeStyle);
+  const skiContact = { start: activeDeck.profile[0][0], end: activeDeck.profile.at(-1)[0], profile: activeDeck.profile };
+  let discipline = 'ski', boardStance = 'regular', boardId = DEFAULT_SNOWBOARD_ID;
+  let activeBoard, boardMesh;
+  const board = new THREE.Group();
+  board.name = 'Snowboard';
+  board.visible = false;
+  group.add(board);
+  const boardContact = {
+    point: new THREE.Vector3(), axis: new THREE.Vector3(0, 0, 1), right: new THREE.Vector3(1, 0, 0),
+    start: 0, end: 0, compression: 0,
+  };
   const decks = [];
   const snowCoats = [];
   const snowClump = snowDetail ? new THREE.IcosahedronGeometry(1, 1) : null;
   const trappedSnow = snowDetail ? material(0xe7f0f6, .93) : null;
   const arms = [], legs = [], helmetHands = [];
   const helmetGear = new THREE.Group();
-  helmetGear.name = 'Helmet view gloves and poles';
+  helmetGear.name = 'Helmet view arms';
   helmetGear.visible = false;
   group.add(helmetGear);
   const carriedSkis = new THREE.Group();
@@ -793,6 +780,7 @@ export function createSkier({
       [side*.061,-.1,.028],[side*.061,-.036,.026]], .0017);
     block(elbow, black, .024, .015, .007, side * .029, -.262, .048);
     const pole = new THREE.Group();
+    pole.name = 'Ski pole';
     pole.position.set(0, -.329, .023);
     elbow.add(pole);
     put(pole, new THREE.CylinderGeometry(.007,.0048,1.172,12), poleShaft, 0,-.52,0);
@@ -808,8 +796,9 @@ export function createSkier({
     // The gauntlet, trim, thumb and knuckle panels are shared in both views.
     // The elbow also owns seams running up the third-person sleeve.
     for (const part of elbow.children.slice(0,5)) hand.add(part.clone());
-    hand.name = side < 0 ? 'Right pole grip' : 'Left pole grip';
+    hand.name = side < 0 ? 'Right helmet view glove' : 'Left helmet view glove';
     const closePole=pole.clone(true);
+    closePole.name = 'Helmet view ski pole';
     hand.add(closePole);
     const forearm = put(helmetGear, shapeHelmetSleeve(shell([[-1,.043,.047,0],[-.985,.050,.051,0],[-.95,.050,.053,0],
       [-.93,.045,.049,0],[-.88,.057,.059,0],[-.81,.061,.057,.006],[-.77,.054,.058,.008],
@@ -819,6 +808,85 @@ export function createSkier({
     forearm.name = 'Helmet view jacket sleeve';
     helmetGear.add(hand);
     helmetHands.push({ hand, side, pole: closePole, forearm });
+  }
+
+  function buildBoardHardware() {
+    for (const leg of legs) {
+      const boot = leg.boardBoot = new THREE.Group();
+      boot.name = 'Soft snowboard boot';
+      leg.ski.add(boot);
+      boot.visible = false;
+      put(boot, shell([[.015,.057,.152,-.009],[.028,.063,.16,-.009],[.042,.065,.16,-.009]], .005), black);
+      put(boot, shell([[.038,.061,.15,-.006],[.063,.063,.146,-.009],[.089,.063,.13,-.016],
+        [.13,.057,.105,-.033],[.167,.057,.078,-.044],[.207,.059,.069,-.039],[.242,.057,.057,-.035]], .012), gaiter);
+      rounded(boot, bootShell, .081, .054, .065, 0, .209, .003, .016).rotation.x = -.34;
+      rounded(boot, bootShell, .11, .047, .074, 0, .056, .099, .016).rotation.x = -.20;
+      for (let i = 0; i < 5; i++) {
+        const y = .086 + i * .026, z = .096 - i * .02;
+        piping(boot, accent, [[-.032,y-.006,z],[.031,y+.012,z-.013]], .0025);
+        piping(boot, black, [[.032,y,z],[-.031,y+.012,z-.013]], .0019);
+      }
+      const binding = leg.boardBinding = new THREE.Group();
+      binding.name = leg.side > 0 ? 'Left snowboard binding' : 'Right snowboard binding';
+      board.add(binding);
+      rounded(binding, black, .147, .023, .303, 0, .013, -.013, .008);
+      rounded(binding, steel, .101, .012, .063, 0, .024, .097, .004);
+      const highback = rounded(binding, bootShell, .114, .194, .022, 0, .124, -.155, .02);
+      highback.rotation.x = -.15;
+      for (const wing of [-1, 1]) {
+        piping(binding, bootShell, [[wing*.055,.123,-.15],[wing*.071,.051,-.144],
+          [wing*.073,.035,-.069],[wing*.069,.031,.075]], .010);
+      }
+      const straps = leg.boardStraps = new THREE.Group();
+      binding.add(straps);
+      for (const [y, z, width] of [[.168,-.018,.036],[.091,.094,.027]]) {
+        for (const offset of [-width * .3, width * .3]) {
+          piping(straps, bootShell, [[-.069,.049,z+offset],[-.047,y-.03,z+offset],[0,y,z+offset],
+            [.047,y-.028,z+offset],[.069,.047,z+offset]], width * .28);
+        }
+        rounded(straps, steel, .029, .013, width, leg.side * .048, y-.025, z, .0035).rotation.z = -leg.side * .45;
+      }
+      batchRigidParts(binding);
+      batchRigidParts(straps);
+      batchRigidParts(boot);
+    }
+  }
+
+  function setEquipment({ discipline: kind, skiModel, snowboardModel, stance, skis, snowboard } = {}) {
+    if (kind !== undefined) discipline = kind === 'snowboard' ? 'snowboard' : 'ski';
+    if (stance !== undefined) boardStance = stance === 'goofy' ? 'goofy' : 'regular';
+    const requestedSki = (skiModel?.id ?? skiModel) ?? skis;
+    if (isSkiStyle(requestedSki) && activeStyle !== requestedSki) {
+      activeStyle = requestedSki;
+      activeDeck = skiDeck(activeStyle);
+      skiContact.start = activeDeck.profile[0][0];
+      skiContact.end = activeDeck.profile.at(-1)[0];
+      skiContact.profile = activeDeck.profile;
+      const snow = snowCoverage;
+      snowCoverage = -1;
+      setSkiSnow(Math.max(0, snow));
+      for (const deck of decks) {
+        deck.geometry = activeDeck.geometry;
+        deck.material = activeDeck.materials;
+      }
+    }
+    const requestedBoard = (snowboardModel?.id ?? snowboardModel) ?? snowboard;
+    if (Object.hasOwn(SNOWBOARD_MODELS, requestedBoard)) boardId = requestedBoard;
+    if (discipline !== 'snowboard' && !boardMesh) return;
+    if (activeBoard?.model.id === boardId) return;
+    activeBoard = snowboardDeck(boardId);
+    boardContact.start = activeBoard.profile[0][0];
+    boardContact.end = activeBoard.profile.at(-1)[0];
+    boardContact.profile = activeBoard.profile;
+    if (boardMesh) {
+      boardMesh.geometry = activeBoard.geometry;
+      boardMesh.material = activeBoard.materials;
+    } else {
+      boardMesh = put(board, activeBoard.geometry, activeBoard.materials);
+      boardMesh.name = 'Snowboard topsheet, beveled sidewalls, steel edges, and running base';
+      buildBoardHardware();
+    }
+    board.userData.labelPoint = new THREE.Vector3(0, .025, boardContact.end * .68);
   }
 
   const hip = new THREE.Vector3(), ankle = new THREE.Vector3(), knee = new THREE.Vector3();
@@ -865,7 +933,7 @@ export function createSkier({
     }
   }
 
-  function plantSki(ski, groundHeight, edgeAngle, footMode, sink, stairTreadAt) {
+  function plantRunner(ski, groundHeight, edgeAngle, footMode, sink, stairTreadAt, profile = activeDeck.profile) {
     skiCenter.copy(ski.position).applyMatrix4(frameMatrix);
     const tread = stairTreadAt?.(skiCenter.x, skiCenter.z);
     tipDirection.copy(skiForward).applyQuaternion(ski.quaternion).applyQuaternion(frameRotation);
@@ -876,7 +944,8 @@ export function createSkier({
       groundHeight(skiCenter.x + axis.x * range, skiCenter.z + axis.z * range)
       - groundHeight(skiCenter.x - axis.x * range, skiCenter.z - axis.z * range)
     ) / (range * 2);
-    tipDirection.y = tread == null ? gradient(tipDirection, footMode ? .13 : .68) : 0;
+    const contactRange = (profile.at(-1)[0] - profile[0][0]) * .375;
+    tipDirection.y = tread == null ? gradient(tipDirection, footMode ? .13 : contactRange) : 0;
     crossDirection.y = tread == null ? gradient(crossDirection, .10) : 0;
     tipDirection.normalize();
     groundNormal.crossVectors(tipDirection, crossDirection).normalize();
@@ -888,7 +957,7 @@ export function createSkier({
     // Support the base on the highest point beneath either metal edge.
     // The raised shovel and tail ride above this contact on level snow.
     let support = -Infinity;
-    for (const [z, width, y] of (footMode ? bootContactProfile : activeDeck.profile)) {
+    for (const [z, width, y] of (footMode ? bootContactProfile : profile)) {
       for (const side of skiEdges) {
         sample.set(side * width, y - baseThickness, z).applyQuaternion(skiRotation);
         support = Math.max(support, (tread ?? groundHeight(skiCenter.x + sample.x, skiCenter.z + sample.z)) - sample.y);
@@ -907,11 +976,17 @@ export function createSkier({
   const inverseJoint = new THREE.Matrix4();
   const poleDirection = new THREE.Vector3(), poleGrip = new THREE.Vector3(), poleTip = new THREE.Vector3();
   const cuffRotation = new THREE.Quaternion();
+  const boardTilt = new THREE.Quaternion(), bindingYaw = new THREE.Quaternion();
+  const boardEyes = new THREE.Vector3(), boardEyeLocal = new THREE.Vector3();
   function animate(dt, params, groundHeight) {
-    const { speed, steer, tuck, brake, airborne, grab, crash, crashTime,
+    const { speed = 0, steer = 0, tuck = 0, brake = 0, airborne = false, grab = 0, crash = false, crashTime = 0,
       stride = 0, stridePhase = 0, climb = 0, footMode = false, walk = 0, snowSink = 0,
       walkStride = .49, walkDirection = 1, switchStance = false, switchSide = 1, stairTreadAt, mount, display = false,
-      powder = 0, landingLoad = 0, stop = 0, stopSign = 1, skiYaw = 0, poleSwing = -1, poleSide = 1 } = params;
+      powder = 0, landingLoad = 0, stop = 0, stopSign = 1, skiYaw = 0, poleSwing = -1, poleSide = 1,
+      boardEdge = 0, boardOneFoot = 0, boardGroundSink = snowSink } = params;
+    const snowboarder = discipline === 'snowboard';
+    const onBoard = snowboarder && !footMode && !mount;
+    const front = frontBindingSide(boardStance);
     if (groundHeight) {
       frameMatrix.copy(group.parent.matrix);
       inverseFrame.copy(frameMatrix).invert();
@@ -919,7 +994,8 @@ export function createSkier({
       inverseRotation.copy(frameRotation).invert();
     }
     const sf = clamp(speed / 36, 0, 1);
-    carriedSkis.visible = footMode && !mount && !display;
+    carriedSkis.visible = !snowboarder && footMode && !mount && !display;
+    board.visible = snowboarder && !mount && (!display || !footMode);
     if (casualHead) {
       casualHead.visible = footMode && haircut !== 'helmet';
       skiHead.visible = !casualHead.visible;
@@ -949,13 +1025,23 @@ export function createSkier({
     body.position.set(-lean * .36 - powderTurn * .075,
       .944 - crouch * .238 - Math.abs(lean) * .12 - powderFlex * .13 + stepBob + breath * .0039,
       footMode ? -.026 : -.104 - crouch * .129 + racingTuck * .042 - powderFlex * .033);
-    body.rotation.set(crash ? .38 + Math.sin(crashTime * 8) * .15 : 0, 0, lean * .78);
+    body.rotation.set(crash ? .38 + Math.sin(crashTime * 8) * .15 : 0, 0, lean * .78, 'XYZ');
     // Stabilize the chest and gaze above the hips, then fold forward for a race tuck.
     torso.rotation.set((footMode ? .025 : .139) + crouch * .52 + racingTuck * .52 + breath * .005,
       -steer * .15 * (1 - racingTuck * .75) + .68 * switchLook - powderTurn * .18,
       -lean * .22 - powderTurn * .08);
     head.rotation.set((footMode ? -.025 : -.09) - crouch * .35 - racingTuck * .32 + breath * .011,
       -steer * .16 + 1.15 * switchLook, -lean * .42);
+    if (onBoard) {
+      const edge = boardEdge / .82;
+      const lead = switchStance ? -1 : 1;
+      body.position.set(-edge * .31, .94 - crouch * .24 - Math.abs(edge) * .10 - grab * airtuck * .10 - powderFlex * .10,
+        lead * (.031 + steer * .021) + boardOneFoot * .12);
+      body.rotation.set(-.12 * front * lead, -.5 * Math.PI * front, boardEdge * .67 + (crash ? .34 : 0), 'ZYX');
+      torso.rotation.set(.07 + crouch * .22 + racingTuck * .45 + grab * airtuck * .56,
+        front * lead * (.24 + racingTuck * .22) - steer * .17, -.08 * front * lead);
+      head.rotation.set(-.03 - crouch * .11 - racingTuck * .25, front * lead * (.92 - racingTuck * .12), -.1 * edge);
+    }
     if (mount) {
       body.position.set(0, mount.hipY, mount.hipZ);
       body.rotation.set(0, 0, 0);
@@ -968,6 +1054,32 @@ export function createSkier({
     jacketMesh.morphTargetInfluences[3] = wind * (.67 * Math.sin(windPhase * 1.94) + .21 * Math.cos(windPhase * 2.7));
     body.updateMatrix();
     torso.updateMatrix();
+    if (onBoard) {
+      head.updateMatrix();
+      boardEyeLocal.set(0, .134, .122).applyMatrix4(head.matrix).applyMatrix4(torso.matrix).applyMatrix4(body.matrix);
+      boardEyes.copy(boardEyeLocal).applyMatrix4(group.parent.matrix);
+    }
+    if (board.visible) {
+      if (onBoard) {
+        board.position.set(0, .018 + airtuck * (.08 + grab * .15), 0);
+        board.rotation.set(airtuck * (.12 - grab * .25), 0, groundHeight ? 0 : boardEdge);
+        boardContact.compression = groundHeight ? snowSink : 0;
+        if (groundHeight) plantRunner(board, groundHeight, boardEdge, false, boardGroundSink, null, activeBoard.profile);
+      } else {
+        board.position.set(0, .21, -.405).applyMatrix4(body.matrix);
+        board.rotation.set(-1.46, .14 * front, .25 * front);
+        boardTilt.copy(board.quaternion);
+        board.quaternion.copy(body.quaternion).multiply(boardTilt);
+      }
+      board.updateMatrix();
+      if (onBoard) {
+        const parentMatrix = group.parent.matrix;
+        const parentRotation = group.parent.quaternion;
+        boardContact.point.set(0, -baseThickness, 0).applyMatrix4(board.matrix).applyMatrix4(parentMatrix);
+        boardContact.axis.copy(skiForward).applyQuaternion(board.quaternion).applyQuaternion(parentRotation);
+        boardContact.right.set(1, 0, 0).applyQuaternion(board.quaternion).applyQuaternion(parentRotation);
+      }
+    }
     for (const { side, shoulder, elbow, pole, sleeve } of arms) {
       const swing = Math.sin(phase + side * 1.57) * (.025 + sf * .065);
       // Recover the opposite pole as the supporting ski pushes back.
@@ -987,6 +1099,12 @@ export function createSkier({
       );
       elbow.rotation.x = (-.66 + crouch * .17 - grab * .35 - outside * .29) * (1 - racingTuck)
         - 2.44 * racingTuck - gait * .22 - planting * .24 - flick * .38;
+      if (onBoard) {
+        const leading = side === front * (switchStance ? -1 : 1);
+        shoulder.rotation.set(-.34 + .27 * Number(leading) - racingTuck * .58 + swing - grab * airtuck * .31,
+          -side * (.1 + .28 * grab * airtuck), side * (.55 + Math.abs(boardEdge) * .31 - racingTuck * .23 - grab * airtuck * .29));
+        elbow.rotation.set(-.32 - racingTuck * .63 + .16 * grab * airtuck, 0, side * .08);
+      } else if (!mount) elbow.rotation.y = elbow.rotation.z = 0;
       if (mount) {
         const [gripX, gripY, gripZ] = mount.grip;
         poleGrip.set(side * gripX, gripY, gripZ);
@@ -1006,8 +1124,8 @@ export function createSkier({
       elbow.updateMatrix();
       sleeveEnd.set(0, -.257, .003).applyMatrix4(elbow.matrix);
       if (body.visible) sleeve.update(sleeveStart, elbow.position, sleeveEnd, windPhase, wind);
-      pole.visible = !mount && !display;
-      if (mount || display) continue;
+      pole.visible = !snowboarder && !mount && !display;
+      if (!pole.visible) continue;
       // Keep the shaft trailing independently of forearm flex, and let the pole
       // trail further if its unadjusted tip would pass through the snow.
       poleDirection.set(side * (.23 + sf * .09) * (1 - racingTuck) + side * sweep * 1.48,
@@ -1035,12 +1153,12 @@ export function createSkier({
       poleTarget.setFromUnitVectors(down, poleDirection);
       pole.quaternion.copy(armRotation).multiply(poleTarget);
     }
-    for (const [i, { side, ski, equipment, trousers, cuff, skiBoot, walkShoe }] of legs.entries()) {
-      equipment.visible = !footMode && (!mount || !!mount.skis);
-      if (walkShoe) {
-        walkShoe.visible = footMode && snowShoes;
-        skiBoot.visible = !walkShoe.visible;
-      }
+    for (const [i, { side, ski, equipment, trousers, cuff, skiBoot, walkShoe, boardBoot, boardBinding, boardStraps }] of legs.entries()) {
+      equipment.visible = !snowboarder && !footMode && (!mount || !!mount.skis);
+      const showSnowshoe = footMode && snowShoes;
+      if (walkShoe) walkShoe.visible = showSnowshoe;
+      skiBoot.visible = !snowboarder && !showSnowshoe;
+      if (boardBoot) boardBoot.visible = snowboarder && !showSnowshoe;
       const cycle = stridePhase + (side < 0 ? Math.PI : 0);
       const walkPhase = ((cycle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) / Math.PI;
       const step = footMode ? (walkPhase < 1 ? 1 - 2 * walkPhase : -Math.cos((walkPhase - 1) * Math.PI)) : Math.sin(cycle);
@@ -1066,45 +1184,82 @@ export function createSkier({
       // the loose layer, then rises clear of the uncompressed snow surface.
       const loadedDepth = groundHeight && !footMode
         ? snowSink * (1 + side * (stanceSteer * sf * .32 + powderTurn * .15)) * (1 - recovery * gait) : 0;
-      skiSink[i] = Math.max(0, loadedDepth - stepLift);
-      skiPlanted[i] = !!groundHeight && !footMode && stepLift < loadedDepth + .004;
-      if (groundHeight) {
-        plantSki(ski, groundHeight, edge, footMode, loadedDepth, stairTreadAt);
+      skiSink[i] = onBoard ? 0 : Math.max(0, loadedDepth - stepLift);
+      skiPlanted[i] = !!groundHeight && !footMode && !onBoard && stepLift < loadedDepth + .004;
+      if (groundHeight && !onBoard) {
+        plantRunner(ski, groundHeight, edge, footMode, loadedDepth, stairTreadAt);
         // Lift only the recovering ski; the other remains supported by its base.
         // Up is transformed into the model frame so lift stays vertical on slopes.
         sample.set(0, stepLift, 0).applyQuaternion(inverseRotation);
         ski.position.add(sample);
+      }
+      if (boardBinding) {
+        const leading = side === front;
+        const offset = activeBoard.model.stanceWidthCm * .005;
+        const duckAngle = leading ? .274 : boardId === DEFAULT_SNOWBOARD_ID ? -.196 : -.065;
+        const yaw = front * (-Math.PI * .5 + duckAngle);
+        boardBinding.position.set(0, .004, leading ? offset : -offset);
+        boardBinding.rotation.y = yaw;
+        const freeFoot = onBoard && !leading ? boardOneFoot : 0;
+        boardStraps.rotation.x = freeFoot * -.54;
+        if (onBoard) {
+          ski.position.copy(boardBinding.position);
+          ski.position.y += .013;
+          ski.position.applyMatrix4(board.matrix);
+          ski.quaternion.copy(board.quaternion).multiply(bindingYaw.setFromAxisAngle(up, yaw));
+          if (freeFoot > .01) {
+            const pushPhase = Math.sin(stridePhase);
+            ski.position.x -= front * .34 * freeFoot;
+            ski.position.z += (.12 + pushPhase * .30) * freeFoot;
+            if (groundHeight) {
+              plantRunner(ski, groundHeight, 0, true, 0);
+              sample.set(0, .055 * Math.max(0, -pushPhase) * freeFoot, 0).applyQuaternion(inverseRotation);
+              ski.position.add(sample);
+            }
+          }
+        }
       }
       ski.updateMatrix();
       contactPoints[i].set(0, -baseThickness, 0).applyMatrix4(ski.matrix).applyMatrix4(group.parent.matrix);
       skiAxes[i].copy(skiForward).applyQuaternion(ski.quaternion).applyQuaternion(group.parent.quaternion);
       skiRights[i].set(1, 0, 0).applyQuaternion(ski.quaternion).applyQuaternion(group.parent.quaternion);
       hip.set(side * .127, -.014, .023).applyMatrix4(body.matrix);
-      ankle.set(0, .232, -.058).applyMatrix4(ski.matrix);
+      ankle.set(0, snowboarder ? .204 : .232, -.058).applyMatrix4(ski.matrix);
       direction.subVectors(ankle, hip);
       const gap = direction.length();
       direction.normalize();
-      bend.set(side * .10 - lean * .65, 0, 1).addScaledVector(direction, -bend.dot(direction)).normalize();
+      if (onBoard) bend.set(0, 0, 1).applyQuaternion(ski.quaternion);
+      else bend.set(side * .10 - lean * .65, 0, 1);
+      bend.addScaledVector(direction, -bend.dot(direction)).normalize();
       knee.copy(hip).lerp(ankle, .49).addScaledVector(bend,
         Math.sqrt(Math.max(.016 ** 2, .365 ** 2 - (gap * .5) ** 2)));
       // The cuff flexes around the ankle rivets while the boot sole stays fixed.
       bend.subVectors(knee, ankle).applyQuaternion(cuffRotation.copy(ski.quaternion).invert());
       cuff.rotation.x = clamp(Math.atan2(bend.z, bend.y) * .53, -.06, .34);
       cuff.updateMatrix();
-      ankle.set(0, .087, .011).applyMatrix4(cuff.matrix).applyMatrix4(ski.matrix);
+      if (snowboarder) ankle.set(0, .234, -.040).applyMatrix4(ski.matrix);
+      else ankle.set(0, .087, .011).applyMatrix4(cuff.matrix).applyMatrix4(ski.matrix);
       if (trousers.mesh.visible) trousers.update(hip, knee, ankle, windPhase, wind);
     }
   }
 
   function showHelmetGear(on, player) {
+    const snowboarder = discipline === 'snowboard';
+    const onBoard = snowboarder && !player.footMode;
     body.visible = !on;
-    for(const leg of legs)leg.trousers.mesh.visible=!on;
+    head.visible = !on;
+    for (const leg of legs) leg.trousers.mesh.visible = !on || onBoard;
     helmetGear.visible = on;
     if (on && player.footMode) {
       for (const { equipment } of legs) equipment.visible = false;
+      board.visible = false;
     }
     helmetGear.rotation.y = player.switchStance ? Math.PI : 0;
     if (!helmetGear.visible) return;
+    if (onBoard) helmetGear.position.copy(boardEyeLocal);
+    else helmetGear.position.set(0, 0, 0);
+    const front = frontBindingSide(boardStance) * (player.switchStance ? -1 : 1);
+    const boardEdge = player.boardEdge ?? 0;
     for (const { hand, side, pole, forearm } of helmetHands) {
       const plant = Math.sin(player.stridePhase + (side < 0 ? Math.PI : 0))
         * (player.footMode ? player.walkAmount * .77 : player.strideAmount);
@@ -1112,6 +1267,7 @@ export function createSkier({
         (player.footMode ? .93 : .99) - player.tuckAmount * .12 + plant * .055,
         .24 + plant * .16 - player.tuckAmount * .05);
       hand.rotation.set(-.99 + plant * .21, side * .09, side * -.14 - player.steer * .08);
+      pole.visible = !snowboarder;
       pole.rotation.set(1.00 + player.tuckAmount * .88 - plant * .46, 0, side * .22);
       if (player.poleSide === side && player.poleSwing > 0) {
         const hit = Math.sin(player.poleSwing / .54 * Math.PI);
@@ -1122,6 +1278,13 @@ export function createSkier({
       // The arm enters from the elbow beside the ribcage and ends inside
       // the existing rolled gauntlet, including when a pole is planted.
       forearm.position.set(side*.46,.88-player.tuckAmount*.17,-.54);
+      if (onBoard) {
+        const leading = side === front;
+        hand.position.set(side * (leading ? .47 : .54), -.56 + side * boardEdge * .19, leading ? .32 : .13);
+        hand.rotation.set(-.54, -side * .43, side * -.36 + boardEdge * .54);
+        forearm.position.set(side * .73, -.78, leading ? -.10 : -.23);
+      }
+      forearm.scale.x = forearm.scale.z = onBoard ? .83 : 1;
       sample.set(0,-.257,.011).applyQuaternion(hand.quaternion).add(hand.position).sub(forearm.position);
       forearm.scale.y=sample.length();
       forearm.quaternion.setFromUnitVectors(down,sample.normalize());
@@ -1130,8 +1293,8 @@ export function createSkier({
   }
 
   const acceptsColor = (value) => typeof value === 'string' && /^#(?:[\da-f]{3}|[\da-f]{6})$/i.test(value);
-  function setAppearance({ jacket: color, pants: trousers, helmet: shellColor, backpack, sticker, skis, apparel,
-    haircut: cut, hairColor, footwear, goggles: goggleColor } = {}) {
+  function setAppearance({ jacket: color, pants: trousers, helmet: shellColor, backpack, backpackModel, sticker, apparel,
+    haircut: cut, hairColor, footwear, goggles: goggleColor, ...equipment } = {}) {
     if (goggleColor !== undefined) goggles.setColor(goggleColor);
     const patrol = apparel === 'patrol-shell';
     if (patrol && !rescueTrim) rescueTrim = patrolTrim();
@@ -1172,33 +1335,21 @@ export function createSkier({
       const { r, g, b } = helmetMaterial.color;
       helmetDecalMaterial.color.set(.2126 * r + .7152 * g + .0722 * b > .35 ? 0x364048 : 0xe8e2d6);
     }
-    if (acceptsColor(backpack)) {
-      bag.color.set(backpack);
-      bagPanel.color.copy(bag.color).multiplyScalar(.72);
-      const { r, g, b } = bagPanel.color;
-      bagDecalMaterial.color.set(.2126 * r + .7152 * g + .0722 * b > .35 ? 0x364048 : 0xe8e2d6);
-    }
-    if (packFace && sticker !== undefined) packFace.material = sticker === 'none' ? packMark : bagPanel;
+    pack?.setAppearance({ color: acceptsColor(backpack) ? backpack : undefined, model: backpackModel, decal: sticker });
     if (sticker !== undefined) for (const [name, decal] of Object.entries(helmetDecals)) {
       decal.visible = sticker === name;
-      if (bagDecals[name]) bagDecals[name].visible = decal.visible;
     }
-    if (isSkiStyle(skis) && activeStyle !== skis) {
-      activeStyle = skis;
-      activeDeck = skiDeck(activeStyle);
-      const snow = snowCoverage;
-      snowCoverage = -1;
-      setSkiSnow(Math.max(0, snow));
-      for (const deck of decks) {
-        deck.geometry = activeDeck.geometry;
-        deck.material = activeDeck.materials;
-      }
-    }
+    setEquipment(equipment);
   }
   setAppearance({ sticker: 'none' });
-  for (const joint of [torso, skiHead, ...Object.values(helmetDecals), ...Object.values(bagDecals)]) batchRigidParts(joint);
+  for (const joint of [torso, skiHead, ...Object.values(helmetDecals)]) batchRigidParts(joint);
   for (const { skiBoot, cuff } of legs) { batchRigidParts(skiBoot); batchRigidParts(cuff); }
   for (const { elbow, pole } of arms) { batchRigidParts(elbow); batchRigidParts(pole); }
   for (const { hand, pole } of helmetHands) { batchRigidParts(hand); batchRigidParts(pole); }
-  return { group, torso, animate, contactPoints, skiAxes, skiRights, skiSink, skiPlanted, showHelmetGear, setAppearance, setSkiSnow };
+  const gearAnchors = {
+    jacket: torso, goggles: goggles.group, helmet: skiHead, backpack: pack?.group,
+    pants: legs[0].trousers.mesh, skis: legs[0].equipment, snowboard: board,
+  };
+  return { group, torso, animate, contactPoints, skiAxes, skiRights, skiSink, skiPlanted, skiContact,
+    showHelmetGear, setAppearance, setEquipment, setSkiSnow, gearAnchors, boardContact, boardEyes };
 }

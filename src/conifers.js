@@ -204,7 +204,6 @@ function buildConifer(kind, detail, variant) {
   let snowCenter = null;
   const terminalShoots = [];
   const green = new THREE.Color(spec.color), snow = new THREE.Color(0xe8eff0);
-  const tuftGreen = green.clone().lerp(new THREE.Color(0x142f25), .76);
   const snowShade = new THREE.Color(0xb5cbd4), bark = new THREE.Color(0xc1b49e);
   const normalize = (v) => { const d = Math.hypot(...v) || 1; return v.map((x) => x / d); };
   const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -322,12 +321,12 @@ function buildConifer(kind, detail, variant) {
         const s = col / cols * 2 - 1;
         const bow = Math.sin(t * Math.PI), rollSin = Math.sin(roll), rollCos = Math.cos(roll);
         const lateral = width * s * (.80 + .22 * bow - .32 * t * t);
-        const sag = -drop * t * t + length * (.098 * bow + .039 * t ** 6);
+        const sag = -drop * t * t + length * (.047 * bow + .019 * t ** 6);
         const fold = s * s * width * .21;
         const p = [root[0] + ux * length * t + vx * lateral * Math.cos(roll),
           root[1] + sag + lateral * Math.sin(roll) - fold,
           root[2] + uz * length * t + vz * lateral * Math.cos(roll)];
-        const pitch = 2 * drop / Math.max(length, .001) * t - .308 * Math.cos(t * Math.PI) - .234 * t ** 5;
+        const pitch = 2 * drop / Math.max(length, .001) * t - .148 * Math.cos(t * Math.PI) - .114 * t ** 5;
         const sideSlope = -rollSin + rollCos * s * .32;
         const n = normalize([vx * sideSlope + ux * pitch, rollCos, vz * sideSlope + uz * pitch]);
         const uv = [(tile % 2 + .50 + s * .43) * .5, (Math.floor(tile / 2) + .94 - t * .87) * .5];
@@ -350,67 +349,33 @@ function buildConifer(kind, detail, variant) {
       tri(c.p, d.p, b.p, c.n, d.n, b.n, c.color, d.color, b.color, c.uv, d.uv, b.uv, anchor);
     }
   }
-  // A folded spray supplies the needles at its edge. This deeper body behind
-  // it is shaded on all sides and keeps layered boughs full from the chairlift.
-  function tuft(pointAt, yaw, length, phase, anchor) {
-    const axis = [Math.cos(yaw), 0, Math.sin(yaw)];
-    const across = [-axis[2], 0, axis[0]];
-    const sideCount = 5;
-    const rings = [.15,.46,.74,.97].map((t, row) => {
-      const center = pointAt(t);
-      const width = length * [.14,.32,.24,.037][row] * (.91 + .14 * Math.sin(phase + row));
-      return Array.from({ length: sideCount }, (_, i) => {
-        const angle = (i + .12 * Math.sin(phase+row)) / sideCount * TAU;
-        const sx = Math.cos(angle), sy = Math.sin(angle);
-        const shape = 1 + .17 * Math.sin(phase + row * 3 + i * 4);
-        const p = [center[0]+across[0]*width*sx*shape,
-          center[1]-length*.055 + width * (sy > 0 ? .42 : .57) * sy * shape,
-          center[2]+across[2]*width*sx*shape];
-        const n = normalize([across[0]*sx + axis[0]*(t-.37), sy*1.9, across[2]*sx + axis[2]*(t-.37)]);
-        const color = tuftGreen.clone().multiplyScalar(.56 + .41 * Math.max(0,sy) + .25 * t + .11 * Math.sin(phase+i*7));
-        return { p, n, color };
-      });
-    });
-    const uv = [.974, .004];
-    for (let k=0;k<rings.length-1;k++) for (let i=0;i<sideCount;i++) {
-      const j=(i+1)%sideCount,a=rings[k][i],b=rings[k][j],c=rings[k+1][i],d=rings[k+1][j];
-      tri(a.p,c.p,b.p,a.n,c.n,b.n,a.color,c.color,b.color,uv,uv,uv,anchor);
-      tri(b.p,c.p,d.p,b.n,c.n,d.n,b.color,c.color,d.color,uv,uv,uv,anchor);
-    }
-  }
 
   const snowDeposits = [];
-  function pillow(center, yaw, length, width, phase, anchor, coarse = false) {
+  function snowCap(center, yaw, length, width, tilt, phase, anchor) {
     const ux=Math.cos(yaw),uz=Math.sin(yaw),vx=-uz,vz=ux;
-    // A deposit follows the loaded bough: a long narrow cap, with a compact
-    // hanging lip rather than a round white block over the fine twig work.
-    length*=1.07; width*=.88;
     snowDeposits.push({ center, width });
-    const near = detail === -.5 || detail === 0;
-    const sides = coarse ? (near ? 8 : 6) : 9;
-    const segments = coarse ? (near ? 5 : 4) : 7;
+    const sides = 5, segments = detail === -1 ? 2 : 3;
     anchor=anchor||center;
     snowCenter=center;
     const rings=[];
-    // Rounded hanging capsules follow the bough. Several unequal lobes and a
-    // rolled lip keep their silhouette soft even against a bright snowfield.
+    // Snow settles on the upward-facing spray and thins away from its stem.
     for(let k=0;k<=segments;k++) {
-      const t=k/segments*2-1,profile=Math.sqrt(Math.max(0,1-t*t))*(1-.21*t);
-      const bulge=.91+.16*Math.sin(t*4.3+phase)+.12*Math.sin(t*9.7-phase);
-      const sweep = width * .22 * Math.sin(t*3.3+phase);
+      const t=k/segments*2-1,profile=Math.max(0,1-t*t)**.68*(1-.19*t);
+      const bulge=.84+.19*Math.sin(t*5.8+phase)+.12*Math.sin(t*9.7-phase);
+      const sweep = width * .24 * Math.sin(t*3.3+phase);
       const ring=[];
       for(let i=0;i<sides;i++) {
-        const a=i/sides*TAU,side=Math.cos(a),up=Math.sin(a);
-        const scallop = .91 + .09*Math.cos(a*3 + t*3.4+phase);
-        const height = width * (up>0 ? .81 : .36);
+        const a=(i+.25)/sides*TAU,side=Math.cos(a),up=Math.sin(a);
+        const scallop = .88 + .16*Math.cos(a*3 + t*3.4+phase);
+        const height = width * (up>0 ? .59 : .18);
         const lateral = side*width*profile*bulge*scallop + sweep;
-        const lift = profile * (up*height*bulge*scallop + side*width*.12*Math.sin(t*4.7+phase));
+        const lift = profile * (up*height*bulge*scallop + side*width*.13*Math.sin(t*6.7+phase));
         const p=[center[0]+ux*t*length+vx*lateral,
-          center[1]-t*length*.22+lift+width*.14*Math.sin(t*5.5+phase),
+          center[1]-t*length*tilt+lift+width*.16*Math.sin(t*5.5+phase),
           center[2]+uz*t*length+vz*lateral];
         const n=normalize([ux*t*width/Math.max(length,.0001)+vx*side,
-          up*(up>0?1.20:1.8),uz*t*width/Math.max(length,.0001)+vz*side]);
-        const c=snow.clone().lerp(snowShade,.06 + Math.max(0,-up)*.85+.04*(1-side));
+          up*(up>0?1.7:2.6),uz*t*width/Math.max(length,.0001)+vz*side]);
+        const c=snow.clone().lerp(snowShade,.04 + Math.max(0,-up)*.62+.08*(1-side));
         ring.push({p,n,c});
       }
       rings.push(ring);
@@ -421,6 +386,16 @@ function buildConifer(kind, detail, variant) {
       if(k<segments-1) tri(b.p,c.p,d.p,b.n,c.n,d.n,b.c,c.c,d.c,undefined,undefined,undefined,anchor);
     }
     snowCenter=null;
+  }
+
+  function twigSnow(root, yaw, reach, drop, phase, anchor) {
+    const ledge = reach * (.39 + .15 * Math.sin(phase));
+    const center = [root[0] + Math.cos(yaw) * ledge,
+      root[1] - drop * (ledge / reach) ** 2 + reach * .018,
+      root[2] + Math.sin(yaw) * ledge];
+    const length = reach * (.146 + .062 * Math.sin(phase * 2));
+    const width = reach * (.070 + .025 * Math.cos(phase * 1.3));
+    snowCap(center, yaw + .15 * Math.sin(phase), length, width, drop / reach, phase, anchor);
   }
 
   function finish() {
@@ -505,12 +480,12 @@ function buildConifer(kind, detail, variant) {
     const t = tier / 18;
     const y = skirt + (1 - Math.pow(1 - t, 1.21)) * (.997 - skirt);
     for (let radial = 0; radial < 5; radial++) {
-      const yaw = radial / 5 * TAU + tier * 2.39996 + (rand() - .5) * .43;
-      const root = trunk(y + (rand() - .5) * .046);
-      const length = spread * Math.pow(1 - y, spec.taper) * (.76 + rand() * .46);
-      const drop = length * spec.drop * (.78 + rand() * .60), phase = rand() * TAU;
+      const yaw = radial / 5 * TAU + tier * 2.39996 + (rand() - .5) * .89;
+      const root = trunk(Math.min(1, y + (rand() - .5) * .072));
+      const length = spread * Math.pow(1 - y, spec.taper) * (.59 + rand() * .67);
+      const drop = length * spec.drop * (.89 + rand() * .75), phase = rand() * TAU;
       const at = (f) => [root[0] + Math.cos(yaw) * length * f,
-        root[1] + length * .04 * Math.sin(f * Math.PI) - drop * f * f,
+        root[1] + length * .02 * Math.sin(f * Math.PI) - drop * f * f,
         root[2] + Math.sin(yaw) * length * f];
       branches.push({ tier, radial, yaw, root, length, drop, phase, at });
     }
@@ -519,31 +494,43 @@ function buildConifer(kind, detail, variant) {
     const permanent = tier % 2 === 0 && radial < 4 && !(tier % 6 === 4 && radial === 3);
     const innerSpray = !permanent && (tier + 2 * radial) % 3 === 0;
     if ((permanent || innerSpray) && (detail === -1 || detail === 0)) {
-      const reach = length * (permanent ? 1 : .74);
-      tuft(at,yaw,reach,phase,null);
-      foliage(root, yaw, reach, reach * spec.fan * 1.06, drop + reach * .10,
-        Math.sin(phase) * .95, phase, null, true);
-      foliage(at(.25), yaw + .13, reach * .66, reach * .25, reach * .44,
-        1.15 + Math.sin(phase) * .2, phase + 1.3, null, true);
-      if ((tier + radial) % 4 !== 1) {
-        const p = at(.47); p[1] += length*.055;
-        pillow(p,yaw+.09*Math.cos(phase),length*(.34+.08*Math.sin(phase)),length*(.263+.057*Math.cos(phase)),phase,null,true);
+      const elbow = at(.49);
+      const radius = length * .009;
+      tube(root, elbow, radius, null, 3, bark, radius * .62);
+      tube(elbow, at(.94), radius * .62, null, 3);
+      foliage(at(.09), yaw, length * .94, length * spec.fan * .74, drop * .93,
+        .58 * Math.sin(phase), phase, null);
+      foliage(at(.25), yaw + .13 * Math.sin(phase), length * .68, length * .24,
+        drop * 1.44, (Math.sin(phase) > 0 ? 1 : -1) * 1.08, phase + 1.3, null, true);
+      for (let i = 0; i < 4; i++) {
+        const side = (radial + i) % 2 ? -1 : 1;
+        const branchPhase = phase + i * 2.31;
+        const f = .21 + i * .16 + .072 * Math.sin(branchPhase);
+        const fork = at(f);
+        const bearing = yaw + side * (.69 + .31 * Math.sin(branchPhase));
+        const reach = length * (.57 - i * .055 + .073 * Math.cos(branchPhase));
+        const fall = reach * (.28 + spec.pendant * .5 + .14 * Math.cos(branchPhase));
+        foliage(fork, bearing, reach, reach * (.33 + .05 * Math.sin(branchPhase)),
+          fall, side * (.44 + .57 * Math.cos(branchPhase)), branchPhase, null, i % 2 === 0);
+        if (i > 0 && (tier + i + radial) % 3 === 0) twigSnow(fork, bearing, reach, fall, branchPhase, null);
       }
     }
     if (detail === -1) continue;
     if (detail === 0 || detail === -.5) {
       const anchor = detail === -.5 ? root : null;
-      tube(root, at(.88), length * .007, anchor, 3);
+      if (!permanent && !innerSpray) tube(root, at(.88), length * .007, anchor, 3);
       foliage(permanent ? at(.10) : root, yaw + (permanent ? Math.sin(phase) * .24 : 0),
         length * (permanent ? .86 : 1), length * spec.fan, drop + length * .08,
         Math.sin(phase) * .95, phase + (permanent ? 2.4 : 0), anchor);
       // Hanging curtains overlap the next level and obscure the inner trunk.
-      foliage(at(.24), yaw + Math.sin(phase) * .28, length * .71, length * .24,
-        length * spec.pendant, 1.12 + Math.sin(phase + 1) * .24, phase + 1.7, anchor);
+      const bearing = yaw + (radial % 2 ? -.42 : .42) + Math.sin(phase) * .27;
+      const origin = at(.26 + .08 * Math.cos(phase));
+      const reach = length * .65;
+      const fall = length * spec.pendant * (.61 + .27 * Math.sin(phase));
+      foliage(origin, bearing, reach, length * .21,
+        fall, .98 + Math.sin(phase + 1) * .41, phase + 1.7, anchor);
       if (!permanent && !innerSpray && (tier + radial) % 3 !== 0) {
-        const p = at(.57 + .11 * Math.sin(phase));
-        p[1] += length * .053;
-        pillow(p, yaw, length * (.25 + Math.sin(phase) * .068), length * (.195 + Math.cos(phase * 1.7) * .042), phase, anchor, true);
+        twigSnow(origin, bearing, reach, fall, phase, anchor);
       }
     }
     if (detail === 1) for (let j = 0; j < 2; j++) {
@@ -696,22 +683,21 @@ export function coniferMaterial(level = 0, region = null) {
       `}
       float canopyTint = 1.0 - barkSurface;
       float snowPad = step(.988, vMapUv.x);
-      float tuftSurface = step(.965, vMapUv.x) * (1.0-snowPad);
-      float needleSurface = ${level === -2 ? '0.0' : 'canopyTint * (1.0 - snowPad - tuftSurface)'};
+      float needleSurface = ${level === -2 ? '0.0' : 'canopyTint * (1.0 - snowPad)'};
       ${level === -2 ? '' : `
       diffuseColor.a *= mix(1.0,smoothstep(.48,1.53,patchDistance),needleSurface);
       `}
-      float upperBough = max(0.0,dot(normalize(vNormal),mat3(viewMatrix)*vec3(0,1,0)));
-      upperBough *= gl_FrontFacing ? 1.0 : 0.0;
-      float frostPocket = sin(crownShape.y*68.0 + crownShape.x*18.0 - crownShape.z*24.0
-        + sin(crownShape.z*35.0+crownShape.w) + crownShape.w);
-      float rime = crownSnow * smoothstep(.42,.95,upperBough)
-        * smoothstep(.16,.92,frostPocket) * canopyTint * (1.0-snowPad);
-      float tufts = sin(crownShape.x*414. + sin(crownShape.z*231.)*2.6) *
-        cos(crownShape.y*784. + crownShape.z*553.);
-      float tuftDetail = 1. - smoothstep(13.,45.,crownDistance);
-      diffuseColor.rgb *= 1. + tuftSurface*tuftDetail*(tufts*.17+frostPocket*.11);
-      diffuseColor.rgb=mix(diffuseColor.rgb,vec3(.47,.56,.60),rime*.37);
+      float upperBough = gl_FrontFacing ? max(0.0,dot(normalize(vNormal),mat3(viewMatrix)*vec3(0,1,0))) : 0.0;
+      vec3 p = crownShape.xyz;
+      float pocket = sin(p.y*157. + p.x*83. - p.z*93. + crownShape.w + sin(p.z*201.))
+        * cos(p.x*194. + p.y*132. + p.z*137.);
+      float grain = sin(p.x*373. - p.y*477. + p.z*433. + sin(p.y*347. + p.z*617.));
+      float twigRidge = 1.0-smoothstep(.03,.24,abs(fract(vMapUv.x*2.0)-.5));
+      float whiteRime = smoothstep(.24,.76,pocket*.46 + grain*.17 + twigRidge*.33);
+      float rimedSpray = crownSnow * whiteRime * mix(.13,1.,smoothstep(.14,.86,upperBough))
+        * canopyTint * (1.0-snowPad);
+      diffuseColor.rgb *= 1. + snowPad * pocket * .08;
+      diffuseColor.rgb = mix(diffuseColor.rgb,vec3(.68,.78,.84),rimedSpray);
       float distantCanopy = smoothstep(210.0, 1000.0, crownDistance) * .34 * (1.0-snowPad);
       diffuseColor.rgb *= 1.0 - distantCanopy * canopyTint;
     `).replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
@@ -727,7 +713,7 @@ export function coniferMaterial(level = 0, region = null) {
       }
       `}
     `).replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
-      reflectedLight.indirectDiffuse += diffuseColor.rgb * ${level === -2 ? '.14' : '(.16 + .23 * needleSurface + .07 * barkSurface)'};
+      reflectedLight.indirectDiffuse += diffuseColor.rgb * ${level === -2 ? '.14' : '(.17 + .30 * needleSurface + .07 * barkSurface + .23 * snowPad + .22 * rimedSpray)'};
     `);
     shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
       attribute vec3 branchAnchor;
@@ -755,7 +741,8 @@ export function coniferMaterial(level = 0, region = null) {
       float crownPhase = forestOrigin.x*.037 + forestOrigin.z*.021;
       crownShape = vec4(position,crownPhase);
       ${snowDeposition(region === 'regional')}
-      crownSnow = crownRime * snowAttached;
+      float frost = smoothstep(snowline-160.,snowline+180.,forestOrigin.y)*snowpack*.82;
+      crownSnow = max(crownRime, frost) * snowAttached;
       ${detailTier ? `float branchGrowth = 1.0 - smoothstep(${detailTier[0]}.0 * forestDetail, ${detailTier[1]}.0 * forestDetail, forestDistance);
       transformed = mix(branchAnchor, transformed, branchGrowth);` : ''}
       if (position.y < -.07) transformed.y -= 1.55 / max(.2, distance(forestOrigin.xyz,forestTop.xyz));
@@ -763,6 +750,6 @@ export function coniferMaterial(level = 0, region = null) {
     if (region) attachForestFade(shader,region,level !== -2);
     if (level !== -2) attachChaseFoliage(shader);
   };
-  material.customProgramCacheKey = () => `conifer-needle-branches-${level}-${region}-v25`;
+  material.customProgramCacheKey = () => `conifer-needle-branches-${level}-${region}-v28`;
   return material;
 }

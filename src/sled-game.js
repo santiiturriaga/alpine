@@ -2,15 +2,16 @@ import * as THREE from 'three';
 import { clamp, mix, mulberry32, makeNoise, smoothstep as smooth } from './math.js';
 import { addSledCourseProps } from './sled-course-props.js';
 import { poseSledRider, sledModel } from './sled-rider.js';
+import { batchRigidParts } from './skier-hardware.js';
 import { sledTreeAssets } from './sled-trees.js';
 
 import {
-  LENGTH, EDGE, LANE, STEP, RAMP_LENGTH, RAMP_HALF, RAMP_HEIGHT, GAPS, SECTORS,
+  LENGTH, EDGE, LANE, STEP, RAMP_LENGTH, RAMP_HALF, RAMP_HEIGHT, GAPS,
   center, altitude, slope, gapAt, snowHeight, surfaceHeight, buildCourse, movingBalls, freshRun, points, simulate,
 } from './sled-course.js';
 
-const TITLE = 'White Fir Chute';
 const STORAGE = 'alpine.sled.white-fir.daily.v1';
+const IMPACT_TIME = .29;
 const COLORS = {
   sky: 0x9ebfd3, mist: 0xb5cfdb, snow: 0xe7f2f7, compact: 0xc6dce7,
   ice: 0x598ba5, cedar: 0x504247, red: 0xbb422d, amber: 0xffbd65, metal: 0x354454,
@@ -273,7 +274,7 @@ function skyline(scene) {
 }
 
 function forest(scene, random, course) {
-  const { trunk, trunkMaterial, needleMaterial, full, medium, distant } = sledTreeAssets();
+  const { trunk, trunkMaterial, needleMaterial, crowns } = sledTreeAssets();
   const boulder = new THREE.IcosahedronGeometry(1, 1);
   const cap = new THREE.Color(0xe0e8ec), stone = new THREE.Color(0x637482);
   const o = new THREE.Object3D(), color = new THREE.Color();
@@ -287,6 +288,7 @@ function forest(scene, random, course) {
   const { treeRows } = course;
   const shadowSpots = [], chunks = [];
   for (let chunk = GROUND_START; chunk < GROUND_END; chunk += 75) {
+    const { full, medium, distant } = crowns[chunks.length % crowns.length];
     const finish = Math.min(GROUND_END, chunk + 75);
     const group = treeRows.filter(tree => tree.d >= chunk && tree.d < finish);
     const rocks = [];
@@ -323,7 +325,15 @@ function forest(scene, random, course) {
       const width = tree.hit ? tree.hit / .043 : tree.h * (.74 + random() * .36);
       o.scale.set(width, tree.h, width);
       o.updateMatrix();
+      if (!tree.hit) {
+        // Crown spread and trunk diameter vary independently in natural stands.
+        const radius = .40 + .14 * Math.min(1, tree.h / 34);
+        o.scale.set(width * radius, tree.h, width * radius);
+        o.updateMatrix();
+      }
       trunks.setMatrixAt(i, o.matrix);
+      o.scale.set(width, tree.h, width);
+      o.updateMatrix();
       const near = closeFoliage(tree);
       const canopy = near ? nearFoliage : hills;
       const index = near ? nearIndex++ : hillIndex++;
@@ -371,6 +381,16 @@ function treeShadows(scene, material, trees) {
   const positions = [], uvs = [], bands = 9;
   for (const { x, d, h } of trees) {
     const width = h * .18, length = h * .47;
+    const rootRadius = Math.max(.7, h * .061);
+    for(const [u,v] of [[0,0],[1,0],[1,1],[0,0],[1,1],[0,1]]) {
+      const px=x+(u*2-1)*rootRadius, pd=d+(v*2-1)*rootRadius;
+      if (gapAt(pd)) {
+        positions.push(center(d)+x,renderedSnowHeight(x,d)+.04,-d);
+      } else {
+        positions.push(center(pd)+px,renderedSnowHeight(px,pd)+.047,-pd);
+      }
+      uvs.push(u,v);
+    }
     for (let i = 0; i < bands; i++) {
       const near = d - length * i / bands, far = d - length * (i + 1) / bands;
       if (far < GROUND_START || gapAt(near) || gapAt(far)) continue;
@@ -441,7 +461,7 @@ function printedSign(text, color = '#a8452e', ink = '#fff1df') {
 
 function venue(scene, materials, course) {
   const { bark, red, amber, ramp, ice, metal } = materials;
-  for (const [d, title, color] of [[23, 'WHITE FIR CHUTE', '#a8452e'], [LENGTH, 'FINISH', '#234954']]) {
+  for (const [d, title, color] of [[23, 'START', '#a8452e'], [LENGTH, 'FINISH', '#234954']]) {
     const halfSpan = EDGE + 2.6;
     const group = new THREE.Group();
     group.position.copy(surfacePoint(0, d));
@@ -455,9 +475,10 @@ function venue(scene, materials, course) {
     }
     box(group, bark, halfSpan * 2 + 1, .46, .63, 0, 6.22, 0);
     box(group, ramp, halfSpan * 2 + 1.16, .12, .72, 0, 6.51, 0);
-    const sign = new THREE.Mesh(new THREE.PlaneGeometry(9.4, 2.12), printedSign(title, color));
-    sign.position.set(0, 5.59, .37);
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(5.2, 1.18), printedSign(title, color));
+    sign.position.set(0, 6.0, .37);
     group.add(sign);
+    batchRigidParts(group);
     scene.add(group);
   }
   const markerGeometry = new THREE.CylinderGeometry(.075, .085, 1.13, 6);
@@ -476,6 +497,8 @@ function venue(scene, materials, course) {
   reflectors.count = count;
   scene.add(reflectors);
   for (const gap of GAPS) {
+    const fixture = new THREE.Group();
+    fixture.name = gap.name;
     const start = gap.start - RAMP_LENGTH;
     for (const lane of gap.lanes) {
       const x = lane * LANE;
@@ -502,19 +525,19 @@ function venue(scene, materials, course) {
           face.push(p.x, p.y, p.z);
         }
       }
-      scene.add(new THREE.Mesh(meshGeometry(positions, null, topUvs), materials.launchSnow));
+      fixture.add(new THREE.Mesh(meshGeometry(positions, null, topUvs), materials.launchSnow));
       for (const [data, material] of [[sides, ice], [face, ice], [edges, amber]]) {
-        scene.add(new THREE.Mesh(meshGeometry(data), material));
+        fixture.add(new THREE.Mesh(meshGeometry(data), material));
       }
       for (const offset of [-RAMP_HALF - .42, RAMP_HALF + .42]) {
         const pole = new THREE.Mesh(new THREE.CylinderGeometry(.071, .09, 2.55, 7), red);
         pole.position.copy(surfacePoint(x + offset, start - 1, 1.25));
-        scene.add(pole);
+        fixture.add(pole);
         const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.08, .68), amber);
         flag.position.copy(pole.position);
         flag.position.x += (offset < 0 ? -.51 : .51);
         flag.position.y += .87;
-        scene.add(flag);
+        fixture.add(flag);
       }
       // Chevrons on the snow lead into the groomed launch surface.
       const marks = [];
@@ -527,8 +550,10 @@ function venue(scene, materials, course) {
           }
         }
       }
-      scene.add(new THREE.Mesh(meshGeometry(marks), amber));
+      fixture.add(new THREE.Mesh(meshGeometry(marks), amber));
     }
+    batchRigidParts(fixture);
+    scene.add(fixture);
     const landing = [];
     for (let x = -14.8; x < 14.8; x += 2.15) {
       for (const [dx, dz] of [[0, 0], [1.09, 0], [1.09, .48], [0, 0], [1.09, .48], [0, .48]]) {
@@ -564,7 +589,7 @@ function snowballGeometry() {
   return geometry;
 }
 
-function makeWorld(scene, course) {
+function makeWorld(scene, course, outfit) {
   const random = mulberry32(326276);
   const material = (color, options = {}) => new THREE.MeshStandardMaterial({ color, roughness: .92, ...options });
   const iceMap = glacierTexture();
@@ -592,7 +617,7 @@ function makeWorld(scene, course) {
   const forestData = forest(scene, random, course);
   treeShadows(scene, shadowMaterial, forestData.shadowSpots);
   const tokenMeshes = venue(scene, materials, course);
-  const sled = sledModel();
+  const sled = sledModel(outfit);
   const flat = new THREE.PlaneGeometry(1, 1);
   flat.rotateX(-Math.PI / 2);
   const sledShadow = new THREE.Mesh(flat, shadowMaterial);
@@ -619,7 +644,7 @@ function makeWorld(scene, course) {
   return { ...forestData, course, tokenMeshes, sky, sled, sledShadow, balls, sprayPositions, random };
 }
 
-function updateVisuals(world, camera, run, dt, state, input, view) {
+function updateVisuals(world, camera, run, dt, state, input, view, landingLoad = 0) {
   const { sled, sledShadow, balls, sky, sprayPositions, chunks } = world;
   const active = state === 'running';
   const d = run.d, x = center(d) + run.x;
@@ -643,7 +668,7 @@ function updateVisuals(world, camera, run, dt, state, input, view) {
   const grade = run.air ? clamp(run.dy * .027, -.52, .48) : Math.atan((surfaceHeight(run.x, d + .13) - surfaceHeight(run.x, d - .13)) / .26);
   sled.group.rotation.x = mix(sled.group.rotation.x, grade, f);
   const steer = active ? Number(input('right')) - Number(input('left')) : 0;
-  poseSledRider(sled, run, dt, steer, Number(active && input('tuck')), Number(active && input('brake')));
+  poseSledRider(sled, run, dt, steer, Number(active && input('tuck')), Number(active && input('brake')), landingLoad);
   sledShadow.visible = !gapAt(d);
   sledShadow.position.set(x, surfaceHeight(run.x, d) + .086, -d);
   sledShadow.rotation.x = -slope(d);
@@ -692,20 +717,23 @@ function updateVisuals(world, camera, run, dt, state, input, view) {
 
   const lead = 29;
   const lift = run.air ? Math.max(0, run.y - snowHeight(run.x, d)) * .64 : 0;
-  const follow = state === 'intro' ? -12.3 : -9.6 - run.speed * .037;
-  const desiredFov = view.reduced ? 64 : 61 + run.speed * .23;
-  const cameraX = center(d + follow) + run.x * .84 - run.dx * .061;
-  const cameraY = snowHeight(run.x, d + follow) + 4.05 + lift;
+  const follow = state === 'intro' ? -7.3 : -7.95 - run.speed * .026;
+  const desiredFov = view.reduced ? 62 : 59 + run.speed * .155;
+  const sideView = state === 'intro' ? Math.min(2.8, .68 + 2.2 * camera.aspect) : .8;
+  const cameraX = center(d + follow) + run.x * .91 - run.dx * .045 + sideView;
+  const cameraY = snowHeight(run.x, d + follow) + 3.45 + lift;
+  const restingCamera = view.restingCamera ??= new THREE.Vector3();
   if (!view.initialized) {
-    camera.position.set(cameraX, cameraY, -(d + follow));
+    restingCamera.set(cameraX, cameraY, -(d + follow));
     camera.fov = desiredFov;
     view.initialized = true;
   } else {
-    camera.position.x = mix(camera.position.x, cameraX, f);
-    camera.position.y = mix(camera.position.y, cameraY, f);
-    camera.position.z = mix(camera.position.z, -(d + follow), 1 - Math.exp(-dt * 17));
+    restingCamera.x = mix(restingCamera.x, cameraX, f);
+    restingCamera.y = mix(restingCamera.y, cameraY, f);
+    restingCamera.z = mix(restingCamera.z, -(d + follow), 1 - Math.exp(-dt * 17));
     camera.fov = mix(camera.fov, desiredFov, f);
   }
+  camera.position.copy(restingCamera);
   camera.updateProjectionMatrix();
   const ahead = d + lead;
   // Preserve the view into the bend while keeping the rider inside the
@@ -715,69 +743,85 @@ function updateVisuals(world, camera, run, dt, state, input, view) {
   const riderLine = camera.position.x + (x - camera.position.x) * focusDepth / riderDepth;
   const allowedOffset = focusDepth * Math.tan(camera.fov * Math.PI / 360) * camera.aspect * .27;
   const focusX = riderLine + clamp(center(ahead) + run.x * .61 - riderLine, -allowedOffset, allowedOffset);
-  camera.lookAt(focusX, altitude(ahead) + 2.34 + lift * .78, -ahead);
-  if (!view.reduced) camera.rotateZ(-run.dx * .0019);
+  camera.lookAt(focusX, altitude(ahead) + (state === 'intro' ? -.45 : 2.34) + lift * .78, -ahead);
+  if (!view.reduced) {
+    camera.rotateZ(-run.dx * .0019);
+    const impact = view.impact;
+    if (impact) {
+      const t = impact.age / IMPACT_TIME;
+      const strength = impact.strength * (1 - t) ** 2;
+      camera.translateX(Math.sin(t * 13) * strength * .064);
+      camera.translateY(-Math.cos(t * 10) * strength * .11);
+      camera.rotateZ(Math.sin(t * 12) * strength * .008);
+    }
+  }
   sky.position.copy(camera.position);
 }
 
-function disposeScene(scene) {
+function disposeScene(scene, rider) {
   const geometries = new Set(), materials = new Set(), textures = new Set();
-  scene.traverse(object => {
+  function collect(object) {
     if (object.geometry) geometries.add(object.geometry);
-    if (object.material) materials.add(object.material);
+    if (Array.isArray(object.material)) object.material.forEach(material => materials.add(material));
+    else if (object.material) materials.add(object.material);
     if (object.isInstancedMesh) object.dispose();
-  });
+  }
+  // Hidden skis, poles and unused finishes still belong to the shared rig caches.
+  rider?.removeFromParent();
+  rider?.traverseVisible(collect);
+  scene.traverse(collect);
   for (const geometry of geometries) geometry.dispose();
   for (const material of materials) {
-    if (material.map) textures.add(material.map);
+    for (const value of Object.values(material)) {
+      if (value?.isTexture) textures.add(value);
+    }
     material.dispose();
   }
   for (const texture of textures) texture.dispose();
 }
 
-function gameDialog(course) {
+function gameDialog() {
   const dialog = document.createElement('dialog');
   dialog.id = 'sled-game';
   dialog.className = 'sled-game';
   dialog.dataset.minigameOverlay = 'sled';
-  dialog.setAttribute('aria-label', `${TITLE} sled run`);
+  dialog.setAttribute('aria-label', 'Sled run');
   dialog.innerHTML = `
     <div class="sled-stage" aria-hidden="true"></div>
-    <div class="sled-scrim" aria-hidden="true"></div>
     <header class="sled-top">
-      <div class="sled-course"><span>Sled run</span><h2>${TITLE}</h2><p data-sled-sector>Old-growth forest</p></div>
-      <div class="sled-stats" aria-label="Run stats">
-        <div><b data-sled-speed>0</b><span>km/h</span></div>
-        <div><b data-sled-time>00:00.0</b><span>Time</span></div>
-        <div><b data-sled-score>0</b><span>Points</span></div>
+      <div class="sled-hud" data-sled-hud aria-label="Run stats">
+        <div class="sled-stats">
+          <span><b data-sled-speed>0</b> km/h</span>
+          <b data-sled-time>00:00.0</b>
+          <span><b data-sled-score>0</b> pts</span>
+        </div>
+        <div class="sled-progress-track" aria-hidden="true"><i data-sled-progress></i>${GAPS.map(gap => `<s style="--gap-at:${100 * gap.start / LENGTH}%;--gap-width:${100 * (gap.end - gap.start) / LENGTH}%"></s>`).join('')}</div>
+        <div class="sled-tallies">
+          <span><b data-sled-distance>0</b> / ${LENGTH.toLocaleString('en-US')} m</span>
+          <span><b data-sled-medals>0</b> markers · <b data-sled-jumps>0</b> gaps</span>
+        </div>
       </div>
       <div class="sled-actions">
-        <button type="button" data-sled-pause aria-label="Pause sled run" class="sled-secondary">Pause</button>
-        <button type="button" data-sled-exit class="sled-secondary">Exit <kbd>Esc</kbd></button>
+        <button type="button" data-sled-pause aria-label="Pause sled run" title="Pause (P)" class="sled-secondary"><span class="sled-pause-icon" aria-hidden="true"></span></button>
+        <button type="button" data-sled-exit aria-label="Exit sled run" title="Exit (Esc)" class="sled-secondary"><span class="sled-exit-icon" aria-hidden="true">×</span></button>
       </div>
     </header>
-    <div class="sled-progress" aria-label="Course progress">
-      <div class="sled-progress-track"><i data-sled-progress></i>${GAPS.map(gap => `<s style="--gap-at:${100 * gap.start / LENGTH}%;--gap-width:${100 * (gap.end - gap.start) / LENGTH}%"></s>`).join('')}</div>
-      <span><b data-sled-distance>0</b> / ${LENGTH.toLocaleString('en-US')} m</span>
-      <span><b data-sled-medals>0</b> / ${course.tokens.length} markers · <b data-sled-jumps>0</b> / ${GAPS.length} gaps</span>
-    </div>
-    <aside class="sled-callout" hidden><em data-sled-callout-icon aria-hidden="true">↑</em><div><b data-sled-callout aria-live="polite"></b><span data-sled-callout-detail></span></div></aside>
+    <div class="sled-callout" hidden><span data-sled-callout role="status"></span><span data-sled-callout-detail></span></div>
     <div class="sled-countdown" aria-live="polite" hidden></div>
     <section class="sled-card" aria-labelledby="sled-card-title">
-      <p class="sled-kicker" data-sled-kicker>Daily course · ${course.day} UTC</p>
       <h2 id="sled-card-title">Drop in</h2>
-      <p data-sled-description>Follow the brass markers downhill. Hop the fallen cedars, dodge rolling snowballs and carry speed over four creek crossings.</p>
+      <p data-sled-description>Follow the markers and jump the creek gaps.</p>
       <div class="sled-card-controls" data-sled-controls>
         <span><kbd>A</kbd> <kbd>D</kbd> Steer</span><span><kbd>W</kbd> Tuck</span><span><kbd>S</kbd> Brake</span><span><kbd>Space</kbd> Jump</span>
       </div>
       <div class="sled-results" data-sled-results hidden>
-        <div><span>Run points</span><b data-sled-final>0</b></div>
-        <div><span>Today's best</span><b data-sled-best>0</b></div>
+        <span><b data-sled-final>0</b> pts</span>
+        <span>Day’s best <b data-sled-best>0</b></span>
       </div>
       <button type="button" data-sled-play class="sled-primary" autofocus>Start run</button>
     </section>
     <div class="sled-bottom">
-      <p class="sled-key-hint"><kbd>A</kbd> <kbd>D</kbd> Steer <kbd>W</kbd> Tuck <kbd>S</kbd> Brake <kbd>Space</kbd> Jump <kbd>R</kbd> Retry</p>
+      <p class="sled-key-hint"><kbd>A D</kbd> steer · <kbd>W</kbd> tuck · <kbd>S</kbd> brake · <kbd>Space</kbd> jump · <kbd>R</kbd> retry</p>
       <div class="sled-touch" aria-label="Sled controls">
         <div><button type="button" data-sled-input="left" aria-label="Steer left">←</button><button type="button" data-sled-input="right" aria-label="Steer right">→</button></div>
         <div><button type="button" data-sled-input="jump">Jump</button><button type="button" data-sled-input="brake">Brake</button><button type="button" data-sled-input="tuck">Tuck</button></div>
@@ -791,13 +835,12 @@ const KEY_ACTION = {
   Space: 'jump', ArrowUp: 'tuck', KeyW: 'tuck', ArrowDown: 'brake', KeyS: 'brake',
 };
 const LANE_HINTS = { '-1': 'left', 0: 'center', 1: 'right' };
-const LANE_ICONS = { '-1': '↖', 0: '↑', 1: '↗' };
 
-export function openSledGame({ resortRenderer, audio } = {}) {
+export function openSledGame({ resortRenderer, audio, outfit } = {}) {
   const current = document.getElementById('sled-game');
   if (current?.open) return current;
   const course = buildCourse();
-  const dialog = gameDialog(course);
+  const dialog = gameDialog();
   const restoreFocus = document.activeElement;
   if (document.pointerLockElement) document.exitPointerLock();
   document.body.append(dialog);
@@ -806,7 +849,7 @@ export function openSledGame({ resortRenderer, audio } = {}) {
   const play = get('play'), pause = get('pause'), exit = get('exit');
   const card = dialog.querySelector('.sled-card'), title = card.querySelector('h2');
   const callout = dialog.querySelector('.sled-callout'), countdown = dialog.querySelector('.sled-countdown');
-  const stats = ['speed', 'time', 'score', 'sector', 'distance', 'jumps', 'medals'].map(get);
+  const stats = ['speed', 'time', 'score', 'distance', 'jumps', 'medals'].map(get);
   const progress = get('progress');
   const stage = dialog.querySelector('.sled-stage');
   const listeners = new AbortController();
@@ -836,8 +879,9 @@ export function openSledGame({ resortRenderer, audio } = {}) {
   }
   const previous = readBest();
   if (previous?.day === course.day) best = previous.score;
+  const motion = matchMedia('(prefers-reduced-motion: reduce)');
   const view = {
-    reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
+    reduced: motion.matches, impact: null, crossingClearedAt: -Infinity,
     initialized: false, sprayCarry: 0, sprayIndex: 0, spray: Array.from({ length: 126 }, () => ({ life: -1 })),
   };
   const text = (element, value) => {
@@ -857,9 +901,8 @@ export function openSledGame({ resortRenderer, audio } = {}) {
     dialog.dataset.state = next;
     const running = next === 'running' || next === 'countdown';
     card.hidden = running;
-    pause.hidden = !running && next !== 'paused';
-    pause.textContent = next === 'paused' ? 'Resume' : 'Pause';
-    pause.setAttribute('aria-label', `${pause.textContent} sled run`);
+    pause.hidden = !running;
+    get('hud').hidden = next === 'intro' || next === 'unavailable';
     if (!running) callout.hidden = countdown.hidden = true;
   }
 
@@ -869,6 +912,8 @@ export function openSledGame({ resortRenderer, audio } = {}) {
     pendingTime = 0;
     last = performance.now();
     view.initialized = false;
+    view.impact = null;
+    view.crossingClearedAt = -Infinity;
     view.sprayCarry = 0;
     view.sprayIndex = 0;
     for (const particle of view.spray) particle.life = -1;
@@ -878,7 +923,7 @@ export function openSledGame({ resortRenderer, audio } = {}) {
     }
     setState('countdown');
     updateHud();
-    exit.focus({ preventScroll: true });
+    dialog.focus({ preventScroll: true });
   }
 
   function clearInput() {
@@ -900,10 +945,10 @@ export function openSledGame({ resortRenderer, audio } = {}) {
     if (state !== 'running' && state !== 'countdown') return;
     previousState = state;
     clearInput();
+    view.impact = null;
     setState('paused');
-    text(get('kicker'), TITLE);
     text(title, 'Run paused');
-    text(get('description'), 'Resume from here or press R to start a new run.');
+    get('description').hidden = true;
     get('controls').hidden = true;
     get('results').hidden = true;
     text(play, 'Resume run');
@@ -912,6 +957,7 @@ export function openSledGame({ resortRenderer, audio } = {}) {
 
   function finish(crash) {
     run.crash = crash;
+    clearInput();
     if (crash) audio?.crash();
     else audio?.finish();
     const score = points(run, !crash);
@@ -925,9 +971,9 @@ export function openSledGame({ resortRenderer, audio } = {}) {
       }
     }
     setState(crash ? 'crashed' : 'finished');
-    text(get('kicker'), record ? "Today’s best" : TITLE);
-    text(title, crash ? 'Run ended' : 'Finish line');
-    text(get('description'), crash || `${timeText(run.elapsed)} · ${run.jumps} crossings cleared · ${run.tokens} markers · ${run.passes} close passes`);
+    text(title, crash ? 'Run ended' : 'Run complete');
+    text(get('description'), crash ? crash.split('. ', 1)[0].replace(/\.?$/, '.') : `${timeText(run.elapsed)} · ${run.jumps} gaps cleared`);
+    get('description').hidden = false;
     get('controls').hidden = true;
     get('results').hidden = false;
     text(get('final'), formatPoints(score));
@@ -937,23 +983,27 @@ export function openSledGame({ resortRenderer, audio } = {}) {
   }
 
   function updateHud() {
-    const sector = SECTORS.findLast(([d]) => d <= run.d)[1];
     const values = [run.d > 0 ? Math.round(run.speed * 3.6) : 0, timeText(run.elapsed), formatPoints(points(run, state === 'finished')),
-      sector, formatPoints(Math.round(run.d)), run.jumps, run.tokens];
+      formatPoints(Math.round(run.d)), run.jumps, run.tokens];
     values.forEach((value, i) => text(stats[i], value));
     stats[2].classList.toggle('marker-scored', run.lastToken >= 0 && run.elapsed - run.lastToken < .32);
     progress.style.width = `${100 * run.d / LENGTH}%`;
     countdown.hidden = state !== 'countdown';
     if (state === 'countdown') text(countdown, Math.max(1, Math.ceil(run.countdown)));
     const next = GAPS.find(gap => run.d < gap.end);
-    const running = state === 'running';
-    callout.hidden = !running || !next || (next.start - run.d > 119);
-    if (!callout.hidden) {
+    const crossed = run.elapsed - view.crossingClearedAt < 1.2;
+    callout.hidden = state !== 'running' || (!crossed && (!next || next.start - run.d > 75));
+    if (callout.hidden) return;
+    if (crossed) {
+      text(get('callout'), 'Crossing cleared');
+      text(get('callout-detail'), '');
+    } else if (run.d >= next.start) {
+      text(get('callout'), 'Watch the landing');
+      text(get('callout-detail'), '');
+    } else {
       const label = next.lanes.map(lane => LANE_HINTS[lane]).join(' or ');
-      const icon = next.lanes.map(lane => LANE_ICONS[lane]).join(' ');
-      text(get('callout-icon'), icon);
-      text(get('callout'), next.name);
-      text(get('callout-detail'), run.air ? 'Watch the landing' : `${label.charAt(0).toUpperCase() + label.slice(1)} ramp · ${Math.max(0, Math.round(next.start - run.d))} m`);
+      text(get('callout'), `${label[0].toUpperCase() + label.slice(1)} ramp`);
+      text(get('callout-detail'), `${Math.round(next.start - run.d)} m`);
     }
   }
 
@@ -964,7 +1014,7 @@ export function openSledGame({ resortRenderer, audio } = {}) {
     listeners.abort();
     observer?.disconnect();
     cancelAnimationFrame(animation);
-    disposeScene(scene);
+    disposeScene(scene, world?.sled.rider.group);
     renderer?.dispose();
     renderer?.forceContextLoss();
     dialog.remove();
@@ -1011,6 +1061,13 @@ export function openSledGame({ resortRenderer, audio } = {}) {
   window.addEventListener('blur', pauseOnBlur, { signal });
   window.addEventListener('focus', resize, { signal });
   window.addEventListener('resize', resize, { signal });
+  motion.addEventListener('change', event => {
+    view.reduced = event.matches;
+    view.impact = null;
+    if (view.reduced) for (const particle of view.spray) particle.life = -1;
+    dirty = true;
+    requestFrame();
+  }, { signal });
   document.addEventListener('visibilitychange', () => { if (document.hidden) pauseOnBlur(); else resize(); }, { signal });
   function pauseOnBlur() {
     clearInput();
@@ -1049,7 +1106,7 @@ export function openSledGame({ resortRenderer, audio } = {}) {
       resize();
     }, { signal });
     stage.append(renderer.domElement);
-    world = makeWorld(scene, course);
+    world = makeWorld(scene, course, outfit);
     observer = new ResizeObserver(resize);
     observer.observe(stage);
     resize();
@@ -1057,7 +1114,7 @@ export function openSledGame({ resortRenderer, audio } = {}) {
     setState('unavailable');
     text(title, 'Sled run unavailable');
     text(get('description'), 'The 3D course needs hardware-accelerated graphics.');
-    get('kicker').hidden = get('controls').hidden = play.hidden = true;
+    get('controls').hidden = play.hidden = true;
     exit.focus();
     console.warn('Could not create sled course', error);
     return dialog;
@@ -1066,7 +1123,7 @@ export function openSledGame({ resortRenderer, audio } = {}) {
   function draw(now) {
     animation = 0;
     const moving = state === 'running' || state === 'countdown';
-    if (contextLost || document.hidden || (!moving && !dirty)) {
+    if (contextLost || document.hidden || (!moving && !dirty && !view.impact)) {
       last = now;
       return;
     }
@@ -1074,28 +1131,42 @@ export function openSledGame({ resortRenderer, audio } = {}) {
     const seconds = Math.max(0, (now - last) / 1000);
     const dt = Math.min(seconds, .12);
     last = now;
+    if (view.impact) {
+      view.impact.age += dt;
+      if (view.impact.age >= IMPACT_TIME) view.impact = null;
+    }
+    let landingLoad = 0;
     if (state === 'countdown') {
       run.countdown -= seconds;
       if (run.countdown <= 0) setState('running');
     } else if (state === 'running') {
-      const startTokens = run.tokens, wasAirborne = !!run.air;
+      const startTokens = run.tokens, startJumps = run.jumps;
       pendingTime += dt;
       while (pendingTime + 1e-8 >= STEP) {
         pendingTime -= STEP;
+        const wasAirborne = Boolean(run.air);
         const crash = simulate(run, world, input, STEP);
         jumpQueued = false;
-        if (crash || run.d >= LENGTH) { finish(crash); break; }
+        if (crash || run.d >= LENGTH) {
+          finish(crash);
+          if (crash && !view.reduced) view.impact = { age: 0, strength: 1 };
+          break;
+        }
+        if (!wasAirborne && run.air) audio?.launch();
+        if (wasAirborne && !run.air) {
+          const speed = Math.max(1, slope(run.d) * run.speed - run.dy);
+          audio?.land(speed);
+          landingLoad = clamp(speed * .036, .12, .85);
+          if (!view.reduced) view.impact = { age: 0, strength: landingLoad };
+        }
       }
       if (run.tokens > startTokens) audio?.coin(run.tokens % 12);
-      if (state === 'running') {
-        if (!wasAirborne && run.air) audio?.launch();
-        if (wasAirborne && !run.air) audio?.land(Math.max(1, slope(run.d) * run.speed - run.dy));
-      }
+      if (run.jumps > startJumps) view.crossingClearedAt = run.elapsed;
     }
-    updateVisuals(world, camera, run, dt, state, input, view);
+    updateVisuals(world, camera, run, dt, state, input, view, landingLoad);
     updateHud();
     renderer.render(scene, camera);
-    if (state === 'running' || state === 'countdown') requestFrame();
+    if (state === 'running' || state === 'countdown' || view.impact) requestFrame();
   }
   cancelAnimationFrame(animation);
   last = performance.now();

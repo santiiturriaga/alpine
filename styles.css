@@ -574,7 +574,7 @@ svg { display: block; }
   .shop-preview { position:static; width:min(100%,190px); justify-self:center; }
   .shop-preview figcaption { padding:5px 8px; }
 }
-.ski-catalog {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}.gear-card {padding:11px 13px;border:1px solid #b9ccd43a;border-top:3px solid var(--topsheet);border-radius:5px;display:grid;gap:6px;}
+.ski-catalog {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}.gear-card {padding:11px 13px;border:1px solid #b9ccd43a;border-radius:5px;display:grid;gap:6px;}
 .gear-card p {margin:0;}.gear-card small {color:#bcced2;}.gear-card button {justify-self:start;}
 .gear-swatches {display:flex;flex-wrap:wrap;gap:9px;}.gear-swatches label {display:grid;gap:2px;font-size:13px;}
 #outfitter ul {margin:0;padding-left:19px;color:#b9ced2;}#outfitter .collected{color:#ebcc83;}#outfitter output {display:block;color:#b3dfb6;min-height:1.3em;margin-top:10px;}
@@ -835,3 +835,8 @@ svg { display: block; }
 }
 .trick-combo[data-state="bailed"] { color: #ffc1b9; }
 .trick-announcement { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; }
+
+@media (max-width: 680px) {
+  .menu-top { flex-wrap: wrap; gap: 6px 12px; }
+  .menu-nav #menu-customize { display: inline-flex; }
+}

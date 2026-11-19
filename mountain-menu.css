@@ -494,7 +494,7 @@
   gap: .5rem;
   padding: 1rem 0;
 }
-.pause-actions:has(#pause-lifts[hidden]) #pause-guide { grid-column: 1 / -1; }
+.pause-actions:has(#pause-lifts:not([hidden])) #pause-customize { grid-column: 1 / -1; }
 
 .pause-actions :is(.ghost-btn, .btn-primary) {
   display: flex;

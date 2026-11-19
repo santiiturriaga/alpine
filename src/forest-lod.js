@@ -71,7 +71,7 @@ export function attachForestFade(shader, region, near) {
 let atlasPromise, atlas, winterAtlas, proxyMaterials = new Map();
 
 export function preloadForestCrowns() {
-  const load = name => new THREE.TextureLoader().loadAsync(new URL(`../assets/forest/${name}`, import.meta.url).href)
+  const load = name => new THREE.TextureLoader().loadAsync(new URL(`../assets/forest/${name}?v=2`, import.meta.url).href)
     .then(texture => {
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.anisotropy = 4;
@@ -132,7 +132,10 @@ function crownMaterial(region, cascade) {
       varying float crownDistance;
       varying float forestFade;
     `).replace('#include <map_fragment>', `
-      vec2 frameUV = vec2((vMapUv.x + crownDirection)*.25, (vMapUv.y + 5.0 - crownRow) / 6.0);
+      // The baked frames leave sixteen transparent pixels around each crown.
+      // Preserve the old placement while keeping mips away from adjacent roots.
+      vec2 frameUV = (vMapUv * vec2(192.,256.) + vec2(16.)) / vec2(224.,288.);
+      frameUV = (frameUV + vec2(crownDirection,5.0-crownRow)) * vec2(.25,1./6.);
       float bias = ${cascade ? 'mix(-.28,.56,smoothstep(1050.,3700.,crownDistance))' : '-.28'};
       vec4 dryCrown = texture2D(map,frameUV,bias);
       vec4 snowCrown = texture2D(winterCrownAtlas,frameUV,bias);
@@ -147,7 +150,7 @@ function crownMaterial(region, cascade) {
       if (forestFade < 1.0 && forestFade <= forestThreshold) discard;
     `).replace('#include <opaque_fragment>', '#undef OPAQUE\n#include <opaque_fragment>');
   };
-  material.customProgramCacheKey = () => `forest-crown-atlas-${profile}-v4`;
+  material.customProgramCacheKey = () => `forest-crown-atlas-${profile}-v5`;
   proxyMaterials.set(profile,material);
   return material;
 }

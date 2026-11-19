@@ -350,7 +350,7 @@ export class UI {
     this.setText(this.el.statVertical, 'vertical', formatHeight(Math.max(0, player.stats.vertical), units));
     const hideGear = !player.canChangeFootMode() || (player.footMode && (indoors || player.surfaceType === 'ground'));
     if (gearMode.hidden !== hideGear) gearMode.hidden = hideGear;
-    this.setText(gearModeLabel, 'gearMode', player.footMode ? 'Put on skis' : 'Walk');
+    this.setText(gearModeLabel, 'gearMode', player.footMode ? (player.discipline === 'snowboard' ? 'Strap in' : 'Put on skis') : 'Walk');
     this.setText(surface, 'surface', player.vehicleLabel ? ` · ${player.vehicleLabel}` : player.footMode ? ' · On foot' :
       player.surfaceType === 'ice' ? ' · Ice' : player.surfaceType === 'powder' ? ' · Powder' : '');
     this.setText(this.el.coins, 'coins', formatNumber(collectibles?.coinCount || 0));

@@ -55,10 +55,11 @@ export function createGearPreview(renderer, canvas) {
       camera.lookAt(0, 0, .015);
     } else {
       const barber = mode === 'hair';
+      pose.footMode = barber;
       rig.setAppearance(appearance);
       rig.group.rotation.y = angle;
-      rig.animate(0, pose, null);
-      camera.position.set(0, barber ? 1.64 : 1.28, barber ? 1.16 : 4.17);
+      rig.animate(.20, pose, null);
+      camera.position.set(0, barber ? 1.64 : 1.28, barber ? 1.16 : 4.5);
       camera.lookAt(0, barber ? 1.51 : .86, 0);
     }
     const previous = renderer.getRenderTarget();

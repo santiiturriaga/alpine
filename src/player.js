@@ -5,6 +5,8 @@ import {
 import { heightAt, normalAt, surfaceAt } from './terrain.js';
 import { WORLD, startPose } from './worlddata.js';
 import { createSkier } from './skier.js';
+import { DEFAULT_SKI_ID, DEFAULT_SNOWBOARD_ID, SKI_MODELS, SNOWBOARD_MODELS } from './gear-catalog.js';
+import { GRAVITY, boardContact, boardFloat, resetBoardMotion, skiResponse } from './ride-dynamics.js';
 import { TrickCombo, flipLabel, minimumScoringAir } from './trick-combo.js';
 
 /* ═══════════════════════════════════════════════════════════════
@@ -14,7 +16,6 @@ import { TrickCombo, flipLabel, minimumScoringAir } from './trick-combo.js';
    supplies gravity, grip and the occasional launch.
    ═══════════════════════════════════════════════════════════════ */
 
-const GRAVITY = 9.81;
 const MIN_RIDER_IMPACT_SPEED = 6; // m/s, measured before obstacle push-out
 const whistlerGround = {heightAt,normalAt,surfaceAt,bounds:WORLD,startPose};
 
@@ -98,7 +99,13 @@ export class Player {
     this.snowSink = 0;
     this.landingLoad = 0;
     this.landingSpray = 0;
-    this.tuning={grip:1,drag:1,speed:1,pop:1};
+    this.discipline = 'ski';
+    this.stance = 'regular';
+    this.skiModel = SKI_MODELS[DEFAULT_SKI_ID];
+    this.snowboardModel = SNOWBOARD_MODELS[DEFAULT_SNOWBOARD_ID];
+    this.skiResponse = skiResponse(this.skiModel, this.skiModel);
+    this.tuning = this.skiModel.handling;
+    resetBoardMotion(this);
     this.walkFootwear = null;
     this.clearBoost();
     this.shake = 0;
@@ -111,6 +118,7 @@ export class Player {
     this.camHeight = null;
     this.camPitchOffset = 0;
     this.cameraArmFraction = 1;
+    this.boardHelmetNear = null;
     this.switchStance = false;
     this.switchLookSide = 1;
     this.lastLanding = null;
@@ -172,6 +180,36 @@ export class Player {
   get speedKmh() { return this.speed * 3.6; }
   get spinDegrees() { return Math.abs(this.spin) * 180 / Math.PI; }
   get flipDegrees() { return Math.abs(this.flip) * 180 / Math.PI; }
+  get boarding() { return this.discipline === 'snowboard' && !this.footMode; }
+  get rideTuning() { return this.boarding ? this.snowboardModel.handling : this.tuning; }
+
+  setEquipment({ discipline = this.discipline, skiModel = this.skiModel,
+    snowboardModel = this.snowboardModel, stance = this.stance } = {}) {
+    const skiId = skiModel?.id ?? skiModel, boardId = snowboardModel?.id ?? snowboardModel;
+    const skiing = SKI_MODELS[Object.hasOwn(SKI_MODELS, skiId) ? skiId : DEFAULT_SKI_ID];
+    const board = SNOWBOARD_MODELS[Object.hasOwn(SNOWBOARD_MODELS, boardId) ? boardId : DEFAULT_SNOWBOARD_ID];
+    const nextDiscipline = discipline === 'snowboard' ? 'snowboard' : 'ski';
+    const nextStance = stance === 'goofy' ? 'goofy' : 'regular';
+    const changed = nextDiscipline !== this.discipline || nextStance !== this.stance ||
+      (nextDiscipline === 'ski' ? skiing !== this.skiModel : board !== this.snowboardModel);
+    if (nextDiscipline !== this.discipline && this.switchStance) {
+      this.heading = this.travelHeading;
+      this.setSwitchStance(false);
+    }
+    this.discipline = nextDiscipline;
+    this.stance = nextStance;
+    this.skiModel = skiing;
+    this.snowboardModel = board;
+    this.tuning = skiing.handling;
+    this.skiResponse = skiResponse(skiing, SKI_MODELS[DEFAULT_SKI_ID]);
+    this.rig.setEquipment({ discipline: this.discipline, stance: this.stance, skiModel: skiing.id, snowboardModel: board.id });
+    if (changed) {
+      this.breakSnowContact();
+      this.stopDirection = this.stopEdge = this.poleSwing = 0;
+      this.poleTap = null;
+      resetBoardMotion(this);
+    }
+  }
 
   teleport(pose = this.ground.startPose(), { resetStats = false, snap = true } = {}) {
     this.clearBoost();
@@ -180,6 +218,7 @@ export class Player {
     this.lookPitch = this.lookYaw = 0;
     this.stopEdge = 0;
     this.stopDirection = 0;
+    resetBoardMotion(this);
     this.poleSwing = 0;
     this.poleTap = null;
     this.skiSnow = this.skiSnow ?? 0;
@@ -278,6 +317,7 @@ export class Player {
     this.switchStance = false;
     this.footMode = !!on;
     this.stopEdge = this.stopDirection = 0;
+    resetBoardMotion(this);
     this.clearBoost();
     this.holdAtUnload = false;
     this.tuckAmount = this.strideAmount = this.walkAmount = 0;
@@ -332,12 +372,14 @@ export class Player {
 
   setRiding(on) {
     this.clearBoost();
+    if (on) this.setBoardHelmetClip(false);
     this.riding = on;
     if (!on) this.vehicleLabel = null;
     this.rig.group.visible = !on && this.cameraMode !== 2;
     if (on) {
       this.trickCombo.reset();
       this.stopEdge = this.stopDirection = this.poleSwing = 0;
+      resetBoardMotion(this);
       this.poleTap = null;
       this.vel.set(0, 0, 0);
       this.vy = 0;
@@ -401,6 +443,7 @@ export class Player {
     }
     this.switchStance = false;
     this.camYaw = this.heading;
+    resetBoardMotion(this);
     this.breakSnowContact();
     this.emit('recover', {});
   }
@@ -479,6 +522,89 @@ export class Player {
     this.switchStance = on;
   }
 
+  orientSkis(dt, input, speed) {
+    if (input.brake && !this.stopDirection && speed >= 5.5) {
+      this.stopApproach = Math.atan2(this.vel.x, this.vel.z);
+      this.stopDirection = -Math.sign(input.steer || this.steer || -1);
+      this.setSwitchStance(false);
+    } else if (!input.brake) this.stopDirection = 0;
+    this.stopEdge = damp(this.stopEdge, this.stopDirection ? 1 : 0, this.stopDirection ? 15 : 9, dt);
+    const sideways = this.stopDirection !== 0;
+    // ── carving ──────────────────────────────────────────────
+    const powderResponse = lerp(1, Math.sqrt(this.skiResponse.float), this.surface.powder * .42);
+    const turnRate = (0.55 + 1.35 * clamp(speed / 26, 0, 1))
+      * (input.brake ? 1.2 : 1) * (input.tuck ? 0.82 : 1)
+      * this.skiResponse.turn * powderResponse * lerp(1, 1 / this.skiResponse.stability, smoothstep(10, 34, speed) * .46);
+    // Chase camera looks along +forward: its screen-right axis is -local X.
+    if (sideways) {
+      const across = this.stopApproach + this.stopDirection * Math.PI * .5;
+      this.heading += shortestAngle(this.heading, across) * (1 - Math.exp(-13 * dt));
+    } else this.heading -= (input.steer || 0) * turnRate * dt;
+    this.heading = wrapAngle(this.heading);
+  }
+
+  skiContact(dt, input, speed) {
+    const sideways = this.stopDirection !== 0;
+    const ny = Math.max(0.15, _normal.y);
+    const uphill = -(_normal.x * Math.sin(this.heading) + _normal.z * Math.cos(this.heading)) / ny;
+    const climbing = smoothstep(.035, .22, uphill);
+    const strideTarget = input.tuck && !input.brake
+      ? 1 - smoothstep(lerp(2.4, 1.1, climbing), lerp(6.1, 3.9, climbing), speed) : 0;
+    this.strideAmount = damp(this.strideAmount, strideTarget, 8, dt);
+    this.climbAmount = damp(this.climbAmount, climbing, 7, dt);
+    this.stridePhase += dt * (5.4 + Math.min(speed, 6) * .85);
+    this.tuckAmount = damp(this.tuckAmount, input.tuck && !input.brake ? smoothstep(4.5, 11, speed) : 0, 7, dt);
+
+    // gravity projected on the slope
+    const slopeScale = 1.16;
+    this.vel.x += GRAVITY * ny * _normal.x * slopeScale * dt;
+    this.vel.z += GRAVITY * ny * _normal.z * slopeScale * dt;
+
+    // snow friction + aero drag + braking
+    speed = Math.hypot(this.vel.x, this.vel.z);
+    const gearGrip = this.surface.grip * lerp(this.skiResponse.grip * this.tuning.grip, this.tuning.grip, this.surface.powder * .72);
+    const slip = sideways && speed > .001
+      ? Math.abs(this.vel.x * Math.cos(this.heading) - this.vel.z * Math.sin(this.heading)) / speed : 0;
+    const braking = sideways ? (3.0 + 12.5 * slip * this.stopEdge) * gearGrip : input.brake ? 6.2 * gearGrip : 0;
+    const drag = lerp(0.0032, 0.00165, this.tuckAmount) * this.surface.drag * this.tuning.drag + (input.brake && !sideways ? .019 : 0);
+    const friction = GRAVITY * ny * .042 * this.surface.drag + this.surface.powder * .48 / this.skiResponse.float + braking;
+    const decel = (friction + drag * speed * speed) * dt;
+    const nextSpeed = Math.max(0, speed - decel);
+    if (speed > 0.001) {
+      this.vel.x *= nextSpeed / speed;
+      this.vel.z *= nextSpeed / speed;
+    }
+
+    // edge grip: the skis rotate, the body follows
+    speed = nextSpeed;
+    if (speed > 0.0005 && !sideways) {
+      const velYaw = Math.atan2(this.vel.x, this.vel.z);
+      const grip = (input.brake ? 2.8 : 9.2 - clamp(speed / 38, 0, 1) * 3.0) * lerp(1, .72, this.tuckAmount) *
+        gearGrip * (this.switchStance ? this.skiResponse.switch : 1);
+      // Edges align backward travel too, without rotating downhill rollback into free uphill speed.
+      const skiYaw = this.heading + (Math.cos(velYaw - this.heading) < 0 ? Math.PI : 0);
+      const newYaw = velYaw + shortestAngle(velYaw, skiYaw) * (1 - Math.exp(-grip * dt));
+      this.vel.x = Math.sin(newYaw) * speed;
+      this.vel.z = Math.cos(newYaw) * speed;
+    }
+
+    // Alternating skate pushes on the flat, shorter grippy steps uphill.
+    if (input.tuck && !input.brake && this.strideAmount > .01) {
+      const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
+      const forwardSpeed = this.vel.x * fx + this.vel.z * fz;
+      const traction = lerp(.65, 1, this.surface.grip);
+      const pulse = .78 + .22 * Math.abs(Math.sin(this.stridePhase));
+      const push = (4.7 + this.climbAmount * 1.6) * this.strideAmount * traction * pulse * dt;
+      // A planted boot supports the skier between uphill steps on walkable grades.
+      if (forwardSpeed < 0 && speed < 2 && uphill < .55 && this.surface.grip > .5) {
+        this.vel.x -= fx * forwardSpeed;
+        this.vel.z -= fz * forwardSpeed;
+      }
+      this.vel.x += fx * push;
+      this.vel.z += fz * push;
+    }
+  }
+
   simulate(dt, input, time) {
     let speed = Math.hypot(this.vel.x, this.vel.z);
     this.beforeStep.copy(this.pos);
@@ -487,99 +613,29 @@ export class Player {
     this.boostTime=input.brake?0:Math.max(0,this.boostTime-dt);
 
     if (this.grounded) {
-      if (input.brake && !this.stopDirection && speed >= 5.5) {
-        this.stopApproach = Math.atan2(this.vel.x, this.vel.z);
-        this.stopDirection = -Math.sign(input.steer || this.steer || -1);
-        this.setSwitchStance(false);
-      } else if (!input.brake) this.stopDirection = 0;
-      this.stopEdge = damp(this.stopEdge, this.stopDirection ? 1 : 0, this.stopDirection ? 15 : 9, dt);
-      const sideways = this.stopDirection !== 0;
-      // ── carving ──────────────────────────────────────────────
-      const turnRate = (0.55 + 1.35 * clamp(speed / 26, 0, 1))
-        * (input.brake ? 1.2 : 1) * (input.tuck ? 0.82 : 1);
-      // Chase camera looks along +forward: its screen-right axis is -local X.
-      if (sideways) {
-        const across = this.stopApproach + this.stopDirection * Math.PI * .5;
-        this.heading += shortestAngle(this.heading, across) * (1 - Math.exp(-13 * dt));
-      } else this.heading -= (input.steer || 0) * turnRate * dt;
-      this.heading = wrapAngle(this.heading);
+      if (!this.boarding) this.orientSkis(dt, input, speed);
       if (this.conveyor && speed < 1.15 && !input.tuck && !input.ollie) {
-        this.vel.set(0,0,0);
-        this.pos.y=this.groundHeight(this.pos.x,this.pos.z)+.035;
+        this.vel.set(0, 0, 0);
+        this.pos.y = this.groundHeight(this.pos.x, this.pos.z) + .035;
         return;
       }
       if (this.holdAtUnload) {
         if (!input.tuck && !input.ollie) return;
         this.holdAtUnload = false;
       }
-
-
       this.groundNormal(this.pos.x, this.pos.z, _normal);
-      const ny = Math.max(0.15, _normal.y);
       this.ground.surfaceAt(this.pos.x, this.pos.z, this.surface);
-      const uphill = -(_normal.x * Math.sin(this.heading) + _normal.z * Math.cos(this.heading)) / ny;
-      const climbing = smoothstep(.035, .22, uphill);
-      const strideTarget = input.tuck && !input.brake
-        ? 1 - smoothstep(lerp(2.4, 1.1, climbing), lerp(6.1, 3.9, climbing), speed) : 0;
-      this.strideAmount = damp(this.strideAmount, strideTarget, 8, dt);
-      this.climbAmount = damp(this.climbAmount, climbing, 7, dt);
-      this.stridePhase += dt * (5.4 + Math.min(speed, 6) * .85);
-      this.tuckAmount = damp(this.tuckAmount, input.tuck && !input.brake ? smoothstep(4.5, 11, speed) : 0, 7, dt);
-
-      // gravity projected on the slope
-      const slopeScale = 1.16;
-      this.vel.x += GRAVITY * ny * _normal.x * slopeScale * dt;
-      this.vel.z += GRAVITY * ny * _normal.z * slopeScale * dt;
-
-      // snow friction + aero drag + braking
+      if (this.boarding) boardContact(this, dt, input, _normal, speed);
+      else this.skiContact(dt, input, speed);
       speed = Math.hypot(this.vel.x, this.vel.z);
-      const grip = this.surface.grip;
-      const slip = sideways && speed > .001
-        ? Math.abs(this.vel.x * Math.cos(this.heading) - this.vel.z * Math.sin(this.heading)) / speed : 0;
-      const braking = sideways ? (3.0 + 12.5 * slip * this.stopEdge) * grip : input.brake ? 6.2 * grip : 0;
-      const drag = lerp(0.0032, 0.00165, this.tuckAmount) * this.surface.drag * this.tuning.drag + (input.brake && !sideways ? .019 : 0);
-      const friction = GRAVITY * ny * .042 * this.surface.drag + this.surface.powder * .48 + braking;
-      const decel = (friction + drag * speed * speed) * dt;
-      const nextSpeed = Math.max(0, speed - decel);
-      if (speed > 0.001) {
-        this.vel.x *= nextSpeed / speed;
-        this.vel.z *= nextSpeed / speed;
-      }
-
-      // edge grip: the skis rotate, the body follows
-      speed = nextSpeed;
-      if (speed > 0.0005 && !sideways) {
-        const velYaw = Math.atan2(this.vel.x, this.vel.z);
-        const grip = (input.brake ? 2.8 : 9.2 - clamp(speed / 38, 0, 1) * 3.0) * lerp(1, .72, this.tuckAmount) * this.surface.grip * this.tuning.grip;
-        // Edges align backward travel too, without rotating downhill rollback into free uphill speed.
-        const skiYaw = this.heading + (Math.cos(velYaw - this.heading) < 0 ? Math.PI : 0);
-        const newYaw = velYaw + shortestAngle(velYaw, skiYaw) * (1 - Math.exp(-grip * dt));
-        this.vel.x = Math.sin(newYaw) * speed;
-        this.vel.z = Math.cos(newYaw) * speed;
-      }
-
-      // Alternating skate pushes on the flat, shorter grippy steps uphill.
-      if (input.tuck && !input.brake && this.strideAmount > .01) {
-        const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
-        const forwardSpeed = this.vel.x * fx + this.vel.z * fz;
-        const traction = lerp(.65, 1, this.surface.grip);
-        const pulse = .78 + .22 * Math.abs(Math.sin(this.stridePhase));
-        const push = (4.7 + this.climbAmount * 1.6) * this.strideAmount * traction * pulse * dt;
-        // A planted boot supports the skier between uphill steps on walkable grades.
-        if (forwardSpeed < 0 && speed < 2 && uphill < .55 && this.surface.grip > .5) {
-          this.vel.x -= fx * forwardSpeed;
-          this.vel.z -= fz * forwardSpeed;
-        }
-        this.vel.x += fx * push;
-        this.vel.z += fz * push;
-      }
 
       // cap ridiculous speeds
       if(this.boostTime>0 && speed>1){
         const acceleration=(1.55+this.trickChain*.56)*this.boostTime/this.boostDuration;
         this.vel.multiplyScalar(1+acceleration*dt/speed);
       }
-      const cap = (input.tuck ? 43 : 39)*this.tuning.speed + (this.boostTime>0 ? 4+this.trickChain : 0);
+      const cap = (this.boarding ? (input.tuck ? 40 : 36) : (input.tuck ? 43 : 39)) * this.rideTuning.speed +
+        (this.boostTime > 0 ? 4 + this.trickChain : 0);
       speed = Math.hypot(this.vel.x, this.vel.z);
       if (speed > cap) {
         this.vel.x *= cap / speed;
@@ -633,7 +689,7 @@ export class Player {
         this.spinVel = 0;
         this.flipVel = 0;
         this.grabTime = 0;
-        this.vy = 4.6*this.tuning.pop + Math.max(0, this.vyGround);
+        this.vy = (this.boarding ? 4.2 : 4.6) * this.rideTuning.pop + Math.max(0, this.vyGround);
         this.pos.y += 0.04;
         this.ollieCooldown = 0.35;
         this.trickCombo.begin();
@@ -644,6 +700,8 @@ export class Player {
     } else {
       this.stopDirection = 0;
       this.stopEdge = damp(this.stopEdge, 0, 12, dt);
+      this.boardEdge = damp(this.boardEdge, 0, 6, dt);
+      this.boardOneFoot = damp(this.boardOneFoot, 0, 14, dt);
       // ── airborne ─────────────────────────────────────────────
       this.strideAmount = damp(this.strideAmount, 0, 12, dt);
       this.tuckAmount = damp(this.tuckAmount, 0, 9, dt);
@@ -659,7 +717,7 @@ export class Player {
       if (this.crash) return;
 
       // style
-      const spinTarget = input.air ? -(input.steer || 0) * 5.4 : 0;
+      const spinTarget = input.air ? -(input.steer || 0) * (this.boarding ? 5.65 : 5.4) : 0;
       this.spinVel = damp(this.spinVel, spinTarget, 5.4, dt);
       this.spin += this.spinVel * dt;
 
@@ -687,13 +745,14 @@ export class Player {
   land(gy) {
     this.groundNormal(this.pos.x,this.pos.z,_normal);
     const impact = Math.max(0,-(this.vel.x*_normal.x+this.vy*_normal.y+this.vel.z*_normal.z));
-    const speed=this.vel.length(), skiYaw=wrapAngle(this.heading+this.spin);
-    // Switch landings use the same ski axis. Test against travel and the
+    const speed=this.vel.length(), deckYaw=wrapAngle(this.heading+this.spin);
+    // Switch landings use the same running axis. Test against travel and the
     // local fall line, independent of camera and takeoff direction.
     const pathYaw=Math.atan2(this.vel.x,this.vel.z);
-    const edgingError=Math.acos(clamp(Math.abs(Math.cos(skiYaw-pathYaw)),0,1));
-    const fallLineError=Math.acos(clamp(Math.abs(Math.cos(skiYaw-Math.atan2(_normal.x,_normal.z))),0,1));
-    const setDown=speed<3.5 || edgingError<1.10 || (_normal.y<.987 && fallLineError<.46 && edgingError<1.39);
+    const edgingError=Math.acos(clamp(Math.abs(Math.cos(deckYaw-pathYaw)),0,1));
+    const fallLineError=Math.acos(clamp(Math.abs(Math.cos(deckYaw-Math.atan2(_normal.x,_normal.z))),0,1));
+    const cleanLimit = this.boarding ? .98 : 1.10;
+    const setDown=speed<3.5 || edgingError<cleanLimit || (_normal.y<.987 && fallLineError<.46 && edgingError<cleanLimit+.29);
     const flipErr = Math.abs(wrapAngle(this.flip));
     const good = setDown && flipErr < 1.16 && impact < 25;
 
@@ -753,8 +812,8 @@ export class Player {
       this.emit('touchdown', { airTime: air, impact });
     }
 
-    this.heading = skiYaw;
-    if (!this.footMode && speed > 1.3) this.setSwitchStance(Math.cos(skiYaw - pathYaw) < 0);
+    this.heading = deckYaw;
+    if (!this.footMode && speed > 1.3) this.setSwitchStance(Math.cos(deckYaw - pathYaw) < 0);
     this.spin = 0;
     this.flip = 0;
     this.spinVel = 0;
@@ -869,7 +928,11 @@ export class Player {
       this.breakSnowContact();
       return;
     }
-    const { contactPoints, skiAxes, skiPlanted } = this.rig;
+    if (this.boarding) {
+      this.updateBoardEffects(dt, time, brake);
+      return;
+    }
+    const { contactPoints, skiAxes, skiPlanted, skiContact } = this.rig;
     if (this.landingSpray > 0) {
       this.fx?.skiLanding?.(contactPoints, this.vel, this.travelHeading, this.powder, this.landingSpray);
       this.landingSpray = 0;
@@ -882,7 +945,7 @@ export class Player {
       return;
     }
     for (let i = 0; i < 2; i++) {
-      const trailingEnd = scraping ? 0 : this.vel.dot(skiAxes[i]) < 0 ? .88 : -.8;
+      const trailingEnd = scraping ? 0 : (this.vel.dot(skiAxes[i]) < 0 ? skiContact.end : skiContact.start) * .90;
       this.trackEnds[i].copy(contactPoints[i]).addScaledVector(skiAxes[i], trailingEnd);
     }
     this.tracks?.addStep(this.trackEnds[0], this.trackEnds[1], time, this.powder, {
@@ -892,18 +955,48 @@ export class Player {
     });
   }
 
+  updateBoardEffects(dt, time, brake) {
+    const { point, axis, right, start, end, compression } = this.rig.boardContact;
+    const scraping = this.stopEdge > .15 && brake;
+    const lean = Math.abs(this.boardEdge) / .82;
+    const trailing = this.vel.dot(axis) < 0 ? end : start;
+    const width = this.snowboardModel.waistMm * .001;
+    this.trackEnds[0].copy(point).addScaledVector(right, -Math.sign(this.boardEdge) * width * .44 * lean);
+    this.trackEnds[1].copy(this.trackEnds[0]);
+    if (this.landingSpray > 0) {
+      this.fx?.skiLanding?.(this.trackEnds, this.vel, this.travelHeading, this.powder, this.landingSpray);
+      this.landingSpray = 0;
+    }
+    const carve = Math.max(lean * .68, this.boardSlip);
+    this.fx?.skiWake(this.trackEnds[0], this.trackEnds[1], this.vel, this.travelHeading,
+      this.powder, this.boardEdge, brake, dt, this.surfaceType,
+      this.boardEdge <= 0 ? [true, false] : [false, true], this.landingLoad);
+    if (this.speed < .12) {
+      this.breakSnowContact();
+      return;
+    }
+    if (!scraping) this.trackEnds[0].addScaledVector(axis, trailing * .78);
+    this.tracks?.addStep(this.trackEnds[0], this.trackEnds[1], time, this.powder, {
+      heading: this.heading, carve, brake, surface: this.surfaceType,
+      compression, axes: [axis, axis], planted: [true, false],
+      widthScale: lerp(width / .112, 1.08, lean) * (scraping ? .88 : 1),
+      stop: Math.max(scraping ? this.stopEdge : 0, this.boardSlip * .58), velocity: this.vel,
+    });
+  }
+
   updateModel(dt, input, snap = false) {
     const onSnow = this.grounded && !this.crash;
     // Slow skis sink under the rider's weight; speed spreads the load
     // along the running surface. Landing briefly compresses the soft layer.
     const planing = smoothstep(1.2, 19, this.speed);
     const compressible = onSnow && !this.footMode && this.surfaceType !== 'ice';
+    const float = this.boarding ? boardFloat(this.snowboardModel) : this.skiResponse.float;
     const depth = compressible ? this.powder ** 1.45 * (.102 - .058 * planing
-      + .018 * Math.abs(this.steer) * planing + .034 * this.landingLoad) : 0;
+      + .018 * Math.abs(this.steer) * planing + .034 * this.landingLoad) / float : 0;
     this.snowSink = snap || !compressible ? depth : damp(this.snowSink, depth, 12, dt);
     const upVec = onSnow && !this.footMode ? _stanceUp.copy(_up).lerp(_normal, .58).normalize() : _up;
     const bracing = onSnow && !this.footMode ? this.stopEdge : 0;
-    const torsoYaw = bracing > .002
+    const torsoYaw = !this.boarding && bracing > .002
       ? this.heading + shortestAngle(this.heading, this.stopApproach) * bracing * .43 : this.heading;
     _fwd.set(Math.sin(torsoYaw), 0, Math.cos(torsoYaw));
     _fwd.addScaledVector(upVec, -_fwd.dot(upVec));
@@ -941,6 +1034,9 @@ export class Player {
       stairTreadAt: this.footMode ? this.sampleTread : null,
       switchStance: this.switchStance,
       switchSide: this.switchLookSide,
+      boardEdge: this.boardEdge,
+      boardOneFoot: this.boardOneFoot,
+      boardGroundSink: this.ground.skiSnowDepthAt ? this.snowSink : Math.min(.007, this.snowSink),
       powder: this.powder,
       landingLoad: this.landingLoad,
       snowSink: this.snowSink,
@@ -962,7 +1058,7 @@ export class Player {
       crashTime: this.crashTimer,
       grounded: this.grounded,
     }, onSnow ? this.sampleGround : null);
-    const deposition = onSnow && !this.footMode && !this.riding && this.surfaceType !== 'ice'
+    const deposition = onSnow && !this.footMode && !this.boarding && !this.riding && this.surfaceType !== 'ice'
       ? this.powder * (.39 + .36 * Math.abs(Math.sin(this.pos.x * .034 + this.pos.z * .083)))
         * (1 - .78 * planing) : 0;
     this.skiSnow = damp(this.skiSnow, deposition, deposition > this.skiSnow ? .19 : .46, dt);
@@ -994,7 +1090,7 @@ export class Player {
   }
 
   swingPole() {
-    if (this.riding || this.crash || !this.grounded || this.poleSwing > 0 || this.speed > 12) return false;
+    if (this.discipline === 'snowboard' || this.riding || this.crash || !this.grounded || this.poleSwing > 0 || this.speed > 12) return false;
     const { x, y, z } = this.pos;
     const yaw = this.travelHeading + this.lookYaw;
     const fx = Math.sin(yaw), fz = Math.cos(yaw);
@@ -1020,16 +1116,23 @@ export class Player {
     const yaw = this.stopEdge > .12
       ? this.travelHeading + shortestAngle(this.travelHeading, this.stopApproach) * this.stopEdge : this.travelHeading;
     const sin = Math.sin(yaw), cos = Math.cos(yaw);
-    const rear = walking ? 0 : .20;
-    const x = this.pos.x - sin * rear, z = this.pos.z - cos * rear;
-    const ground = this.groundHeight(this.pos.x, this.pos.z);
-    const eyeHeight = walking ? 1.65 - Math.cos(this.stridePhase * 2) * this.walkAmount * .016 : 1.52 - this.tuckAmount * .31 - this.snowSink;
-    const air = Math.max(0, this.pos.y - ground - .035);
-    this.camera.position.set(x, this.groundHeight(x, z) + eyeHeight + air, z);
+    if (this.boarding) {
+      const { x, y, z } = this.rig.boardEyes;
+      this.camera.position.set(x, Math.max(y, this.groundHeight(x, z) + .25), z);
+    } else {
+      const rear = walking ? 0 : .20;
+      const x = this.pos.x - sin * rear, z = this.pos.z - cos * rear;
+      const ground = this.groundHeight(this.pos.x, this.pos.z);
+      const eyeHeight = walking ? 1.65 - Math.cos(this.stridePhase * 2) * this.walkAmount * .016
+        : 1.52 - this.tuckAmount * .31 - this.snowSink;
+      const air = Math.max(0, this.pos.y - ground - .035);
+      this.camera.position.set(x, this.groundHeight(x, z) + eyeHeight + air, z);
+    }
     this.camPos.copy(this.camera.position);
     this.cameraArmFraction = 1;
     this.camYaw = snap ? yaw : wrapAngle(this.camYaw + shortestAngle(this.camYaw, yaw) * (1 - Math.exp(-23 * dt)));
     const viewYaw = this.camYaw + this.lookYaw;
+    const { x, z } = this.camera.position;
     const slope = walking ? 0 : Math.atan2(this.groundHeight(x + sin * 3, z + cos * 3) - this.groundHeight(x,z), 3);
     const pitch = clamp(slope - (walking ? .035 : .26) - this.lookPitch, -1.43, .93);
     this.camLook.copy(this.camera.position).add(_tourLook.set(
@@ -1040,10 +1143,21 @@ export class Player {
     this.camera.updateProjectionMatrix();
   }
 
+  setBoardHelmetClip(active) {
+    if (active && this.boardHelmetNear === null) {
+      this.boardHelmetNear = this.camera.near;
+      this.camera.near = Math.min(.065, this.camera.near);
+    } else if (!active && this.boardHelmetNear !== null) {
+      if (this.camera.near === .065) this.camera.near = this.boardHelmetNear;
+      this.boardHelmetNear = null;
+    }
+  }
+
   updateCamera(dt, snap = false) {
     const speed = clamp(this.speed / 34, 0, 1);
     const indoors = this.footMode && !!this.env?.interiorAt?.(this.pos.x, this.pos.z, this.pos.y);
     const helmet = (this.cameraMode === 2 || indoors) && !this.riding;
+    this.setBoardHelmetClip(helmet && this.boarding);
     this.rig.group.visible = !this.riding;
     this.rig.showHelmetGear(helmet, this);
     if (helmet) {

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { box, mergedMesh, part } from './scenery.js';
 import { createSkier } from './skier.js';
 import { buildSnowShoe, SNOW_SHOES } from './snow-shoes.js';
-import { skiDeck } from './skier-equipment.js';
+import { skiDeck, snowboardDeck } from './skier-equipment.js';
 import { addWoolCarpet } from './interior-floors.js';
 import { buildSkiGoggles, GOGGLES } from './ski-goggles.js';
 
@@ -148,14 +148,16 @@ export function furnishShop(room, group, collide, label) {
       label(group, finish.name.toUpperCase(), '', x, goggleShelfY - .01, goggleShelfZ + .307, .60);
     }
     const rackX = -hw + 1.10;
-    for (const [i, style] of ['powder','carver','park'].entries()) {
-      const deck = skiDeck(style);
-      for (const dx of [-.092,.092]) {
-        const ski = new THREE.Mesh(deck.geometry, deck.materials);
-        ski.position.set(rackX + .54 * i + dx, 1.18, wallZ + 1.05);
-        ski.rotation.x = -1.43;
-        ski.rotation.z = i * .044 - .14;
-        group.add(ski);
+    const displayDecks = [skiDeck('powder'), skiDeck('carver'), skiDeck('park'),
+      snowboardDeck('burton-custom-camber'), snowboardDeck('jones-flagship')];
+    for (const [i, deck] of displayDecks.entries()) {
+      const pair = deck.model.kind === 'ski';
+      for (const dx of pair ? [-.077,.077] : [0]) {
+        const item = new THREE.Mesh(deck.geometry, deck.materials);
+        item.name = deck.model.name;
+        item.position.set(rackX - .14 + .34 * i + dx, .31 + deck.model.lengthCm * .005, wallZ + 1.05);
+        item.rotation.x = -1.43;
+        group.add(item);
       }
     }
     shelf(rackX + .54,.28,wallZ+1,1.7,.47);

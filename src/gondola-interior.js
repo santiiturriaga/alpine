@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { makeGondolaShell, addGondolaShell } from './gondola-shell.js';
+import { skiDeck, snowboardDeck } from './skier-equipment.js';
 import { makeCanvas, canvasTexture } from './util.js';
 
 const interiorMaterials={
@@ -13,7 +14,7 @@ for(const material of Object.values(interiorMaterials))material.userData.gondola
 // The occupied carrier uses the same cable origin and envelope as the distant
 // fleet, but has an actual empty interior and transparent, double-sided panes.
 export class GondolaInterior {
-  constructor(scene, big = false, creekside = false, name = '') {
+  constructor(scene, big = false, creekside = false, name = '', appearance = {}) {
     this.group = new THREE.Group();
     this.group.name = 'Occupied glass gondola';
     this.group.userData.gondolaCarrier=true;
@@ -28,7 +29,14 @@ export class GondolaInterior {
     this._eye = new THREE.Vector3();
     this._look = new THREE.Vector3();
     const shell = makeGondolaShell(big ? '#b81630' : /Excalibur/.test(name)?'#e2e5de':'#273840', '#ddd9cf', big, creekside);
-    this.setDoorOpening = addGondolaShell(this.group, shell);
+    this.setDoorOpening = addGondolaShell(this.group, shell, true);
+    this.rack = shell.rack;
+    if (this.rack) {
+      this.rackContents = new THREE.Group();
+      this.rackContents.name = 'Occupied gondola equipment rack';
+      this.group.add(this.rackContents);
+      this.setGear(appearance);
+    }
     const {metal,dark,liner}=interiorMaterials;
     const box = (x, y, z, px, py, pz, material) => {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(x, y, z), material);
@@ -79,6 +87,30 @@ export class GondolaInterior {
     scene.add(this.group);
   }
 
+  setGear({ discipline, skiModel, snowboardModel } = {}) {
+    if (!this.rack) return;
+    const board = discipline === 'snowboard';
+    const selection = board ? snowboardModel : skiModel;
+    const id = typeof selection === 'string' ? selection : selection?.id;
+    const deck = board ? snowboardDeck(id) : skiDeck(id);
+    if (this.loadedDeck === deck) return;
+    this.loadedDeck = deck;
+    this.rackContents.clear();
+
+    const lean = .035;
+    const [tailZ, , tailY] = deck.profile[0];
+    const seat = this.rack.shelfY - tailZ * Math.cos(lean) + tailY * Math.sin(lean);
+    const spacing = Math.max(deck.model.tipMm, deck.model.tailMm) / 2000 + .01;
+    for (const offset of board ? [0] : [-spacing, spacing]) {
+      const mesh = new THREE.Mesh(deck.geometry, deck.materials);
+      mesh.name = deck.model.name;
+      mesh.rotation.x = -Math.PI / 2 - lean;
+      mesh.position.set(this.rack.x + offset, seat, this.rack.z);
+      mesh.castShadow = true;
+      this.rackContents.add(mesh);
+    }
+  }
+
   update(position, heading, time, doorOpening = 0) {
     this.group.position.copy(position);
     this.setDoorOpening(doorOpening);
@@ -120,6 +152,9 @@ export class GondolaInterior {
 
   dispose() {
     this.group.removeFromParent();
+    // Deck assets are shared by the player and outfitter preview.
+    this.rackContents?.removeFromParent();
+    this.rackContents?.clear();
     const materials = new Set();
     this.group.traverse((mesh) => {
       if (!mesh.isMesh) return;

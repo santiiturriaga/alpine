@@ -3,6 +3,7 @@ import { checkSkierName, onProfileChange, skierName, skiUnits } from './skier-pr
 import { shellForColor } from './garment-marks.js';
 import { createSkier } from './skier.js';
 import { DEFAULT_GOGGLES, isGoggleColor } from './ski-goggles.js';
+import { encodeRiderKit, readRiderKit } from './rider-kit-link.js';
 import { readWinchPacket } from './patrol-winch-link.js';
 
 // A shared WSS broker works from a static Pages origin. Rooms outlive the
@@ -131,6 +132,8 @@ export function createMultiplayer(scene, resort, getPlayer) {
   const winchPrefix=channel+'/winch/';
   const namePrefix = channel + '/name/';
   const gearPrefix = channel + '/gear/';
+  const kitPrefix = channel + '/kit/';
+  const defaultKit = readRiderKit(encodeRiderKit({}));
   let patrol='idle', assist='', radioAt=-Infinity, lastRadio='';
   let winch='', winchAt=-Infinity, lastWinch='';
   const peers = new Map(), pool = [];
@@ -140,6 +143,7 @@ export function createMultiplayer(scene, resort, getPlayer) {
   let sentAt = -Infinity, lastTable = 0, sequence = 0, recentPose, fastest = 0;
   let nameAt = -Infinity, sentName;
   let gearAt = -Infinity, sentGoggles;
+  let kitAt = -Infinity, previousKitOutfit, kitPayload;
   let idle = false, lastInput;
   let packetSecond = -1, packets = 0, joins = 0;
   try { enabled = localStorage.getItem('alpine.multiplayer') !== 'off'; } catch {}
@@ -199,6 +203,15 @@ export function createMultiplayer(scene, resort, getPlayer) {
       member.name = checkSkierName(bytes.toString()) ?? '';
       return;
     }
+    if (path === kitPrefix + sender) {
+      if (!known || bytes.length > 152) return;
+      const payload = bytes.toString();
+      if (payload !== known.kitPayload) {
+        const kit = readRiderKit(payload);
+        if (kit) { known.kit = kit; known.kitPayload = payload; }
+      }
+      return;
+    }
     if (path === gearPrefix + sender) {
       if (known && bytes.length <= 11) {
         const color = bytes.toString();
@@ -230,7 +243,7 @@ export function createMultiplayer(scene, resort, getPlayer) {
     if (!validPose(pose)) return;
     const prev = peers.get(key);
     if (prev && prev.pose[16] >= pose[16]) return;
-    if (!prev) sentAt = nameAt = gearAt = -Infinity;
+    if (!prev) sentAt = nameAt = gearAt = kitAt = -Infinity;
     const remote = prev ?? {};
     recordSnapshot(remote, pose, now());
     if (!prev) peers.set(key, remote);
@@ -248,9 +261,9 @@ export function createMultiplayer(scene, resort, getPlayer) {
       });
       const c = client;
       c.on('connect', () => {
-        c.subscribe([channel + '/+',radioPrefix+'+',namePrefix+'+',winchPrefix+'+',gearPrefix+'+'], {qos:0}, err => {
+        c.subscribe([channel + '/+',radioPrefix+'+',namePrefix+'+',winchPrefix+'+',gearPrefix+'+',kitPrefix+'+'], {qos:0}, err => {
           if (c !== client) return;
-          connected = !err; sentAt = nameAt = winchAt = gearAt = -Infinity; lastRadio = lastWinch = ''; updateTable();
+          connected = !err; sentAt = nameAt = winchAt = gearAt = kitAt = -Infinity; lastRadio = lastWinch = ''; updateTable();
         });
       });
       c.on('message', (path, bytes) => { if (client === c) onMessage(path, bytes); });
@@ -296,7 +309,7 @@ export function createMultiplayer(scene, resort, getPlayer) {
   };
   function actorFor() {
     if (pool.length) return pool.pop();
-    const frame = new THREE.Group(), rig = createSkier({accessories:false});
+    const frame = new THREE.Group(), rig = createSkier();
     const nametag = makeNametag();
     frame.name = 'Online skier'; frame.add(rig.group); scene.add(frame, nametag.sprite);
     return {frame,rig,nametag};
@@ -345,6 +358,15 @@ export function createMultiplayer(scene, resort, getPlayer) {
       // Keep display names independent of the pose schema and its ordering.
       client.publish(namePrefix + id, name, {qos:0,retain:false});
       nameAt = time; sentName = name;
+    }
+    if (connected && (previousKitOutfit !== outfit || time - kitAt >= nameRefreshInterval)) {
+      const payload = encodeRiderKit(outfit);
+      if (payload !== kitPayload || time - kitAt >= nameRefreshInterval) {
+        client.publish(kitPrefix + id, payload, {qos:0,retain:false});
+        kitPayload = payload;
+        kitAt = time;
+      }
+      previousKitOutfit = outfit;
     }
     const goggles = isGoggleColor(outfit.goggles) ? outfit.goggles : DEFAULT_GOGGLES;
     if (connected && (goggles !== sentGoggles || time - gearAt >= nameRefreshInterval)) {
@@ -411,13 +433,16 @@ export function createMultiplayer(scene, resort, getPlayer) {
       }
       remote.dx=predicting?undefined:dx;remote.dz=dz;
       const goggleColor = remote.goggles ?? DEFAULT_GOGGLES;
-      if (fresh || remote.color !== s[15] || remote.renderedGoggles !== goggleColor) {
+      const kit = remote.kit ?? defaultKit;
+      if (fresh || remote.color !== s[15] || remote.renderedGoggles !== goggleColor || remote.renderedKit !== kit) {
+        remote.renderedKit = kit;
         remote.color = s[15];
         remote.renderedGoggles = goggleColor;
-        rig.setAppearance({ jacket: remote.color, apparel: shellForColor(remote.color), goggles: goggleColor });
+        rig.setAppearance({ ...kit, jacket: remote.color, apparel: shellForColor(remote.color), goggles: goggleColor });
       }
       const phase = Math.atan2(Math.sin(next[11] - s[11]), Math.cos(next[11] - s[11]));
-      rig.animate(dt,{speed:remoteSpeed,steer:lerp(s[8],next[8],mix),tuck:lerp(s[9],next[9],mix),brake:0,grab:0,crash:!!(s[10]&4),crashTime:0,
+      const steer=lerp(s[8],next[8],mix);
+      rig.animate(dt,{speed:remoteSpeed,steer,boardEdge:kit.discipline==='snowboard'?steer*.75:0,tuck:lerp(s[9],next[9],mix),brake:0,grab:0,crash:!!(s[10]&4),crashTime:0,
         airborne:!!(s[10]&2),footMode:!!(s[10]&1),switchStance:!!(s[10]&16),
         walk:Math.min(1,remoteSpeed),stridePhase:s[11]+phase*mix},null);
     }

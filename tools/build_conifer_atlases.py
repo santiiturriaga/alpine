@@ -6,12 +6,14 @@ from browser_bake import ROOT, bake_page
 
 
 def main():
-    with bake_page(args=["--use-angle=swiftshader", "--enable-unsafe-swiftshader"]) as page:
+    with bake_page(args=["--disable-gpu", "--disable-gpu-compositing",
+                         "--use-angle=swiftshader", "--enable-unsafe-swiftshader"]) as page:
         atlases = page.evaluate("""async () => {
           const THREE = await import('three');
           const { coniferGeometry, coniferMaterial } = await import('/src/conifers.js');
           const { climateUniforms } = await import('/src/climate-state.js');
-          const width = 192, height = 256, size = 24, elevation = 1780;
+          const width = 192, height = 256, gutter = 16, size = 24, elevation = 1780;
+          const tileWidth = width + 2 * gutter, tileHeight = height + 2 * gutter;
           const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
           renderer.setSize(width, height);
           renderer.toneMapping = THREE.NoToneMapping;
@@ -27,8 +29,8 @@ def main():
           tree.position.y = elevation;
           scene.add(tree);
           const atlas = document.createElement('canvas');
-          atlas.width = 4 * width;
-          atlas.height = 6 * height;
+          atlas.width = 4 * tileWidth;
+          atlas.height = 6 * tileHeight;
           const ctx = atlas.getContext('2d');
           const species = ['fir', 'spruce', 'hemlock'];
           climateUniforms.snowline.value = 850;
@@ -44,7 +46,7 @@ def main():
                 camera.lookAt(0, elevation + size*.5, 0);
                 sun.position.set(x*3-z*3, 6, z*3+x*3);
                 renderer.render(scene, camera);
-                ctx.drawImage(renderer.domElement, width * view, height * row);
+                ctx.drawImage(renderer.domElement, tileWidth * view + gutter, tileHeight * row + gutter);
               }
             }
             return atlas.toDataURL('image/png').split(',')[1];
