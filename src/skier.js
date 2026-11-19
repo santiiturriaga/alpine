@@ -256,7 +256,7 @@ function garmentFolds(rows, angles, profile, side, sleeve) {
     const knee = Math.exp(-(((s-.48)/.18)**2));
     const hem = Math.exp(-(((s-.91)/.12)**2));
     for (let i = 0; i < columns; i++) {
-      const [angle, sin, cos] = angles[i], at = (row * columns + i) * 3;
+      const { angle, sin, cos } = angles[i], at = (row * columns + i) * 3;
       const base = .0049 * Math.sin(s * 74 + sin * 2.2 + side) * knee;
       folds[at] = base * .4 + .0037 * Math.sin(s * 98 - cos * 2.4 + side * 1.2) * hem
         + .0019 * Math.sin(s * 45 + angle * 4 + side) * loose;
@@ -271,13 +271,19 @@ function garmentFolds(rows, angles, profile, side, sleeve) {
   return table;
 }
 
+function garmentCrossFrame(tangent, right, front) {
+  right.set(1, 0, 0).addScaledVector(tangent, -tangent.x).normalize();
+  front.crossVectors(tangent, right).normalize();
+}
+
 function jointGarment(parent, material, options = {}) {
   const rows = 28, sides = 36, stride = sides + 1;
   const positions = new Float32Array(((rows + 1) * stride + 2) * 3);
   const colors = new Float32Array(positions.length), uvs = [], indices = [];
   const angles = Array.from({ length: stride }, (_, i) => {
-    const a = i / sides * Math.PI * 2;
-    return [a, Math.sin(a), Math.cos(a), .6 * Math.cos(a) - .36 * Math.sin(a*3)];
+    const angle = i / sides * Math.PI * 2;
+    const sin = Math.sin(angle), cos = Math.cos(angle);
+    return { angle, sin, cos, windShape: .6 * cos - .36 * Math.sin(angle * 3) };
   });
   const profile = options.profile || [[0,.064,.067],[.09,.096,.097],[.19,.102,.107],[.35,.096,.098],
     [.47,.091,.091],[.57,.088,.094],[.7,.080,.081],[.86,.079,.077],[1,.081,.078]];
@@ -306,34 +312,42 @@ function jointGarment(parent, material, options = {}) {
   mesh.frustumCulled = false;
   const upper = new THREE.Vector3(), lower = new THREE.Vector3(), start = new THREE.Vector3();
   const finish = new THREE.Vector3(), center = new THREE.Vector3(), tangent = new THREE.Vector3();
-  const right = new THREE.Vector3(), front = new THREE.Vector3(), seam = new THREE.Vector3(), opposite = new THREE.Vector3();
+  const beforeJoint = new THREE.Vector3(), afterJoint = new THREE.Vector3();
+  const upperRight = new THREE.Vector3(), upperFront = new THREE.Vector3();
+  const lowerRight = new THREE.Vector3(), lowerFront = new THREE.Vector3();
+  const bendRight = new THREE.Vector3(), bendFront = new THREE.Vector3();
+  const seam = new THREE.Vector3(), opposite = new THREE.Vector3();
   return {
     mesh,
     update(hip, knee, ankle, windPhase, wind) {
       upper.subVectors(knee, hip).normalize();
       lower.subVectors(ankle, knee).normalize();
       const compression = clamp((1 - upper.dot(lower)) * 1.4, 0, 1);
+      start.copy(hip).addScaledVector(upper, -(options.topOverlap ?? .038));
+      beforeJoint.copy(knee).addScaledVector(upper, -.055);
+      afterJoint.copy(knee).addScaledVector(lower, .055);
+      finish.copy(ankle).addScaledVector(lower, options.bottomOverlap ?? .043);
+      garmentCrossFrame(upper, upperRight, upperFront);
+      garmentCrossFrame(lower, lowerRight, lowerFront);
       for (let j = 0; j <= rows; j++) {
         const s = j / rows;
+        let right, front;
         if (s < .43) {
-          start.copy(hip).addScaledVector(upper, -(options.topOverlap ?? .038));
-          finish.copy(knee).addScaledVector(upper, -.055);
-          center.copy(start).lerp(finish, s / .43);
-          tangent.copy(upper);
+          center.copy(start).lerp(beforeJoint, s / .43);
+          right = upperRight;
+          front = upperFront;
         } else if (s > .57) {
-          start.copy(knee).addScaledVector(lower, .055);
-          finish.copy(ankle).addScaledVector(lower, options.bottomOverlap ?? .043);
-          center.copy(start).lerp(finish, (s - .57) / .43);
-          tangent.copy(lower);
+          center.copy(afterJoint).lerp(finish, (s - .57) / .43);
+          right = lowerRight;
+          front = lowerFront;
         } else {
           const t = (s - .43) / .14, u = 1 - t;
-          start.copy(knee).addScaledVector(upper, -.055);
-          finish.copy(knee).addScaledVector(lower, .055);
-          center.copy(start).multiplyScalar(u * u).addScaledVector(knee, 2 * u * t).addScaledVector(finish, t * t);
+          center.copy(beforeJoint).multiplyScalar(u * u).addScaledVector(knee, 2 * u * t).addScaledVector(afterJoint, t * t);
           tangent.copy(upper).lerp(lower, t).normalize();
+          garmentCrossFrame(tangent, bendRight, bendFront);
+          right = bendRight;
+          front = bendFront;
         }
-        right.set(1, 0, 0).addScaledVector(tangent, -tangent.x).normalize();
-        front.crossVectors(tangent, right).normalize();
         if (j === 0 || j === rows) {
           const offset = ((rows + 1) * stride + (j === rows ? 1 : 0)) * 3;
           positions[offset] = center.x;
@@ -346,7 +360,7 @@ function jointGarment(parent, material, options = {}) {
         center.addScaledVector(right, flutter * bias * .85);
         for (let i = 0; i <= sides; i++) {
           const offset = (j * stride + i) * 3;
-          const [, sin, cos, windShape] = angles[i];
+          const { sin, cos, windShape } = angles[i];
           const crease = folds[offset] + compression * folds[offset+1] + flutter * windShape;
           const x = sin * (width + crease), z = cos * (depth + crease);
           positions[offset] = center.x + right.x * x + front.x * z;

@@ -45,7 +45,6 @@ const noise = /* glsl */ `
   }
   #else
   float surfaceHash(vec3 p) {
-    p = fract(p * 0.1031);
     p += dot(p, p.yzx + 31.32);
     return fract((p.x + p.y) * p.z);
   }
@@ -53,18 +52,27 @@ const noise = /* glsl */ `
   float surfaceNoise(vec3 p) {
     vec3 i = floor(p), f = fract(p);
     vec3 t = f*f*(3.0 - 2.0*f);
+    // Adjacent corners share the same hashed coordinate on two axes.
+    vec3 lo = fract(i * 0.1031), hi = fract((i + 1.0) * 0.1031);
     return mix(
-      mix(mix(surfaceHash(i), surfaceHash(i+vec3(1,0,0)),t.x),
-          mix(surfaceHash(i+vec3(0,1,0)),surfaceHash(i+vec3(1,1,0)),t.x),t.y),
-      mix(mix(surfaceHash(i+vec3(0,0,1)),surfaceHash(i+vec3(1,0,1)),t.x),
-          mix(surfaceHash(i+vec3(0,1,1)),surfaceHash(i+vec3(1,1,1)),t.x),t.y),t.z);
+      mix(mix(surfaceHash(lo), surfaceHash(vec3(hi.x,lo.yz)),t.x),
+          mix(surfaceHash(vec3(lo.x,hi.y,lo.z)),surfaceHash(vec3(hi.xy,lo.z)),t.x),t.y),
+      mix(mix(surfaceHash(vec3(lo.xy,hi.z)),surfaceHash(vec3(hi.x,lo.y,hi.z)),t.x),
+          mix(surfaceHash(vec3(lo.x,hi.yz)),surfaceHash(hi),t.x),t.y),t.z);
   }
   #endif
 
-  float filteredSurfaceNoise(vec3 p) {
-    float coverage = 1.0 - smoothstep(.37,1.12,max(length(dFdx(p)),length(dFdy(p))));
+  float surfaceNoiseCoverage(vec3 p) {
+    return 1.0 - smoothstep(.37,1.12,max(length(dFdx(p)),length(dFdy(p))));
+  }
+
+  float coveredSurfaceNoise(vec3 p, float coverage) {
     if (coverage == 0.) return .5;
     return mix(.5,surfaceNoise(p),coverage);
+  }
+
+  float filteredSurfaceNoise(vec3 p) {
+    return coveredSurfaceNoise(p,surfaceNoiseCoverage(p));
   }
 
   vec3 surfaceNormal(vec3 surfPos, vec3 norm, float height) {
@@ -82,31 +90,43 @@ const surfaces = {
   snow: {
     color: /* glsl */ `
       vec3 p = surfacePoint;
-      vec2 roomPoint = p.xz - roomCutout.xy;
-      vec2 roomLocal = vec2(roomPoint.x*roomYaw.x-roomPoint.y*roomYaw.y,
-        roomPoint.x*roomYaw.y+roomPoint.y*roomYaw.x);
-      if (all(lessThan(abs(roomLocal),roomCutout.zw)) || all(lessThan(abs(roomLocal-annexCutout.xy),annexCutout.zw))) discard;
+      #ifdef TERRAIN_ROOM_CUTOUT
+        vec2 roomPoint = p.xz - roomCutout.xy;
+        vec2 roomLocal = vec2(roomPoint.x*roomYaw.x-roomPoint.y*roomYaw.y,
+          roomPoint.x*roomYaw.y+roomPoint.y*roomYaw.x);
+        if (all(lessThan(abs(roomLocal),roomCutout.zw)) || all(lessThan(abs(roomLocal-annexCutout.xy),annexCutout.zw))) discard;
+      #endif
       float distanceToEye = length(vViewPosition);
       vec2 pisteUv = (p.xz - pisteLimits.xy) / pisteLimits.zw;
       vec4 snowMix = texture2D(pisteCoverage, pisteUv);
-      float sunFromTerrain = mix(1.0, mix(.24, 1.0, texture2D(mountainShade,pisteUv).r), climateTerrainSun);
+      float sunFromTerrain = 1.0;
       float skyView = 1.;
       if (climateRealism > .5) {
         vec2 horizon = terrainLight(pisteUv);
         sunFromTerrain = mix(.08, 1., horizon.x);
         skyView = horizon.y;
+      } else if (climateTerrainSun != 0.0) {
+        sunFromTerrain = mix(1.0, mix(.24, 1.0, texture2D(mountainShade,pisteUv).r), climateTerrainSun);
       }
       float groomed = smoothstep(.21,.63,snowMix.r);
       float ice = smoothstep(.22,.53,snowMix.b);
-      float traffic = trackPressure(p.xz) * (1.0-ice);
+      float traffic = ice < 1.0 ? trackPressure(p.xz) * (1.0-ice) : 0.0;
       float loose = smoothstep(.23,.77,snowMix.g)*(1.0-ice)*(1.0-.76*traffic);
       float detail = 1.0 - smoothstep(23.0, 125.0, distanceToEye);
       vec2 plazaUv = (p.xz - plazaLimits.xy) / plazaLimits.z;
       vec2 bowlUv = (p.xz - bowlLimits.xy) / bowlLimits.z;
       vec2 inPlaza = smoothstep(vec2(.004), vec2(.028), min(plazaUv, 1.0-plazaUv));
       vec2 inBowl = smoothstep(vec2(.004), vec2(.028), min(bowlUv, 1.0-bowlUv));
-      float plazaTracks = texture2D(plazaSnow, vec2(plazaUv.x, 1.0-plazaUv.y)).r * inPlaza.x * inPlaza.y;
-      float bowlTracks = texture2D(bowlSnow, vec2(bowlUv.x, 1.0-bowlUv.y)).r * inBowl.x * inBowl.y;
+      vec2 plazaSample = vec2(plazaUv.x, 1.0-plazaUv.y);
+      vec2 bowlSample = vec2(bowlUv.x, 1.0-bowlUv.y);
+      // Compute texture footprints before the per-fragment coverage tests.
+      vec2 plazaDx = dFdx(plazaSample), plazaDy = dFdy(plazaSample);
+      vec2 bowlDx = dFdx(bowlSample), bowlDy = dFdy(bowlSample);
+      float plazaTracks = 0.0, bowlTracks = 0.0;
+      if (inPlaza.x > 0.0 && inPlaza.y > 0.0)
+        plazaTracks = textureGrad(plazaSnow, plazaSample, plazaDx, plazaDy).r * inPlaza.x * inPlaza.y;
+      if (inBowl.x > 0.0 && inBowl.y > 0.0)
+        bowlTracks = textureGrad(bowlSnow, bowlSample, bowlDx, bowlDy).r * inBowl.x * inBowl.y;
       float marks = max(plazaTracks, bowlTracks);
       vec2 villageUv = (p.xz - villageLimits.xy) / villageLimits.z;
       if(distanceToEye<95.0 && all(greaterThan(villageUv,vec2(0.))) && all(lessThan(villageUv,vec2(1.)))){
@@ -117,7 +137,12 @@ const surfaces = {
       float drift = filteredSurfaceNoise(vec3(wind.x*.115,p.y*.11,wind.y*.48));
       float scoured = filteredSurfaceNoise(vec3(wind.x*.032,p.y*.077,wind.y*.095) + drift * .27);
       float offPiste = 1.0 - smoothstep(.08,.44,snowMix.r);
-      float canopy = smoothstep(.22,.78,filteredSurfaceNoise(p*vec3(.29,.12,.29))*.58 + scoured*.42);
+      vec3 canopyPoint = p*vec3(.29,.12,.29);
+      float canopyFilter = surfaceNoiseCoverage(canopyPoint);
+      float canopy = .5;
+      if (snowMix.a > 0.0 && offPiste > 0.0) {
+        canopy = smoothstep(.22,.78,coveredSurfaceNoise(canopyPoint,canopyFilter)*.58 + scoured*.42);
+      }
       float forestEdge = smoothstep(.02,.32,snowMix.a);
       float forestExtent = smoothstep(.06,.88,snowMix.a + (canopy-.5)*.23*forestEdge) * offPiste;
       // Mapped trees stand above the snow. Ground tint remains slight beneath
@@ -131,8 +156,9 @@ const surfaces = {
       vec3 distantGround = mix(vec3(.052,.071,.076),vec3(.20,.26,.29),canopy);
       diffuseColor.rgb = mix(diffuseColor.rgb,distantGround,forestExtent*distantWoods*.63);
       float crust = detail > .001 ? surfaceNoise(p * 2.35) : .5;
-      float grain = detail > .001 ? surfaceNoise(p * 23.0) : .5;
       float microCoverage = 1.0 - smoothstep(.38, 1.20, length(fwidth(p * 23.0)));
+      bool pillowsActive = loose * detail > .01;
+      float grain = detail > .001 && (microCoverage > 0.0 || pillowsActive) ? surfaceNoise(p * 23.0) : .5;
       #ifdef FLAT_SHADED
         float up = 1.0;
       #else
@@ -145,38 +171,52 @@ const surfaces = {
         * smoothstep(.39,.94,climateSnowpack);
       // Steep, exposed faces shed the snow between tilted rock beds.
       vec3 strata = vec3(wind.x*.056,p.y*.292 + wind.y*.052,wind.y*.063);
-      float coarseFracture = filteredSurfaceNoise(strata + .56*scoured);
-      float fineFracture = filteredSurfaceNoise(strata*vec3(10.5,8.0,13.0) + scoured);
-      float fracture = smoothstep(.34,.67,coarseFracture + (fineFracture-.5)*(.25+.37*vicinity));
-      float ledge = 1.0 - up + .15*(scoured-.5) + .09*(coarseFracture-.5);
-      float exposed = offPiste * (1.0-apron*.96) * (1.0-.82*forestExtent) * smoothstep(1250.0,1840.0,p.y)
-        * smoothstep(.225,.43,ledge);
+      vec3 coarsePoint = strata + .56*scoured;
+      vec3 finePoint = strata*vec3(10.5,8.0,13.0) + scoured;
+      float coarseFilter = surfaceNoiseCoverage(coarsePoint);
+      float fineFilter = surfaceNoiseCoverage(finePoint);
+      float slope = 1.0 - up + .15*(scoured-.5);
+      float exposure = offPiste * (1.0-apron*.96) * (1.0-.82*forestExtent) * smoothstep(1250.0,1840.0,p.y);
+      float exposed = 0.0, fracture = .5;
+      // Noise is in [0,1], so its contribution to the ledge is at most .045.
+      if (exposure > 0.0 && slope + .046 > .225) {
+        float coarseFracture = coveredSurfaceNoise(coarsePoint,coarseFilter);
+        float ledge = slope + .09*(coarseFracture-.5);
+        exposed = exposure * smoothstep(.225,.43,ledge);
+        if (exposed > 0.0) {
+          float fineFracture = coveredSurfaceNoise(finePoint,fineFilter);
+          fracture = smoothstep(.34,.67,coarseFracture + (fineFracture-.5)*(.25+.37*vicinity));
+        }
+      }
       vec3 shale = mix(vec3(.025,.029,.033),vec3(.183,.168,.148),fracture);
       float rimed = smoothstep(.42,.77,.57*scoured+.43*drift + .16*(1.0-fracture));
       float dune = (.096 + .144 * loose) * drift * (1.0 - .66 * groomed);
       // Elongated, irregular ripples model wind slabs and compressed snow.
       vec3 ripplePosition = vec3(p.x*.69 + p.z*.28, p.y*.29, p.z*2.04 - p.x*.8);
-      float ripple = detail > .001 ? surfaceNoise(ripplePosition + .22 * scoured) : .5;
       float rippleWeight = 1.0 - smoothstep(.33,.92,length(fwidth(ripplePosition)));
+      float ripple = detail > .001 && (rippleWeight > 0.0 || pillowsActive)
+        ? surfaceNoise(ripplePosition + .22 * scoured) : .5;
       float detailNormals = .018 * crust + .0011 * grain * microCoverage;
       float polished = ice * smoothstep(.23,.67,.85*scoured+.28*drift) * (1.0-.40*marks) * (1.0-exposed);
       float useZone = max(inPlaza.x*inPlaza.y, inBowl.x*inBowl.y);
       vec3 clumpPoint=vec3(p.x*3.1,p.y*1.1,p.z*2.4);
-      float clump=detail > .001 && useZone > .01
-        ? smoothstep(.29,.79,surfaceNoise(clumpPoint+scoured*.9)) : .5;
       float churn=useZone * detail * (1.0-smoothstep(.34,.95,length(fwidth(clumpPoint))))
         * (.32 + .68*smoothstep(.06,.36,marks)) * (1.0-.7*polished);
+      float clump=detail > .001 && useZone > .01 && churn > 0.0
+        ? smoothstep(.29,.79,surfaceNoise(clumpPoint+scoured*.9)) : .5;
       float relief = mix(dune * vicinity + detailNormals * detail, .016 * drift, polished) - .023*marks
         + .045 * ripple * detail * rippleWeight * (1.0 - groomed*.66)
         + .049 * churn * clump;
       // Small settled pillows overlap the longer wind ripples. Keep this
       // relief on loose snow and filter it away as it becomes subpixel.
-      if (loose * detail > .01) {
+      if (pillowsActive) {
         vec3 pillowPoint = vec3(p.x * 2.9 - p.z * 1.6, p.y * 1.7, p.z * 5.2 + p.x * 1.8);
-        float pillows = smoothstep(.24, .79, surfaceNoise(pillowPoint + 1.8 * ripple));
         float visiblePillows = loose * detail * (1.0 - smoothstep(.36,.99,length(fwidth(pillowPoint))));
-        relief += .023 * visiblePillows * pillows;
-        diffuseColor.rgb *= 1.0 - visiblePillows * (.039 * (1.0 - pillows) + .023 * (1.0 - grain));
+        if (visiblePillows > 0.0) {
+          float pillows = smoothstep(.24, .79, surfaceNoise(pillowPoint + 1.8 * ripple));
+          relief += .023 * visiblePillows * pillows;
+          diffuseColor.rgb *= 1.0 - visiblePillows * (.039 * (1.0 - pillows) + .023 * (1.0 - grain));
+        }
       }
       diffuseColor.rgb *= 1.0 - marks * .14 - traffic * (.039 + .029*crust);
       diffuseColor.rgb *= 1.0 - (1.0-.72*groomed) * (max(0.0, .68 - drift) * .17
@@ -206,8 +246,10 @@ const surfaces = {
       diffuseColor.rgb *= 1.0 - .091*visibleGrooves*groove*(1.0-.76*traffic);
       if (climateRealism > .5 && detail > .001) {
         float crystals = smoothstep(.735,.905,grain) * microCoverage * detail * cover;
-        float flash = pow(smoothstep(.82,.99,abs(dot(normalize(vNormal),normalize(vViewPosition)))),3.0);
-        diffuseColor.rgb += vec3(.17,.21,.27) * crystals * (.25 + .75*flash) * (1.0-.71*ice);
+        if (crystals > 0.0) {
+          float flash = pow(smoothstep(.82,.99,abs(dot(normalize(vNormal),normalize(vViewPosition)))),3.0);
+          diffuseColor.rgb += vec3(.17,.21,.27) * crystals * (.25 + .75*flash) * (1.0-.71*ice);
+        }
       }
       vec3 summerFloor = mix(vec3(.075,.112,.035),vec3(.18,.225,.075),scoured);
       vec3 fallFloor = mix(vec3(.14,.079,.024),vec3(.29,.19,.062),scoured);
@@ -235,8 +277,16 @@ const surfaces = {
       #else
         float treeCover = 0.0;
       #endif
-      float forestGrain = filteredSurfaceNoise(p*vec3(.5,.17,.41));
-      float canopy = smoothstep(.08,.88,crown*.63+forestGrain*.37);
+      float ridgeSnow = smoothstep(climateSnowline-180.0,climateSnowline+170.0,p.y+(strata-.5)*180.0);
+      float ridgeMelt = (1.0-climateSnowpack)*(1.0-ridgeSnow);
+      float forestMelt = (1.0-smoothstep(1420.0,1830.0,p.y))*.93;
+      vec3 forestPoint = p*vec3(.5,.17,.41);
+      float forestFilter = surfaceNoiseCoverage(forestPoint);
+      float canopy = .5;
+      if (treeCover > 0.0 || ridgeMelt*forestMelt > 0.0) {
+        float forestGrain = coveredSurfaceNoise(forestPoint,forestFilter);
+        canopy = smoothstep(.08,.88,crown*.63+forestGrain*.37);
+      }
       float ridgeRime = smoothstep(1100.0,1800.0,p.y)*climateSnowpack
         * (.27+.73*smoothstep(.19,.78,canopy*.68+strata*.32));
       vec3 darkCrowns = diffuseColor.rgb*vec3(.43,.56,.63)*(.74+canopy*.46);
@@ -245,12 +295,10 @@ const surfaces = {
         mix(darkCrowns,frostedCrowns,ridgeRime*.73),treeCover*.92);
       float relief = strata * .85 + crown * .18;
       diffuseColor.rgb *= .76 + strata * .37 + crown * .16;
-      float ridgeSnow = smoothstep(climateSnowline-180.0,climateSnowline+170.0,p.y+(strata-.5)*180.0);
-      float ridgeMelt = (1.0-climateSnowpack)*(1.0-ridgeSnow);
       vec3 bareRidge = mix(vec3(.12,.135,.12),vec3(.23,.225,.19),strata);
       vec3 ridgeForest = mix(vec3(.022,.049,.024),vec3(.064,.10,.038),canopy);
       ridgeForest=mix(ridgeForest,ridgeForest*vec3(1.45,.96,.58),climateAutumn*.44);
-      bareRidge=mix(bareRidge,ridgeForest,(1.0-smoothstep(1420.0,1830.0,p.y))*.93);
+      bareRidge=mix(bareRidge,ridgeForest,forestMelt);
       diffuseColor.rgb=mix(diffuseColor.rgb,bareRidge,ridgeMelt);
     `,
     normal: 'normal = surfaceNormal(-vViewPosition, normal, relief);',
@@ -342,12 +390,14 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
   const skiSnow = kind === 'snow' && snowMaps?.skiSnow;
   const material = new THREE.MeshStandardMaterial({ roughness: .9, ...options });
   const terrain = kind === 'snow' || kind === 'mountain';
+  const roomCutout = kind === 'snow' && snowMaps?.interiorCutout !== false;
   if (terrain) {
     terrainSurfaces.add(material);
     material.addEventListener('dispose', () => terrainSurfaces.delete(material));
   }
-  material.customProgramCacheKey = () => `${kind}${skiSnow ? `-ski-snow-${skiSnow.mode}` : ''}${terrain && budgetSampling ? '-volume' : ''}`;
+  material.customProgramCacheKey = () => `${kind}${roomCutout ? '-room' : ''}${skiSnow ? `-ski-snow-${skiSnow.mode}` : ''}${terrain && budgetSampling ? '-volume' : ''}`;
   material.onBeforeCompile = (shader) => {
+    if (roomCutout) shader.fragmentShader = '#define TERRAIN_ROOM_CUTOUT\n' + shader.fragmentShader;
     if (terrain && budgetSampling) {
       shader.fragmentShader = '#define TERRAIN_NOISE_VOLUME\n' + shader.fragmentShader;
       shader.uniforms.terrainNoise = { value: terrainNoiseVolume() };

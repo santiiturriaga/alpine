@@ -78,13 +78,15 @@ export function createRenderer({ exposure = 1, shadows = false, antialias = !com
   return renderer;
 }
 
-export function resizeViewport({ host, renderer, camera, quality, storm, tuckWind, resolution = 'native' }) {
+export function resizeViewport({ host, renderer, camera, quality, storm, tuckWind, resolution = 'native', resolutionScale = 1 }) {
   const width = Math.max(1, host.clientWidth);
   const height = Math.max(1, host.clientHeight);
   const deviceRatio = window.devicePixelRatio || 1;
-  const ratio = resolution === 'native' ? Math.max(1, deviceRatio) : Math.min(
-    quality.pixel, deviceRatio * quality.samples, Math.sqrt(quality.maxPixels / (width * height)),
-  );
+  const heightLimit = Number.parseInt(resolution, 10) || Infinity;
+  const scale = resolution === 'adaptive' ? resolutionScale : 1;
+  const ratio = resolution === 'scaled'
+    ? Math.min(quality.pixel, deviceRatio * quality.samples, Math.sqrt(quality.maxPixels / (width * height)))
+    : Math.min(Math.max(1, deviceRatio) * scale, heightLimit / height);
   renderer.getSize(viewportSize);
   if (viewportSize.x !== width || viewportSize.y !== height || renderer.getPixelRatio() !== ratio) {
     // Window resize and ResizeObserver can report the same dimensions.

@@ -423,11 +423,13 @@
           </ul>
         </aside>
       </div>
-      <p class="atlas-help" id="map-help">Drag or use arrow keys to pan · Scroll or pinch to zoom · <kbd>Home</kbd> fit</p>
-      <div class="map-modal-foot">
-        <div class="stats-inline"><span>ELEVATION <strong id="map-altitude"></strong></span><span>YOUR LINE <strong id="map-run-name"></strong></span></div>
-        <p class="map-credits">Terrain and trail data · © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> <a id="atlas-original" target="_blank" rel="noopener" hidden>· Official resort map ↗</a></p>
-        <button class="ghost-btn" data-close="map-screen">BACK TO THE SNOW <kbd>M</kbd></button>
+      <div class="atlas-footer">
+        <p class="atlas-help" id="map-help"><span class="atlas-help-keys">Drag or use arrow keys to pan · Scroll to zoom · <kbd>Home</kbd> fit</span><span class="atlas-help-touch">Drag to pan · Pinch to zoom</span></p>
+        <div class="map-modal-foot">
+          <div class="stats-inline"><span>ELEVATION <strong id="map-altitude"></strong></span><span>YOUR LINE <strong id="map-run-name"></strong></span></div>
+          <p class="map-credits">Terrain and trail data · © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> <a id="atlas-original" target="_blank" rel="noopener" hidden>· Official resort map ↗</a></p>
+          <button class="ghost-btn" data-close="map-screen">BACK TO THE SNOW <kbd>M</kbd></button>
+        </div>
       </div>
     </div>
   </section>
@@ -447,17 +449,21 @@
         <button class="ghost-btn" id="pause-reset">Return to Roundhouse <kbd>R</kbd></button>
       </div>
       <div class="pause-settings">
+        <div class="setting-row"><label for="pause-quality">Graphics</label><div class="graphics-control"><label class="setting-check"><input id="pause-auto-quality" type="checkbox" checked aria-label="Auto graphics"> Auto</label><input id="pause-quality" type="range" min="0" max="4" step="1" value="0" aria-describedby="graphics-level"><output id="graphics-level" for="pause-quality">Budget</output></div></div>
+        <div class="setting-row"><label for="pause-frame-cap">Frame cap</label><select class="seg" id="pause-frame-cap"><option value="0">Auto</option><option value="30">30 FPS</option><option value="60">60 FPS</option><option value="120">120 FPS</option><option value="240">240 FPS</option></select></div>
+        <div class="setting-row"><label for="pause-resolution">3D resolution</label><select class="seg" id="pause-resolution">
+          <option value="native">Native</option><option value="adaptive">Adaptive · 60 FPS</option><option value="scaled">Graphics scale</option>
+          <option value="900p">Up to 900p</option><option value="720p">Up to 720p</option>
+          <option value="540p">Up to 540p</option><option value="480p">Up to 480p</option>
+        </select></div>
+        <div class="setting-row"><span>Anti-aliasing</span><div class="graphics-control"><small id="antialias-reload" hidden></small><label class="setting-check"><input id="pause-antialias" type="checkbox" aria-label="Anti-aliasing" aria-describedby="antialias-reload"> MSAA</label></div></div>
+        <div class="setting-row"><span>Realism</span><button class="toggle" id="pause-realism" type="button" aria-label="Realistic surface lighting" aria-pressed="false" title="Extra snow sparkle and sharper ice reflections"><i></i><span>OFF</span></button></div>
+        <div class="setting-row benchmark-setting"><div><p id="benchmark-status" role="status">Benchmark queued.</p><small id="benchmark-device"></small></div><button class="seg" id="pause-benchmark" type="button">Run benchmark</button></div>
         <div class="setting-row"><span>Soundscape</span><button class="toggle on" id="pause-audio"><i></i><span>ON</span></button></div>
         <div class="setting-row"><span>Music</span><button class="toggle" id="pause-music" aria-label="Music"><i></i><span></span></button></div>
         <div class="setting-row"><span>Trail markers</span><button class="toggle on" id="pause-markers"><i></i><span>ON</span></button></div>
         <div class="setting-row"><span>Nearby trail map</span><button class="toggle" id="pause-nearby-map" aria-label="Nearby trail map" aria-controls="nearby-map" aria-pressed="false"><i></i><span>OFF</span></button></div>
         <div class="setting-row"><span>Camera</span><button class="seg" id="pause-camera">CHASE</button></div>
-        <div class="setting-row"><label for="pause-quality">Graphics</label><div class="graphics-control"><label class="setting-check"><input id="pause-auto-quality" type="checkbox" checked aria-label="Auto graphics"> Auto</label><input id="pause-quality" type="range" min="0" max="4" step="1" value="0" aria-describedby="graphics-level"><output id="graphics-level" for="pause-quality">Budget</output></div></div>
-        <div class="setting-row"><label for="pause-frame-cap">Frame cap</label><select class="seg" id="pause-frame-cap"><option value="0">Auto</option><option value="30">30 FPS</option><option value="60">60 FPS</option><option value="120">120 FPS</option><option value="240">240 FPS</option></select></div>
-        <div class="setting-row"><label for="pause-resolution">Resolution</label><select class="seg" id="pause-resolution"><option value="native">Native</option><option value="scaled">Scaled by graphics</option></select></div>
-        <div class="setting-row"><span>Anti-aliasing</span><div class="graphics-control"><small id="antialias-reload" hidden></small><label class="setting-check"><input id="pause-antialias" type="checkbox" aria-label="Anti-aliasing" aria-describedby="antialias-reload"> MSAA</label></div></div>
-        <div class="setting-row benchmark-setting"><div><p id="benchmark-status" role="status">Benchmark queued.</p><small id="benchmark-device"></small></div><button class="seg" id="pause-benchmark" type="button">Run benchmark</button></div>
-        <div class="setting-row"><span>Realism</span><button class="toggle" id="pause-realism" type="button" aria-label="Realistic surface lighting" aria-pressed="false" title="Extra snow sparkle and sharper ice reflections"><i></i><span>OFF</span></button></div>
       </div>
       <div class="pause-foot"><button class="text-btn" id="restart-session">Restart session</button></div>
     </div>

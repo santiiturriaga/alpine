@@ -18,6 +18,7 @@ import { gradeGlacierCave } from './glacier-cave.js';
 import { compressSnow } from './snow-traffic.js';
 import { compactDevice } from './device-budget.js';
 import { terrainHorizon } from './terrain-horizon.js';
+import { createTerrainOcclusion } from './terrain-occlusion.js';
 import { LODGE_FRAME, LODGE_ANNEX } from './roundhouse-site.js';
 import { triangleHeight, worldIndex, boxBlurGrid } from './terrain-grid.js';
 import { coarseTerrainTopology, createTerrainTileDetail } from './terrain-tile-detail.js';
@@ -209,7 +210,7 @@ function originalDetailVertex(gx, gz) {
   return base + clamp(clamp(smooth, h0, h1) - base, -1.6, 1.6) * smoothstep(0, 2, edge);
 }
 
-function makeTerrainDetail(mesh, material) {
+function makeTerrainDetail(mesh, tileMaterials) {
   const terrain = new THREE.Group();
   terrain.name = 'Resort terrain';
   terrain.add(mesh);
@@ -280,7 +281,7 @@ function makeTerrainDetail(mesh, material) {
     geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-    const detail = new THREE.Mesh(geometry, material);
+    const detail = new THREE.Mesh(geometry, tileMaterials[iz * tileCount + ix]);
     detail.receiveShadow = true;
     detail.name = 'Detailed snow surface';
     return { values, detail, original };
@@ -323,6 +324,7 @@ function makeTerrainDetail(mesh, material) {
       }
       cache.delete(key);
       if (needed.has(key)) {
+        tile.detail.material = tileMaterials[key];
         terrain.add(tile.detail);
         tile.original.visible = false;
         detailTiles.set(key, tile);
@@ -332,7 +334,7 @@ function makeTerrainDetail(mesh, material) {
       if (needed.has(key)) continue;
       terrain.remove(tile.detail);
       tile.original.visible = true;
-      tile.detail.material = material;
+      tile.detail.material = tileMaterials[key];
       detailTiles.delete(key);
       cache.set(key, tile);
     }
@@ -545,6 +547,7 @@ function buildCoastMountains({ heights, cover }, tusk, local) {
   backcountry = createBackcountry({ survey, material, colorAt, seed: 2728,
     compact: compactDevice, viewDistance: 39000 });
   const surrounding = survey.group;
+  const surveyTiles = surrounding.children.slice();
   surrounding.add(peak);
   const random = mulberry32(2728);
   const groves = [];
@@ -609,7 +612,7 @@ function buildCoastMountains({ heights, cover }, tusk, local) {
   batchBudgetForestCrowns(surrounding, 'regional', 2400);
   cacheStaticTransforms(surrounding);
   surrounding.add(backcountry.group, backcountry.horizon);
-  return surrounding;
+  return { surrounding, surveyTiles };
 }
 
 export function buildMask(res = 1024) {
@@ -821,12 +824,98 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
   const horizon = terrainHorizon(gradedHeights, N, N, WORLD);
   const snowMaps = { pisteMap, tracks, roomCutout, annexCutout, roomYaw, mountainShade, groomingMap, horizon };
   const mat = surfaceMaterial('snow', { vertexColors: true }, snowMaps);
+  const openSnow = surfaceMaterial('snow', { vertexColors: true }, { ...snowMaps, interiorCutout: false });
   const baseDetail = createTerrainTileDetail(quality);
   const mesh = makePatches(N, [
     ['position', positions, 3], ['normal', normals, 3], ['color', colors, 3],
-  ], mat, terrainTile, baseDetail);
+  ], openSnow, terrainTile, baseDetail);
+  const tileMaterials = mesh.children.map(() => openSnow);
   detailTiles = new Map();
-  const detail = makeTerrainDetail(mesh, mat);
+  const detail = makeTerrainDetail(mesh, tileMaterials);
+  const occlusion = createTerrainOcclusion({ positions, size: N, tileSize: terrainTile });
+  const tileCount = (N - 1) / terrainTile;
+  const preciseWidth = terrainTile * detailStep + 1;
+  const roomOpenings = [], skiOpenings = [], openings = [], hidden = [];
+  const regionalTiles = [];
+  const skiBoxes = [{}, {}];
+  const worldBox = new THREE.Box3(), view = new THREE.Frustum(), viewProjection = new THREE.Matrix4();
+  function clearOfViewEdges(box) {
+    // Very distant clipped polygons can differ at the viewport border even
+    // when their surveyed bounds are behind a ridge. Leave those tiles alone.
+    for (let i = 0; i < 4; i++) {
+      const { normal, constant } = view.planes[i];
+      const x = normal.x >= 0 ? box.min.x : box.max.x;
+      const y = normal.y >= 0 ? box.min.y : box.max.y;
+      const z = normal.z >= 0 ? box.min.z : box.max.z;
+      if (normal.x * x + normal.y * y + normal.z * z + constant <= 0) return false;
+    }
+    return true;
+  }
+  // Bound the actual detailed mesh around the eye. A camera looking from
+  // under the snow or from a clipped near plane cannot use it as a blocker.
+  function visualCeiling(minX, maxX, minZ, maxZ) {
+    if (minX <= WORLD.minX || maxX >= WORLD.maxX || minZ <= WORLD.minZ || maxZ >= WORLD.maxZ) return Infinity;
+    const u0 = (minX - WORLD.minX) / cell, u1 = (maxX - WORLD.minX) / cell;
+    const v0 = (minZ - WORLD.minZ) / dz, v1 = (maxZ - WORLD.minZ) / dz;
+    let highest = -Infinity;
+    for (let iz = Math.floor(v0 / terrainTile); iz <= Math.floor(v1 / terrainTile); iz++) {
+      const z0 = Math.max(0, Math.floor((v0 - iz * terrainTile) * detailStep));
+      const z1 = Math.min(preciseWidth - 1, Math.ceil((v1 - iz * terrainTile) * detailStep));
+      for (let ix = Math.floor(u0 / terrainTile); ix <= Math.floor(u1 / terrainTile); ix++) {
+        const live = detailTiles.get(iz * tileCount + ix);
+        if (!live?.detail.visible) return Infinity;
+        const x0 = Math.max(0, Math.floor((u0 - ix * terrainTile) * detailStep));
+        const x1 = Math.min(preciseWidth - 1, Math.ceil((u1 - ix * terrainTile) * detailStep));
+        for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
+          highest = Math.max(highest, live.values[z * preciseWidth + x]);
+        }
+      }
+    }
+    return highest;
+  }
+
+  function restoreOccludedTiles() {
+    for (const tile of hidden) tile.visible = true;
+    hidden.length = 0;
+  }
+  terrain.restoreOccludedTiles = restoreOccludedTiles;
+  terrain.hideOccludedTiles = (camera, includeSurvey = true) => {
+    restoreOccludedTiles();
+    if (!camera.isPerspectiveCamera || camera.parent || camera.view?.enabled || camera.filmOffset) return 0;
+    const eye = camera.position;
+    const projection = camera.projectionMatrix.elements;
+    // Every point on the near plane is within this radius of the camera.
+    const radius = camera.near * Math.hypot(1, 1 / projection[0], 1 / projection[5]) + .06;
+    const ceiling = visualCeiling(eye.x - radius, eye.x + radius, eye.z - radius, eye.z + radius);
+    if (!(eye.y - radius > ceiling)) return 0;
+    openings.length = 0;
+    openings.push(...roomOpenings, ...skiOpenings);
+    camera.updateMatrixWorld();
+    view.setFromProjectionMatrix(viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse), camera.coordinateSystem);
+    for (let i = 0; i < occlusion.tiles.length; i++) {
+      const original = mesh.children[i];
+      if (!original.visible || original.castShadow) continue;
+      const tile = occlusion.tiles[i];
+      worldBox.min.set(tile.minX, tile.minY, tile.minZ);
+      worldBox.max.set(tile.maxX, tile.maxY, tile.maxZ);
+      if (view.intersectsBox(worldBox) && occlusion.blocked(tile, eye, openings)) {
+        original.visible = false;
+        hidden.push(original);
+      }
+    }
+    // Only query the fixed survey meshes when a local ridge already blocks
+    // the view. Streamed terrain and regional forest are separate objects.
+    if (includeSurvey && hidden.length) {
+      for (const { mesh, box, bounds } of regionalTiles) {
+        if (!mesh.visible || mesh.castShadow || !view.intersectsBox(box)) continue;
+        if (occlusion.blocked(bounds, eye, openings) && clearOfViewEdges(box)) {
+          mesh.visible = false;
+          hidden.push(mesh);
+        }
+      }
+    }
+    return hidden.length;
+  };
   const nearDetail = ({ x, z }) =>
     x >= WORLD.minX - 100 && x <= WORLD.maxX + 100 && z >= WORLD.minZ - 100 && z <= WORLD.maxZ + 100;
   // Sample the rendered triangles' attributes, including their smooth detailed
@@ -838,7 +927,6 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     }
     const gx = clamp((x - WORLD.minX) / WORLD.sizeX, 0, 1) * (N - 1);
     const gz = clamp((z - WORLD.minZ) / WORLD.sizeZ, 0, 1) * (N - 1);
-    const tileCount = (N - 1) / terrainTile;
     const ix = Math.min(tileCount - 1, Math.floor(gx / terrainTile));
     const iz = Math.min(tileCount - 1, Math.floor(gz / terrainTile));
     const tile = detailTiles.get(iz * tileCount + ix);
@@ -867,13 +955,13 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     const values = tile ? tile.values : gradedHeights;
     return values[a] * wa + values[b] * wb + values[c] * wc;
   };
-  const cutoutMeshes = new Set();
+  const cutoutMeshes = new Map();
   const skiSnow = createSkiSnowSurface({
     snowMaps, heightAt, surfaceAt, sampleSurface,
     setCutout(skis, cutoutMaterial) {
-      for (const mesh of cutoutMeshes) mesh.material = mat;
+      for (const [mesh, key] of cutoutMeshes) mesh.material = tileMaterials[key];
       cutoutMeshes.clear();
-      const tileCount = (N - 1) / terrainTile;
+      skiOpenings.length = 0;
       for (const ski of skis) {
         if (!ski.active) continue;
         let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
@@ -887,6 +975,11 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
             minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
           }
         }
+        const hole = skiBoxes[skiOpenings.length];
+        hole.minX = minX - .1; hole.maxX = maxX + .1;
+        hole.minZ = minZ - .1; hole.maxZ = maxZ + .1;
+        hole.maxY = visualCeiling(hole.minX, hole.maxX, hole.minZ, hole.maxZ);
+        skiOpenings.push(hole);
         const x0 = clamp(Math.floor((minX - WORLD.minX) / cell / terrainTile), 0, tileCount - 1);
         const x1 = clamp(Math.floor((maxX - WORLD.minX) / cell / terrainTile), 0, tileCount - 1);
         const z0 = clamp(Math.floor((minZ - WORLD.minZ) / dz / terrainTile), 0, tileCount - 1);
@@ -896,10 +989,10 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
             const key = iz * tileCount + ix;
             const original = mesh.children[key], local = detailTiles.get(key)?.detail;
             original.material = cutoutMaterial;
-            cutoutMeshes.add(original);
+            cutoutMeshes.set(original, key);
             if (local) {
               local.material = cutoutMaterial;
-              cutoutMeshes.add(local);
+              cutoutMeshes.set(local, key);
             }
           }
         }
@@ -914,7 +1007,15 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     sample: (x, z) => triangleHeight(gradedHeights, N, ...worldIndex(x, z, WORLD)),
     normalAt(x, z, out) { sampleSurface(x, z, col, out); return out; },
   };
-  terrain.ranges = buildCoastMountains(region, tusk, localInset);
+  const { surrounding, surveyTiles } = buildCoastMountains(region, tusk, localInset);
+  terrain.ranges = surrounding;
+  for (const surveyTile of surveyTiles) {
+    surveyTile.geometry.computeBoundingBox();
+    const box = surveyTile.geometry.boundingBox.clone().applyMatrix4(surveyTile.matrixWorld);
+    const bounds = { minX: box.min.x, minY: box.min.y, minZ: box.min.z,
+      maxX: box.max.x, maxY: box.max.y, maxZ: box.max.z };
+    regionalTiles.push({ mesh: surveyTile, box, bounds });
+  }
 
   terrain.mesh = detail.terrain;
   terrain.setQuality = baseDetail.setQuality;
@@ -942,6 +1043,30 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     annexCutout.set(LODGE_ANNEX.x + dx * roomYaw.x - dz * roomYaw.y,
       LODGE_ANNEX.z + dx * roomYaw.y + dz * roomYaw.x,
       LODGE_ANNEX.width / 2 - .06, LODGE_ANNEX.depth / 2 - .06);
+    const reserve = (x, z, halfWidth, halfDepth) => {
+      const width = Math.abs(roomYaw.x) * halfWidth + Math.abs(roomYaw.y) * halfDepth + .1;
+      const depth = Math.abs(roomYaw.y) * halfWidth + Math.abs(roomYaw.x) * halfDepth + .1;
+      return { minX: x - width, maxX: x + width, minZ: z - depth, maxZ: z + depth, maxY: Infinity };
+    };
+    roomOpenings.length = 0;
+    roomOpenings.push(reserve(room.x, room.z, roomCutout.z, roomCutout.w),
+      reserve(room.x + annexCutout.x * roomYaw.x + annexCutout.y * roomYaw.y,
+        room.z - annexCutout.x * roomYaw.y + annexCutout.y * roomYaw.x, annexCutout.z, annexCutout.w));
+    // Only tiles touching the lodge need the fragment discard for its floor.
+    // This circle encloses both rotated rectangles, including the offset annex.
+    const reach = Math.max(Math.hypot(roomCutout.z, roomCutout.w),
+      Math.hypot(annexCutout.x, annexCutout.y) + Math.hypot(annexCutout.z, annexCutout.w));
+    const columns = (N - 1) / terrainTile;
+    const width = WORLD.sizeX / columns, depth = WORLD.sizeZ / columns;
+    for (let i = 0; i < tileMaterials.length; i++) {
+      const x = WORLD.minX + (i % columns) * width, z = WORLD.minZ + Math.floor(i / columns) * depth;
+      const overlaps = room.x + reach >= x && room.x - reach <= x + width &&
+        room.z + reach >= z && room.z - reach <= z + depth;
+      tileMaterials[i] = overlaps ? mat : openSnow;
+      const original = mesh.children[i], local = detailTiles.get(i)?.detail;
+      if (!cutoutMeshes.has(original)) original.material = tileMaterials[i];
+      if (local && !cutoutMeshes.has(local)) local.material = tileMaterials[i];
+    }
   };
   terrain.heights = gradedHeights;
   terrain.n = N;

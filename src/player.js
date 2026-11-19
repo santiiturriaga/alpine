@@ -5,7 +5,6 @@ import {
 import { heightAt, normalAt, surfaceAt } from './terrain.js';
 import { WORLD, startPose } from './worlddata.js';
 import { createSkier } from './skier.js';
-import { pointInBox } from './environment.js';
 
 /* ═══════════════════════════════════════════════════════════════
    PLAYER
@@ -29,6 +28,8 @@ const _qBase = new THREE.Quaternion();
 const _qSpin = new THREE.Quaternion();
 const _qFlip = new THREE.Quaternion();
 const _qTarget = new THREE.Quaternion();
+const _crashRotation = new THREE.Quaternion();
+const _crashEuler = new THREE.Euler();
 const _pivot = new THREE.Vector3();
 const _tourLook = new THREE.Vector3();
 const _cameraAnchor = new THREE.Vector3();
@@ -762,18 +763,19 @@ export class Player {
   resolveCollisions(dt, inAir = false) {
     if (!this.env) return;
     const speed = Math.hypot(this.vel.x, this.vel.z);
-    const cols = this.env.queryColliders(this.pos.x, this.pos.z, 5.2);
-    const gy = cols.length ? this.groundHeight(this.pos.x, this.pos.z) : 0;
+    const { x, z } = this.pos;
+    const cols = this.env.queryColliders(x, z, 5.2);
+    let gy;
     const playerR = this.footMode ? .32 : .46;
+    const bodyHeight = this.footMode ? 1.58 : 1.33;
 
     for (const c of cols) {
-      const y = c.type === 'fallen log' && !inAir ? gy + .035 : this.pos.y;
+      const y = c.type === 'fallen log' && !inAir ? (gy ??= this.groundHeight(x, z)) + .035 : this.pos.y;
       // Rails and overhanging beams can hit the body even when the soles
       // clear their underside. Leave enough room to step over short lips.
-      const bodyHeight = this.footMode ? 1.58 : 1.33;
       if (y + bodyHeight < (c.minY ?? -Infinity) || y + .07 > (c.maxY ?? Infinity)) continue;
       if (c.r) {
-        if (inAir && this.pos.y > gy + 7.5) continue;
+        if (inAir && this.pos.y > (gy ??= this.groundHeight(x, z)) + 7.5) continue;
         const dx = this.pos.x - c.x;
         const dz = this.pos.z - c.z;
         const rr = c.r + playerR;
@@ -794,18 +796,18 @@ export class Player {
           return;
         }
       } else if (c.hw) {
-        if (inAir && !Number.isFinite(c.maxY) && this.pos.y > gy + 5.0) continue;
-        if (!pointInBox(this.pos.x, this.pos.z, c, playerR * 0.5, playerR * 0.5)) continue;
+        if (inAir && !Number.isFinite(c.maxY) && this.pos.y > (gy ??= this.groundHeight(x, z)) + 5.0) continue;
         const cos = Math.cos(-c.rot), sin = Math.sin(-c.rot);
         const dx = this.pos.x - c.x, dz = this.pos.z - c.z;
         const lx = dx * cos - dz * sin;
         const lz = dx * sin + dz * cos;
-        const px = c.hw + playerR * 0.5 - Math.abs(lx);
-        const pz = c.hd + playerR * 0.5 - Math.abs(lz);
+        const halfWidth = c.hw + playerR * 0.5, halfDepth = c.hd + playerR * 0.5;
+        if (!(Math.abs(lx) < halfWidth && Math.abs(lz) < halfDepth)) continue;
+        const px = halfWidth - Math.abs(lx), pz = halfDepth - Math.abs(lz);
         let nlx = lx, nlz = lz;
         const side = px < pz;
-        if (side) nlx = Math.sign(lx || 1) * (c.hw + playerR * 0.5);
-        else nlz = Math.sign(lz || 1) * (c.hd + playerR * 0.5);
+        if (side) nlx = Math.sign(lx || 1) * halfWidth;
+        else nlz = Math.sign(lz || 1) * halfDepth;
         const cr = Math.cos(c.rot), sr = Math.sin(c.rot);
         const wx = nlx * cr - nlz * sr;
         const wz = nlx * sr + nlz * cr;
@@ -892,13 +894,8 @@ export class Player {
     _qTarget.copy(_qBase).multiply(_qSpin).multiply(_qFlip);
 
     if (this.crash) {
-      _qTarget.multiply(
-        new THREE.Quaternion().setFromEuler(new THREE.Euler(
-          -.15 * Math.sin(Math.PI * Math.min(1, this.crashTimer / 1.85)),
-          0,
-          .74 * Math.sin(Math.PI * Math.min(1, this.crashTimer / 1.85)),
-        )),
-      );
+      const roll = Math.sin(Math.PI * Math.min(1, this.crashTimer / 1.85));
+      _qTarget.multiply(_crashRotation.setFromEuler(_crashEuler.set(-.15 * roll, 0, .74 * roll)));
     }
 
     const lambda = onSnow ? 19 : 12;
@@ -945,7 +942,7 @@ export class Player {
         * (1 - .78 * planing) : 0;
     this.skiSnow = damp(this.skiSnow, deposition, deposition > this.skiSnow ? .19 : .46, dt);
     this.rig.setSkiSnow(this.skiSnow);
-    _inverseModel.copy(this.model.matrix).invert();
+    if (onSnow && this.footMode) _inverseModel.copy(this.model.matrix).invert();
     for(const [i,shadow] of this.bootShadows.entries()){
       shadow.visible=onSnow && this.footMode;
       if(!shadow.visible)continue;

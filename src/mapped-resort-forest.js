@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { coniferDepthMaterial, coniferGeometry, coniferMaterial } from './conifers.js';
-import { forestDetailTiers, makeForestCrowns, preloadForestCrowns } from './forest-lod.js';
+import { batchMaxForestCrowns, forestDetailTiers, makeForestCrowns, preloadForestCrowns } from './forest-lod.js';
+import { coniferInView, crownDistanceSquared, forestView, setConiferBounds } from './forest-culling.js';
 import { pointInPolygon, runStyle, segmentDistance } from './mapped-resort-ground.js';
 import { stevensTraverseTrees, STEVENS_POWERLINE } from './stevens-pass-details.js';
 import { hash2, smoothstep } from './util.js';
@@ -204,13 +205,16 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
   let proxyMaterial = null;
   let silhouette = null, far = null;
   const stand = new THREE.Object3D(), color = new THREE.Color();
-  function setTree(mesh, i, tree) {
+  function prepareTree(tree) {
     stand.position.set(tree.x, tree.y - .15, tree.z);
     stand.scale.set(tree.height * tree.spread, tree.height, tree.height * tree.spread);
     stand.rotation.set(0, tree.yaw, 0);
     stand.updateMatrix();
+    color.setRGB(.77 + .23 * tree.tint, .85 + .15 * tree.tint, .88 + .12 * tree.tint);
+  }
+  function setTree(mesh, i) {
     mesh.setMatrixAt(i, stand.matrix);
-    mesh.setColorAt(i, color.setRGB(.77 + .23 * tree.tint, .85 + .15 * tree.tint, .88 + .12 * tree.tint));
+    mesh.setColorAt(i, color);
   }
   const finalize = (mesh) => {
     mesh.instanceMatrix.needsUpdate = true;
@@ -244,13 +248,17 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
       silhouette = bindCascadeRange(coniferMaterial(-2, 'mapped'), range);
     }
     const instances = proxy ?? new THREE.InstancedMesh(far, silhouette, trees.length);
-    for (let i = 0; i < trees.length; i++) setTree(instances, i, trees[i]);
+    for (let i = 0; i < trees.length; i++) {
+      prepareTree(trees[i]);
+      setTree(instances, i);
+    }
     finalize(instances);
     // Crown cards rotate toward the viewer, so leave room beyond their baked plane.
     instances.boundingSphere.radius += 16;
-    farBatches.push(instances);
+    farBatches.push({ mesh: instances, proxy: !!proxy, inRange: false });
     group.add(instances);
   }
+  batchMaxForestCrowns(group, farBatches.filter(batch => batch.proxy), () => qualityName === 'MAX');
 
   function dynamicMesh(geometry, material, capacity) {
     const mesh = new THREE.InstancedMesh(geometry, material, capacity);
@@ -300,8 +308,20 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
   const last = new THREE.Vector3(Infinity, Infinity, Infinity);
   const lastFacing = new THREE.Quaternion();
   const lastProjection = new THREE.Matrix4();
-  const projection = new THREE.Matrix4(), frustum = new THREE.Frustum(), crown = new THREE.Sphere();
+  const crown = new THREE.Sphere(), treeFootprint = new Float64Array(6);
+  const boughSlots = new Uint16Array(3), spraySlots = new Uint16Array(3), twigSlots = new Uint16Array(3);
   let oldQuality = -1;
+  function addDetail(mesh, slots, kind, maxDistance, view, distanceSquared) {
+    if (slots[kind] >= mesh.instanceMatrix.count) return;
+    slots[kind]++;
+    if (distanceSquared > (maxDistance + 4.33) ** 2) return;
+    setConiferBounds(treeFootprint, 0, mesh.geometry, stand.matrix.elements);
+    const { eye } = view;
+    const reach = Math.hypot(treeFootprint[0] - eye.x, treeFootprint[1] - eye.y, treeFootprint[2] - eye.z)
+      + treeFootprint[3] + treeFootprint[4] + treeFootprint[5];
+    // The cache also covers a 4.24 m move and a .08 radian view rotation.
+    if (coniferInView(view, treeFootprint, 0, 4.33 + .081 * reach)) setTree(mesh, mesh.count++);
+  }
   function update(camera) {
     hardwoods?.update(camera, qualityName);
     const eye = camera.position;
@@ -312,13 +332,18 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
     lastFacing.copy(camera.quaternion);
     oldQuality = quality;
     camera.updateMatrixWorld();
-    frustum.setFromProjectionMatrix(projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    const view = forestView(camera);
     for (const batch of farBatches) {
-      const { center, radius } = batch.boundingSphere;
+      const { mesh } = batch;
+      const { center, radius } = mesh.boundingSphere;
       const distance = center.distanceTo(eye);
-      batch.visible = distance - radius < farRange.value && distance + radius > range.value.x;
+      batch.inRange = distance - radius < farRange.value && distance + radius > range.value.x;
+      mesh.visible = batch.inRange && (qualityName !== 'MAX' || !batch.proxy);
     }
     for (const mesh of details) mesh.count = 0;
+    boughSlots.fill(0);
+    spraySlots.fill(0);
+    twigSlots.fill(0);
     // The shader finishes shrinking each tier before the CPU stops submitting
     // it. Leave room for the camera to move between detail queries.
     const radius = forestDetailTiers[-.5][1] * branchRange.value + 6;
@@ -332,13 +357,18 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
       if (d > crownRadius) continue;
       crown.center.set(x, y + height * .5, z);
       crown.radius = height * .58 + 13 + d * .088;
-      const inView = d < 47 || frustum.intersectsSphere(crown);
+      const inView = d < 47 || view.frustum.intersectsSphere(crown);
       // Off-camera crowns close to the skier still contribute to the sun shadow.
-      if (inView || d < 112) setTree(crowns[kind], crowns[kind].count++, tree);
+      if (inView || d < 112) {
+        prepareTree(tree);
+        setTree(crowns[kind], crowns[kind].count++);
+      }
       if (!inView || d > radius) continue;
-      if (boughs[kind].count < boughs[kind].instanceMatrix.count) setTree(boughs[kind], boughs[kind].count++, tree);
-      if (d < sprayRadius && sprays[kind].count < sprays[kind].instanceMatrix.count) setTree(sprays[kind], sprays[kind].count++, tree);
-      if (d < twigRadius && twigs[kind].count < twigs[kind].instanceMatrix.count) setTree(twigs[kind], twigs[kind].count++, tree);
+      const heightFromRoot = stand.position.y;
+      const distanceSquared = crownDistanceSquared(eye, x, heightFromRoot, z, heightFromRoot + height);
+      addDetail(boughs[kind], boughSlots, kind, radius - 6, view, distanceSquared);
+      if (d < sprayRadius) addDetail(sprays[kind], spraySlots, kind, sprayRadius - 6, view, distanceSquared);
+      if (d < twigRadius) addDetail(twigs[kind], twigSlots, kind, twigRadius - 6, view, distanceSquared);
     }
     for (const mesh of details) {
       mesh.visible = mesh.count > 0;

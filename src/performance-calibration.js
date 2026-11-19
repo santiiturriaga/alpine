@@ -6,6 +6,7 @@ const maxSampleMs = 2600;
 const resizeDelayMs = 300;
 const manualQualityKey = 'alpine.graphics';
 const optionsKey = 'alpine.performance-options';
+const resolutionModes = ['native', 'adaptive', 'scaled', '900p', '720p', '540p', '480p'];
 
 function read(key) {
   try { return localStorage.getItem(key); } catch { return null; }
@@ -72,19 +73,127 @@ export function* calibrationPlan({ refresh, firstQuality, lastQuality, frameLimi
 }
 
 export function createFrameLimiter() {
-  let lastTarget;
-  let due = null;
+  let lastTarget, previousCallback = null, refreshPeriod = null;
+  let due = null, lastDraw = null;
   return (now, target) => {
-    if (target !== lastTarget || (due !== null && now - due > 250)) due = null;
+    const elapsed = previousCallback === null ? 0 : now - previousCallback;
+    previousCallback = now;
+    if (elapsed > 250) refreshPeriod = null;
+    if (elapsed >= 1.5 && elapsed <= 40) {
+      const period = refreshPeriod ?? elapsed;
+      // Prefer evidence from faster callbacks. Slow callbacks can include
+      // time blocked by a render.
+      const weight = elapsed < period * .66 ? .6 : elapsed < period * 1.4 ? .15 : .025;
+      refreshPeriod = period + (elapsed - period) * weight;
+    }
+    if (target !== lastTarget || (due !== null && now - due > 250)) due = lastDraw = null;
     lastTarget = target;
     if (!target) return true;
     const interval = 1000 / target;
-    if (due !== null && now + 1 < due) return false;
-    // Catch up by at most one refresh. Always measure ordinary simulation dt
-    // from the previous rendered frame, including any rate-limited skips.
-    due = Math.max((due ?? now) + interval, now);
+    const early = Math.min(interval * .38, Math.max(1, (refreshPeriod ?? 0) * .5));
+    if (due !== null && now + early < due) return false;
+    if (lastDraw !== null && now - lastDraw < interval * .5 - .01) return false;
+    // Retain the long-run cap and fractional phase. Missed full deadlines
+    // start a fresh period to prevent catch-up draws.
+    due = due === null || now - due >= interval ? now + interval : due + interval;
+    lastDraw = now;
     return true;
   };
+}
+
+function createAdaptiveResolution() {
+  const scales = [1, .85, .72, .60, .50, 4 / 9];
+  const settleMs = 550, windowMs = 950, recoveryWindows = 12;
+  let level = 0;
+  let lowerTrial, recoveryTrial, plateau, failedRecovery;
+  let windowStart, warmUntil, frames, calls, triangles, shortfall, healthy;
+
+  function interrupt() {
+    windowStart = null;
+    warmUntil = null;
+    frames = calls = triangles = healthy = 0;
+    shortfall = null;
+  }
+
+  function recheck() {
+    lowerTrial = recoveryTrial = plateau = failedRecovery = null;
+    interrupt();
+  }
+
+  function reset() {
+    level = 0;
+    recheck();
+  }
+
+  function sceneChanged(previous, current) {
+    return Math.abs(current.calls - previous.calls) >= Math.max(35, previous.calls * .18) ||
+      Math.abs(current.triangles - previous.triangles) >= Math.max(100_000, previous.triangles * .18);
+  }
+
+  function measure(now, target, rendered) {
+    warmUntil ??= now + settleMs;
+    if (now < warmUntil) return false;
+    if (windowStart === null) { windowStart = now; return false; }
+    frames++;
+    calls += rendered?.calls ?? 0;
+    triangles += rendered?.triangles ?? 0;
+    const elapsed = now - windowStart;
+    if (elapsed < windowMs) return false;
+    const sample = { fps: frames * 1000 / elapsed, calls: calls / frames, triangles: triangles / frames };
+    frames = calls = triangles = 0;
+    windowStart = now;
+
+    if (sample.fps >= target * .98) {
+      shortfall = lowerTrial = plateau = null;
+      if (recoveryTrial) {
+        if (++healthy >= 2) { recoveryTrial = failedRecovery = null; healthy = 0; }
+      } else if (!level || (failedRecovery && !sceneChanged(failedRecovery, sample))) {
+        healthy = 0;
+      } else if (++healthy >= recoveryWindows) {
+        recoveryTrial = sample;
+        level--;
+        interrupt();
+        return true;
+      }
+      return false;
+    }
+
+    healthy = 0;
+    if (plateau && !sceneChanged(plateau, sample) && Math.abs(sample.fps - plateau.fps) < Math.max(3, plateau.fps * .10)) {
+      shortfall = null;
+      return false;
+    }
+    if (!shortfall) { shortfall = sample; return false; }
+    const average = {
+      fps: (sample.fps + shortfall.fps) / 2,
+      calls: (sample.calls + shortfall.calls) / 2,
+      triangles: (sample.triangles + shortfall.triangles) / 2,
+    };
+    if (recoveryTrial) {
+      // Keep a failed recovery from repeating until the rendered scene changes.
+      failedRecovery = recoveryTrial;
+      recoveryTrial = null;
+      level++;
+    } else if (lowerTrial && average.fps < lowerTrial.fps + Math.max(1.5, target * .035)) {
+      // A lower pixel count did not make these gameplay frames faster.
+      plateau = lowerTrial;
+      lowerTrial = null;
+      level--;
+    } else if (level < scales.length - 1) {
+      lowerTrial = average;
+      plateau = failedRecovery = null;
+      level++;
+    } else {
+      plateau = average;
+      shortfall = lowerTrial = null;
+      return false;
+    }
+    interrupt();
+    return true;
+  }
+
+  reset();
+  return { get scale() { return scales[level]; }, interrupt, reset, recheck, measure };
 }
 
 export function createPerformanceCalibration({ query, resort, profiles, viewport, compact = false, enabled = true }) {
@@ -97,11 +206,13 @@ export function createPerformanceCalibration({ query, resort, profiles, viewport
   const manualCaps = [30, ...targets];
   let frameLimit = manualCaps.includes(stored.frameLimit) ? stored.frameLimit : 0;
   const preferredResolution = query.get('resolution') ?? stored.resolution;
-  let resolution = ['native', 'scaled'].includes(preferredResolution)
+  let resolution = resolutionModes.includes(preferredResolution)
     ? preferredResolution : (compact ? 'scaled' : 'native');
   let requestedAA = typeof stored.antialias === 'boolean' ? stored.antialias : manualQuality > 0 && !compact;
   const antialias = requestedAA;
   const limitFrame = createFrameLimiter();
+  const adaptive = createAdaptiveResolution();
+  const adaptiveTarget = () => Math.min(frameLimit || 60, 60);
   const display = () => `${screen.width}x${screen.height}@${window.devicePixelRatio || 1}`;
   const signature = () => `${display()}:${resolution}:${antialias}:${manualQuality}:${frameLimit}`;
   const measureViewport = () => ({
@@ -124,11 +235,12 @@ export function createPerformanceCalibration({ query, resort, profiles, viewport
       (result.target !== 0 && !manualCaps.includes(result.target))) result = null;
   if (result) renderSize = result.viewport;
   let quality = manualQuality >= 0 ? manualQuality : result?.quality ?? 0;
-  let requestPending = enabled && !result && queryQuality < 0;
+  let requestPending = enabled && !result && queryQuality < 0 && resolution !== 'adaptive';
   let test = null;
   let settings;
   let clearNotice;
   let countGameplay = false, counterStart = null, counterFrames = 0;
+  let sampleAdaptive = false, adaptiveResizePending = false;
 
   function updateCounter(now) {
     if (!settings?.counter) return;
@@ -154,16 +266,18 @@ export function createPerformanceCalibration({ query, resort, profiles, viewport
   function applyQuality(index) {
     if (quality !== index) {
       quality = index;
+      if (resolution === 'adaptive') adaptive.recheck();
       settings?.apply(index);
     }
     present();
   }
 
   function cap() {
-    return frameLimit || result?.target || 0;
+    return resolution === 'adaptive' ? adaptiveTarget() : frameLimit || result?.target || 0;
   }
 
   function status() {
+    if (resolution === 'adaptive') return `Adaptive cap ${adaptiveTarget()} FPS · ${Math.round(adaptive.scale * 100)}% native. Graphics stay ${profileLabel(quality)}.`;
     if (test?.candidate) {
       const name = profiles[test.candidate.quality].name.toLowerCase();
       return `Testing ${test.candidate.target ? `${test.candidate.target} FPS` : 'uncapped'} · ${name}`;
@@ -173,9 +287,10 @@ export function createPerformanceCalibration({ query, resort, profiles, viewport
     if (!result) return 'Run the benchmark to measure this setup.';
     const fps = Math.round(result.fps);
     const measured = `${fps} FPS measured`;
+    const adaptiveHint = resolution === 'native' && !result.frameLimit && fps < 60 ? ' · Try Adaptive' : '';
     if (result.frameLimit) return `${result.frameLimit} FPS cap · ${measured}`;
-    if (result.target >= 60) return `${result.target} FPS target · ${measured}`;
-    return `Uncapped · ${measured}`;
+    if (result.target >= 60) return `${result.target} FPS target · ${measured}${adaptiveHint}`;
+    return `Uncapped · ${measured}${adaptiveHint}`;
   }
 
   function notice(message, timeout) {
@@ -202,6 +317,8 @@ export function createPerformanceCalibration({ query, resort, profiles, viewport
     if (!settings) return;
     presentProfile(quality);
     settings.auto.checked = manualQuality < 0;
+    settings.auto.disabled = resolution === 'adaptive';
+    settings.auto.title = settings.auto.disabled ? 'Adaptive changes resolution. Use the graphics slider to change detail.' : '';
     settings.frame.value = String(frameLimit);
     settings.resolution.value = resolution;
     settings.aa.checked = requestedAA;
@@ -209,6 +326,8 @@ export function createPerformanceCalibration({ query, resort, profiles, viewport
     settings.aaPending.textContent = requestedAA === antialias ? 'Unavailable in this browser' : 'Applies when you reload';
     settings.status.textContent = status();
     settings.run.textContent = test || requestPending ? 'Restart test' : 'Run benchmark';
+    settings.run.disabled = resolution === 'adaptive';
+    settings.run.title = settings.run.disabled ? 'Choose a fixed 3D resolution to benchmark.' : '';
   }
 
   function cancelTest() {
@@ -220,7 +339,7 @@ export function createPerformanceCalibration({ query, resort, profiles, viewport
 
   function queueTest() {
     cancelTest();
-    requestPending = true;
+    requestPending = resolution !== 'adaptive';
     present();
   }
 
@@ -242,6 +361,8 @@ export function createPerformanceCalibration({ query, resort, profiles, viewport
 
   function interrupt() {
     counterStart = null;
+    sampleAdaptive = false;
+    if (resolution === 'adaptive') adaptive.interrupt();
     if (!test) return;
     test.context = null;
     test.previousProbe = null;
@@ -262,7 +383,7 @@ export function createPerformanceCalibration({ query, resort, profiles, viewport
     resizeTimer = null;
     const changed = () => display() !== renderDisplay || !sameSize(renderSize, measureViewport());
     if (!changed()) return;
-    if (test?.context != null) interrupt();
+    if (resolution === 'adaptive' || test?.context != null) interrupt();
     resizeTimer = setTimeout(() => {
       resizeTimer = null;
       if (!changed()) return;
@@ -270,7 +391,12 @@ export function createPerformanceCalibration({ query, resort, profiles, viewport
       renderDisplay = display();
       const retest = enabled && (queryQuality < 0 || requestPending || test || result);
       result = null;
-      if (retest) queueTest();
+      if (resolution === 'adaptive') {
+        const needsResize = adaptive.scale !== 1 || adaptiveResizePending;
+        adaptive.reset();
+        adaptiveResizePending = needsResize;
+        present();
+      } else if (retest) queueTest();
       else present();
     }, resizeDelayMs);
   }
@@ -278,6 +404,18 @@ export function createPerformanceCalibration({ query, resort, profiles, viewport
   function shouldRender(now, { eligible = true, vsync = true, context } = {}) {
     countGameplay = eligible && context === 'game';
     if (!countGameplay) counterStart = null;
+    if (resolution === 'adaptive') {
+      const active = countGameplay && vsync && resizeTimer === null;
+      const render = limitFrame(now, cap());
+      sampleAdaptive = active && render;
+      if (!active) adaptive.interrupt();
+      if (render && resizeTimer === null && adaptiveResizePending) {
+        adaptiveResizePending = false;
+        settings?.resize();
+        present();
+      }
+      return render;
+    }
     if (!eligible || !vsync || context !== 'game' || resizeTimer !== null) {
       if (test?.context != null) interrupt();
       return limitFrame(now, cap());
@@ -310,6 +448,7 @@ export function createPerformanceCalibration({ query, resort, profiles, viewport
 
   function didRender(now) {
     if (countGameplay) updateCounter(now);
+    if (sampleAdaptive && adaptive.measure(now, adaptiveTarget(), settings?.renderer.info?.render)) adaptiveResizePending = true;
     if (!test?.candidate || test.context == null) return;
     test.warmupUntil ??= now + warmupMs;
     if (now < test.warmupUntil) return;
@@ -340,7 +479,7 @@ export function createPerformanceCalibration({ query, resort, profiles, viewport
     // ANGLE also includes the API, PCI ID and shader model in this string.
     const gpuName = description?.match(/^ANGLE \([^,]+, (.+?)(?: \(0x| Direct3D|, (?:D3D|OpenGL|Vulkan|Metal)|\)$)/)?.[1] || description;
     settings = {
-      apply, antialiasActive: gl.getContextAttributes()?.antialias,
+      apply, resize, renderer, antialiasActive: gl.getContextAttributes()?.antialias,
       gpuName, canvas: renderer.domElement, device: document.getElementById('benchmark-device'),
       counter: document.getElementById('fps-counter'),
       slider: document.getElementById('pause-quality'),
@@ -385,14 +524,22 @@ export function createPerformanceCalibration({ query, resort, profiles, viewport
       }
     });
     settings.frame.addEventListener('change', () => {
+      const previousTarget = adaptiveTarget();
       frameLimit = Number(settings.frame.value);
       result = null;
       persistOptions();
+      if (resolution === 'adaptive' && previousTarget !== adaptiveTarget()) {
+        adaptiveResizePending ||= adaptive.scale !== 1;
+        adaptive.reset();
+      }
       queueTest();
     });
     settings.resolution.addEventListener('change', () => {
+      cancelTest();
       resolution = settings.resolution.value;
       result = null;
+      adaptive.reset();
+      sampleAdaptive = adaptiveResizePending = false;
       persistOptions();
       resize();
       queueTest();
@@ -409,6 +556,7 @@ export function createPerformanceCalibration({ query, resort, profiles, viewport
   return {
     get quality() { return quality; },
     get resolution() { return resolution; },
+    get resolutionScale() { return adaptive.scale; },
     get result() { return result; },
     get measuring() { return requestPending || !!test; },
     get testing() { return !!test; },

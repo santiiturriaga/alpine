@@ -33,7 +33,9 @@ For company, have a friend open the same resort and drop in. You’ll join the s
 
 On a new setup, Auto starts in **Budget** and measures frames after you enter the mountain. It tries 60, 120, and 240 FPS as the display allows, then increases detail while the measured target holds. If Budget misses 60, Auto leaves the frame rate uncapped and shows what your machine achieved. Each resort remembers its own result.
 
-The small FPS readout under the mountain name shows the frames your browser actually renders. Open **Esc → Graphics** to choose Budget yourself. It simplifies distant lifts, buildings, and trees while keeping nearby equipment and the shape of the mountain. Desktop defaults to native resolution. The pause menu also lets you set a frame cap, change resolution, enable edge smoothing (MSAA), or rerun the benchmark.
+The small FPS readout under the mountain name shows the frames your browser renders. In **Esc → Graphics**, you can choose a detail level, set a frame cap, and enable edge smoothing (MSAA). Budget simplifies distant lifts, buildings, and trees while keeping nearby equipment and the shape of the mountain.
+
+For integrated graphics, try **Budget** with **3D resolution → Adaptive · 60 FPS**. Adaptive starts at native resolution and adjusts the 3D image when the frame rate falls short. The map, text, and touch controls stay at display resolution. The graphics panel shows the actual render dimensions. Desktop defaults to **Native**, and you can also choose a fixed ceiling from 480p to 900p.
 
 You can ski past the marked runs and keep walking or riding beyond the resort map. The surrounding mountains follow elevation surveys up to their coverage limit. Farther out, the game generates backcountry as you approach. The trail map marks where generated terrain begins.
 

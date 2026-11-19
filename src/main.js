@@ -69,6 +69,16 @@ const challengeArrival = courseButtons.some(button => button.dataset.course === 
 const directArrival = challengeArrival || arrivalButtons.some(button => button.dataset.arrival === destination);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const nextFrame = () => new Promise((resolve) => setTimeout(resolve, 0));
+const terrainOcclusion = query.get('terrain-occlusion') !== 'off';
+
+function renderTerrainFrame() {
+  if (terrainOcclusion) terrain.hideOccludedTiles(camera);
+  try {
+    renderMountainFrame(renderer, scene, camera);
+  } finally {
+    if (terrainOcclusion) terrain.restoreOccludedTiles();
+  }
+}
 
 const COMBO_TIME = 4.8;
 let renderer, scene, camera;
@@ -280,7 +290,7 @@ async function boot() {
   updateSun(true);
   collectibles.prepareRender(camera);
   await prepareFirstFrame(renderer, scene, camera);
-  renderMountainFrame(renderer, scene, camera);
+  renderTerrainFrame();
 
   await ui.finishLoading();
   ui.showStart(!directArrival);
@@ -1549,7 +1559,8 @@ function onResize() {
   if (!renderer || !camera) return;
   const host = $('webgl');
   const quality = graphicsProfiles[qualityIndex];
-  resizeViewport({ host, renderer, camera, quality, storm, tuckWind, resolution: performanceCalibration.resolution });
+  resizeViewport({ host, renderer, camera, quality, storm, tuckWind, resolution: performanceCalibration.resolution,
+    resolutionScale: performanceCalibration.resolutionScale });
   performanceCalibration.viewportChanged();
   if (scenicPose) frameScenicView();
 }
@@ -1654,7 +1665,7 @@ function frame(now, vsync) {
     sky?.update(dt, camera);
     storm?.update(dt);
     collectibles.prepareRender(camera);
-    renderMountainFrame(renderer, scene, camera);
+    renderTerrainFrame();
     performanceCalibration.didRender(now);
     scheduleFrame();
     return;
@@ -1776,7 +1787,7 @@ function frame(now, vsync) {
 
   updateChaseFoliage(camera, ride || mounted || scenicPose || indoors ? null : player);
   collectibles.prepareRender(camera);
-  renderMountainFrame(renderer, scene, camera);
+  renderTerrainFrame();
   quests.capture(renderer.domElement);
   performanceCalibration.didRender(now);
   scheduleFrame();

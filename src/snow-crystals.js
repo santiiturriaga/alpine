@@ -12,23 +12,36 @@ export function bindSnowCrystals(shader) {
     uniform vec3 iceHorizon, iceZenith;
 
     vec3 shadeWinterSurface(vec3 radiance, vec3 viewNormal, vec3 toEye, float snow, float ice, float powder) {
+      float snowWeight = clamp(snow,0.,1.);
+      if (snowWeight == 0.) return radiance;
       vec3 n = normalize(viewNormal * mat3(viewMatrix));
-      vec3 v = normalize(toEye * mat3(viewMatrix));
-      float nv = clamp(dot(n, v), 0., 1.);
-      float nl = dot(n, snowSunDirection);
+      float crustWeight = clamp(ice,0.,1.);
+      vec3 winterLight = radiance;
+      bool scatter = powder > 0. && snowSun > 0. && crustWeight < 1.;
+      vec3 v = vec3(0.);
+      if (scatter || crustWeight > 0.) v = normalize(toEye * mat3(viewMatrix));
       // Porous snow scatters skylight into sheltered slopes. The long optical
       // path through dense snow absorbs more red than blue light.
-      float shelter = 1. - smoothstep(-.12,.48,nl);
-      vec3 snowLight = radiance * mix(vec3(1.), vec3(.79,.907,1.025), shelter * (.42 + .55 * powder));
-      float backscatter = pow(max(dot(v,snowSunDirection),0.), 10.) * max(nl,0.);
-      snowLight += radiance * powder * backscatter * snowSun * .19;
+      if (crustWeight < 1.) {
+        float nl = dot(n, snowSunDirection);
+        float shelter = 1. - smoothstep(-.12,.48,nl);
+        winterLight = radiance * mix(vec3(1.), vec3(.79,.907,1.025), shelter * (.42 + .55 * powder));
+        if (scatter && nl > 0.) {
+          float backscatter = pow(max(dot(v,snowSunDirection),0.), 10.) * nl;
+          winterLight += radiance * powder * backscatter * snowSun * .19;
+        }
+      }
       // Air/ice reflectance (n≈1.31). A smooth wind crust picks up the actual
       // horizon and sky palette, including the colour change after sunset.
-      vec3 reflected = reflect(-v,n);
-      vec3 sky = mix(iceHorizon, iceZenith, smoothstep(-.04,.86,reflected.y));
-      float fresnel = .018 + .982 * pow(1. - nv, 5.);
-      vec3 crust = mix(radiance * vec3(.82,.92,.975), sky, fresnel);
-      return mix(radiance, mix(snowLight, crust, clamp(ice,0.,1.)), clamp(snow,0.,1.));
+      if (crustWeight > 0.) {
+        float nv = clamp(dot(n, v), 0., 1.);
+        vec3 reflected = reflect(-v,n);
+        vec3 sky = mix(iceHorizon, iceZenith, smoothstep(-.04,.86,reflected.y));
+        float fresnel = .018 + .982 * pow(1. - nv, 5.);
+        vec3 crust = mix(radiance * vec3(.82,.92,.975), sky, fresnel);
+        winterLight = mix(winterLight, crust, crustWeight);
+      }
+      return mix(radiance, winterLight, snowWeight);
     }
 
     vec3 crystalHash(vec2 cell) {
@@ -38,6 +51,7 @@ export function bindSnowCrystals(shader) {
     }
 
     float snowCrystalFlash(vec3 p, vec3 viewNormal, float distanceToEye, float snowCover) {
+      if (snowSun == 0.) return 0.;
       vec2 grid = p.xz * 8.3;
       float pixel = length(fwidth(grid));
       float visible = snowSun * snowCover * (1.0 - smoothstep(.36, .95, pixel))

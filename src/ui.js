@@ -3,6 +3,7 @@ import {
 } from './worlddata.js';
 import { ResortMap } from './resort-map.js';
 import { RouteGuide } from './route-guide.js';
+import { indexNearbyTrails } from './nearby-trails.js';
 import { loadingProgress, finishMountainLoading } from './mountain-loading.js';
 import { clamp, formatNumber, formatTime } from './util.js';
 import {
@@ -16,7 +17,7 @@ import {
    ═══════════════════════════════════════════════════════════════ */
 
 const $ = (id) => document.getElementById(id);
-const formatHeight = (metres) => `${formatNumber(metres * skiUnits().lengthFactor)} ${skiUnits().small}`;
+const formatHeight = (metres, { lengthFactor, small }) => `${formatNumber(metres * lengthFactor)} ${small}`;
 
 const NEARBY_MAP_SIZE = 160;
 const NEARBY_MAP_RADIUS = 70;
@@ -66,6 +67,7 @@ export class UI {
       fade: $('fade'),
       altitude: $('altitude'), mountain: $('mountain-name'), trailName: $('trail-name'),
       statVertical: $('stat-vertical'), speed: $('speed'), speedUnit: $('speed-unit'),
+      gearMode: $('gear-mode'), gearModeLabel: $('gear-mode-label'), surface: $('snow-surface'), boost: $('boost-readout'),
       coins: $('coin-count'), crystals: $('crystal-count'), instruments: $('instruments'),
       bigmap: $('bigmap'), nearbyMap: $('nearby-map'), pauseNearbyMap: $('pause-nearby-map'),
       prompt: $('interaction-prompt'), promptTitle: $('prompt-title'), promptSub: $('prompt-sub'),
@@ -264,11 +266,12 @@ export class UI {
       this.changed.promptSub = sub;
     }
     this.el.nextLift.classList.toggle('hidden', !canSwitch);
-    node.classList.remove('hidden');
+    if (node.classList.contains('hidden')) node.classList.remove('hidden');
   }
 
   hidePrompt() {
-    this.el.prompt?.classList.add('hidden');
+    const node = this.el.prompt;
+    if (node && !node.classList.contains('hidden')) node.classList.add('hidden');
   }
 
   cinematic(on, { title = '', sub = '' } = {}) {
@@ -299,33 +302,14 @@ export class UI {
   findNearest(player, force = false, time = 0) {
     if (!force && time > this.lastNearestCheck && time - this.lastNearestCheck < 0.12) return this.nearest;
     this.lastNearestCheck = time;
-    const px = player.pos.x, pz = player.pos.z;
-    let best = null;
-    let bestD2 = Infinity;
-    for (const run of this.runs) {
-      const samples = run.samples;
-      if (!samples?.length) continue;
-      const [left, top, right, bottom] = run.bounds;
-      if (px < left - 46 || px > right + 46 || pz < top - 46 || pz > bottom + 46) continue;
-      const n = samples.length;
-      let localD2 = Infinity;
-      let localI = 0;
-      for (let i = 0; i < n; i += 3) {
-        const dx = samples[i].x - px, dz = samples[i].z - pz;
-        const d2 = dx * dx + dz * dz;
-        if (d2 < localD2) { localD2 = d2; localI = i; }
-      }
-      for (let i = Math.max(0, localI - 3); i <= Math.min(n - 1, localI + 3); i++) {
-        const dx = samples[i].x - px, dz = samples[i].z - pz;
-        const d2 = dx * dx + dz * dz;
-        if (d2 < localD2) { localD2 = d2; localI = i; }
-      }
-      if (localD2 < bestD2) {
-        bestD2 = localD2;
-        best = { run, i: localI, dist: Math.sqrt(localD2) };
-      }
-    }
-    if (!best || best.dist > 46) {
+    const { x, z } = player.pos;
+    if (x === this.lastNearestX && z === this.lastNearestZ) return this.nearest;
+    this.lastNearestX = x;
+    this.lastNearestZ = z;
+    // Whistler's samples are built after constructing the UI.
+    this.nearbyTrailQuery ??= indexNearbyTrails(this.runs);
+    const best = this.nearbyTrailQuery(x, z);
+    if (!best) {
       this.nearest = null;
       return null;
     }
@@ -339,8 +323,8 @@ export class UI {
     else state = 'OFF-PISTE';
     this.nearest = {
       run, dist: best.dist, onRun, nearRun, state,
-      sample: run.samples[best.i],
-      index: best.i,
+      sample: run.samples[best.index],
+      index: best.index,
     };
     return this.nearest;
   }
@@ -355,25 +339,27 @@ export class UI {
   }
 
   update({ player, collectibles = this.collectibles, nearest, time, mountainName, trailName, indoors = false }) {
+    const units = skiUnits();
+    const { gearMode, gearModeLabel, surface, boost } = this.el;
     const mountain = mountainName ?? nearest?.run.mountain ?? mountainAt(player.pos.x, player.pos.z);
     const nearUnload = trailName == null && Math.hypot(player.pos.x - ROUNDHOUSE_START.x, player.pos.z - ROUNDHOUSE_START.z) < 43;
     const trail = trailName ?? (nearUnload ? 'Roundhouse' : nearest?.run.named ? nearest.run.name : '');
     this.setText(this.el.mountain, 'mountain', mountain);
-    this.setText(this.el.altitude, 'altitude', formatHeight(player.pos.y));
+    this.setText(this.el.altitude, 'altitude', formatHeight(player.pos.y, units));
     this.setText(this.el.trailName, 'trail', trail);
-    this.setText(this.el.statVertical, 'vertical', formatHeight(Math.max(0, player.stats.vertical)));
-    $('gear-mode').hidden = !player.canChangeFootMode() || (player.footMode && (indoors || player.surfaceType === 'ground'));
-    this.setText($('gear-mode-label'), 'gearMode', player.footMode ? 'Put on skis' : 'Walk');
-    this.setText($('snow-surface'), 'surface', player.vehicleLabel ? ` · ${player.vehicleLabel}` : player.footMode ? ' · On foot' :
+    this.setText(this.el.statVertical, 'vertical', formatHeight(Math.max(0, player.stats.vertical), units));
+    const hideGear = !player.canChangeFootMode() || (player.footMode && (indoors || player.surfaceType === 'ground'));
+    if (gearMode.hidden !== hideGear) gearMode.hidden = hideGear;
+    this.setText(gearModeLabel, 'gearMode', player.footMode ? 'Put on skis' : 'Walk');
+    this.setText(surface, 'surface', player.vehicleLabel ? ` · ${player.vehicleLabel}` : player.footMode ? ' · On foot' :
       player.surfaceType === 'ice' ? ' · Ice' : player.surfaceType === 'powder' ? ' · Powder' : '');
     this.setText(this.el.coins, 'coins', formatNumber(collectibles?.coinCount || 0));
     this.setText(this.el.crystals, 'crystals', String(collectibles?.crystalCount || 0));
-    const units = skiUnits();
     this.setText(this.el.speed, 'speed', String(Math.round(player.speedKmh * units.speedFactor)));
     this.setText(this.el.speedUnit, 'speedUnit', units.speed);
     this.drawNearbyMap(player, time);
-    const boost=$('boost-readout');
-    boost.hidden=player.boostTime<=0;
+    const hideBoost = player.boostTime <= 0;
+    if (boost.hidden !== hideBoost) boost.hidden = hideBoost;
     if(!boost.hidden){
       this.setText(boost.firstElementChild,'boostChain',player.trickChain>1?`Boost ×${player.trickChain}`:'Boost');
       boost.lastElementChild.value=player.boostTime/player.boostDuration;
@@ -507,7 +493,7 @@ export class UI {
   drawBigMap(player, time = 0) {
     this.resortMap.update(player, time);
     const nearest = this.nearest || (player ? this.findNearest(player, true, time) : null);
-    this.setText(this.el.mapAltitude, 'mapAltitude', player ? formatHeight(player.pos.y) : '');
+    this.setText(this.el.mapAltitude, 'mapAltitude', player ? formatHeight(player.pos.y, skiUnits()) : '');
     this.setText(this.el.mapRunName, 'mapRun', nearest ? nearest.run.name : 'Alpine');
   }
 }

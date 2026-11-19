@@ -445,7 +445,8 @@ export async function startMappedResort(mountain) {
 
   function resize() {
     const quality = graphicsProfiles[qualityIndex];
-    resizeViewport({ host, renderer, camera, quality, storm, tuckWind, resolution: performanceCalibration.resolution });
+    resizeViewport({ host, renderer, camera, quality, storm, tuckWind, resolution: performanceCalibration.resolution,
+      resolutionScale: performanceCalibration.resolutionScale });
     performanceCalibration.viewportChanged();
   }
 

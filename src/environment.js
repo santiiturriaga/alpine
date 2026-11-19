@@ -16,6 +16,7 @@ import { coniferDepthMaterial, coniferGeometry, coniferMaterial } from './conife
 import { climateUniforms } from './climate-state.js';
 import { buildNeedleShoots } from './needle-shoots.js';
 import { ForestCell, batchBudgetForestCrowns, forestDetailTiers, forestQuality, makeForestCrowns, shareForestInstances } from './forest-lod.js';
+import { coniferInView, crownDistanceSquared, forestView, setConiferBounds } from './forest-culling.js';
 import { part, box, beam, cacheStaticTransforms, mergeParts, mergedMesh } from './scenery.js';
 import { buildResortPeople } from './resort-people.js';
 import { buildRoundhouseArrival } from './roundhouse.js';
@@ -363,9 +364,9 @@ function buildForest(scene, grid, rand, detail) {
   const base = makeDetail(-.5), mid = makeDetail(1), close = makeDetail(2);
   const detailMeshes = [...base,...mid,...close];
   const updateNeedles = buildNeedleShoots(group,grid,species,close);
-  const lastEye = new THREE.Vector3(Infinity,Infinity,Infinity), lastFacing = new THREE.Quaternion();
-  const frustum = new THREE.Frustum(), projection = new THREE.Matrix4(), crown = new THREE.Sphere();
-  let lastFov = 0, lastAspect = 0, candidates = [];
+  const lastEye = new THREE.Vector3(Infinity,Infinity,Infinity);
+  const footprint = new Float64Array(6);
+  let candidates = [], lastView, viewRevision;
   let detailScale = 0, shadowPatches = new Set();
   function include(mesh, tree) {
     const dst = mesh.count++;
@@ -377,20 +378,29 @@ function buildForest(scene, grid, rand, detail) {
     for (let i=0;i<3;i++) mesh.instanceColor.array[dst*3+i] = batch.instanceColor.array[src*3+i];
     mesh.userData.uploadStart = Math.min(mesh.userData.uploadStart,dst);
   }
+  function includeVisible(mesh, tree, view, matrices, i) {
+    setConiferBounds(footprint, 0, mesh.geometry, matrices, i);
+    if (coniferInView(view, footprint)) include(mesh, tree);
+  }
   function updateDetail(camera) {
     const eye = camera.position;
     updateNeedles(eye);
     const scale = forestQuality.detail.value;
     const moved = scale !== detailScale || lastEye.distanceToSquared(eye) >= 25;
-    if (!moved && lastFacing.angleTo(camera.quaternion) < .065 &&
-        Math.abs(lastFov-camera.fov) < 2 && Math.abs(lastAspect-camera.aspect) < .04) return;
-    const baseDistance = forestDetailTiers[-.5][1]*scale+7;
-    const midDistance = forestDetailTiers[1][1]*scale+7;
-    const closeDistance = forestDetailTiers[2][1]*scale+7;
+    camera.updateWorldMatrix(true, false);
+    const view = forestView(camera);
+    if (!moved && lastView === view && viewRevision === view.revision) return;
+    lastView = view;
+    viewRevision = view.revision;
+    const baseDistance = forestDetailTiers[-.5][1]*scale+.08;
+    const midDistance = forestDetailTiers[1][1]*scale+.08;
+    const closeDistance = forestDetailTiers[2][1]*scale+.08;
+    const baseDistanceSq = baseDistance ** 2, midDistanceSq = midDistance ** 2, closeDistanceSq = closeDistance ** 2;
     if (moved) {
       detailScale = scale;
       lastEye.copy(eye);
-      candidates = grid.query(eye.x,eye.z,baseDistance+5).filter(c => c.type === 'tree');
+      // The wider query also keeps the original shadow batch selection.
+      candidates = grid.query(eye.x,eye.z,baseDistance+12-.08).filter(c => c.type === 'tree');
       const current = new Set();
       for (const {tree} of candidates) {
         const mesh = tree.batch;
@@ -402,9 +412,6 @@ function buildForest(scene, grid, rand, detail) {
       for (const mesh of current) mesh.castShadow = true;
       shadowPatches = current;
     }
-    lastFov=camera.fov; lastAspect=camera.aspect; lastFacing.copy(camera.quaternion);
-    camera.updateMatrixWorld();
-    frustum.setFromProjectionMatrix(projection.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse));
     for (const mesh of detailMeshes) {
       mesh.count = 0;
       mesh.userData.uploadStart = Infinity;
@@ -412,18 +419,14 @@ function buildForest(scene, grid, rand, detail) {
       mesh.boundingSphere.radius = baseDistance+62;
     }
     for (const { tree } of candidates) {
-      const { x,y,z,apex,kind } = tree;
-      const altitude = Math.max(y-eye.y,eye.y-y-apex,0);
-      const distance = Math.hypot(x-eye.x,z-eye.z,altitude);
-      if (distance > baseDistance) continue;
-      crown.center.set(x,y+apex*.5,z);
-      // Pad for the next camera move/turn. Nearby offscreen trees still
-      // contribute their shadows over the rider.
-      crown.radius = apex*.65 + 8 + distance*.10;
-      if (distance > 110 && !frustum.intersectsSphere(crown)) continue;
-      include(base[kind],tree);
-      if (distance < midDistance) include(mid[kind],tree);
-      if (distance < closeDistance) include(close[kind],tree);
+      const { batch, index, kind } = tree;
+      const matrices = batch.instanceMatrix.array, i = index * 16;
+      const distance = crownDistanceSquared(eye, matrices[i + 12], matrices[i + 13], matrices[i + 14],
+        matrices[i + 13] + matrices[i + 5]);
+      if (distance > baseDistanceSq) continue;
+      includeVisible(base[kind], tree, view, matrices, i);
+      if (distance < midDistanceSq) includeVisible(mid[kind], tree, view, matrices, i);
+      if (distance < closeDistanceSq) includeVisible(close[kind], tree, view, matrices, i);
     }
     for (const mesh of detailMeshes) {
       mesh.visible = mesh.count > 0;
@@ -758,7 +761,10 @@ function batchFracturedRocks(scene, group, cells, shapes, stoneMaterial, capMate
     }
     // Shadow-only pools stay in the renderer's shadow traversal but never
     // submit their instances to the color pass.
-    if (shadow) mesh.onBeforeRender = () => { mesh.count = 0; };
+    if (shadow) mesh.onBeforeRender = () => {
+      mesh.count = 0;
+      mesh.visible = false;
+    };
     mesh.count = 0;
     group.add(mesh);
     return mesh;
@@ -767,12 +773,26 @@ function batchFracturedRocks(scene, group, cells, shapes, stoneMaterial, capMate
   const capPools = shapes.map(({ cap }, kind) => makePool(cap, capMaterial, capCounts[kind], 'snow on fracture ledges'));
   const shadowMaterial = new THREE.MeshBasicMaterial();
   const shadowPools = shapes.map(({ rock }, kind) => makePool(rock, shadowMaterial, rockCounts[kind], 'fractured granite shadows', { shadow: true }));
-  const pools = [...rockPools, ...capPools, ...shadowPools];
+  const colorPools = [...rockPools, ...capPools];
   const sun = scene.getObjectByName('sun');
   const viewProjection = new THREE.Matrix4();
   const lastViewProjection = new THREE.Matrix4();
   const view = new THREE.Frustum();
   const prior = scene.onBeforeRender;
+  function publish(pools) {
+    for (const mesh of pools) {
+      mesh.visible = mesh.count > 0;
+      if (!mesh.visible) continue;
+      mesh.instanceMatrix.clearUpdateRanges();
+      mesh.instanceMatrix.addUpdateRange(0, mesh.count * 16);
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) {
+        mesh.instanceColor.clearUpdateRanges();
+        mesh.instanceColor.addUpdateRange(0, mesh.count * 3);
+        mesh.instanceColor.needsUpdate = true;
+      }
+    }
+  }
   scene.onBeforeRender = function (renderer, activeScene, camera, target) {
     prior.call(this, renderer, activeScene, camera, target);
     if (!group.visible) return;
@@ -785,12 +805,16 @@ function batchFracturedRocks(scene, group, cells, shapes, stoneMaterial, capMate
       sun.shadow.updateMatrices(sun);
       shadowView = sun.shadow.getFrustum();
     }
-    if (detail.budget && !shadowView && viewProjection.equals(lastViewProjection)) return;
-    lastViewProjection.copy(viewProjection);
-    view.setFromProjectionMatrix(viewProjection);
-    for (const mesh of pools) mesh.count = 0;
+    const cameraChanged = !viewProjection.equals(lastViewProjection);
+    if (!cameraChanged && !shadowView) return;
+    if (cameraChanged) {
+      lastViewProjection.copy(viewProjection);
+      view.setFromProjectionMatrix(viewProjection);
+      for (const mesh of colorPools) mesh.count = 0;
+    }
+    if (shadowView) for (const mesh of shadowPools) mesh.count = 0;
     for (const { bounds, stones } of regions) {
-      const cameraRegion = view.intersectsBox(bounds);
+      const cameraRegion = cameraChanged && view.intersectsBox(bounds);
       const shadowRegion = shadowView?.intersectsBox(bounds);
       if (!cameraRegion && !shadowRegion) continue;
       for (const { kind, rockBounds, capBounds, matrix, color } of stones) {
@@ -810,18 +834,8 @@ function batchFracturedRocks(scene, group, cells, shapes, stoneMaterial, capMate
         }
       }
     }
-    for (const mesh of pools) {
-      mesh.visible = mesh.count > 0;
-      if (!mesh.visible) continue;
-      mesh.instanceMatrix.clearUpdateRanges();
-      mesh.instanceMatrix.addUpdateRange(0, mesh.count * 16);
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) {
-        mesh.instanceColor.clearUpdateRanges();
-        mesh.instanceColor.addUpdateRange(0, mesh.count * 3);
-        mesh.instanceColor.needsUpdate = true;
-      }
-    }
+    if (cameraChanged) publish(colorPools);
+    if (shadowView) publish(shadowPools);
   };
   return nextShapes => nextShapes.forEach(({ rock }, kind) => {
     rockPools[kind].geometry = shadowPools[kind].geometry = rock;
@@ -955,8 +969,15 @@ function buildCablePath(nodes, lateral) {
 
 function makeSampler(points) {
   const distances = new Float64Array(points.length);
+  const directions = new Float64Array(points.length * 3);
+  const delta = new THREE.Vector3();
+  // An entire span shares the same tangent. Calculate it once for the
+  // riders, animated fleet, and lift queue instead of normalizing per sample.
   for (let i = 1; i < points.length; i++) {
-    distances[i] = distances[i - 1] + points[i].distanceTo(points[i - 1]);
+    delta.subVectors(points[i], points[i - 1]);
+    const length = delta.length();
+    distances[i] = distances[i - 1] + length;
+    delta.divideScalar(length || 1).toArray(directions, (i - 1) * 3);
   }
   const total = distances.at(-1);
   return {
@@ -972,7 +993,7 @@ function makeSampler(points) {
       const a = points[lo], b = points[hi];
       const fraction = (distance - distances[lo]) / (distances[hi] - distances[lo] || 1);
       position.lerpVectors(a, b, fraction);
-      tangent.subVectors(b, a).normalize();
+      tangent.fromArray(directions, lo * 3);
     },
   };
 }
@@ -1049,7 +1070,7 @@ function makeChairGeometry(seatCount, modern = false) {
     parts.push(box(width, .054, .124, dark, [x, -2.68, .425]));
     parts.push(box(width * .82, .022, .094, '#667478', [x, -2.644, .425]));
   }
-  const geometry = mergeParts(parts);
+  const geometry = mergeParts(parts, true);
   geometry.userData.seatPitch = pitch;
   geometry.userData.seats = seatCount;
   return geometry;
@@ -1070,7 +1091,7 @@ function distantChairGeometry(seats, modern) {
     box(width, .42, .08, cushion, [0, -1.95, -.20]),
     box(width, .065, .08, '#737f85', [0, -1.80, .38]),
     box(width * .72, .06, .10, '#3e4a51', [0, -2.66, .42]),
-  ]);
+  ], true);
 }
 
 function distantCabinGeometry(color, big) {
@@ -1081,7 +1102,7 @@ function distantCabinGeometry(color, big) {
     part(section, '#3a5362', [0, -2.10, 0], [0, 0, 0], [width, big ? 1.23 : 1.0, depth]),
     part(section, '#ddd9cf', [0, -1.38, 0], [0, 0, 0], [width * .87, .37, depth * .87]),
     box(big ? .65 : .15, 1.2, .14, '#879398', [0, -.64, 0]),
-  ]);
+  ], true);
 }
 
 function towerShaftGeometry() {
@@ -1089,7 +1110,7 @@ function towerShaftGeometry() {
     part(new THREE.CylinderGeometry(.29, .49, 1, 10), '#74828b', [0, .5, 0]),
     part(new THREE.CylinderGeometry(.52, .61, .024, 10), '#565d5f', [0, .04, 0]),
     part(new THREE.CylinderGeometry(.51, .64, .038, 10), '#9ca6a6', [0, .016, 0]),
-  ]);
+  ], true);
 }
 
 function towerHeadGeometry(distant = false) {
@@ -1129,7 +1150,7 @@ function towerHeadGeometry(distant = false) {
   if (distant) return mergeParts(parts, true);
   for(let i=0;i<7;i++)parts.push(box(.43,.025,.027,'#c0c7c4',[0,-.62+i*.145,-.73]));
   for(const x of [-.24,.24])parts.push(box(.026,1.18,.028,'#80969e',[x,-.11,-.73]));
-  return mergeParts(parts);
+  return mergeParts(parts, true);
 }
 
 function chairTowerHeadGeometry() {
@@ -1156,7 +1177,7 @@ function chairTowerHeadGeometry() {
   }
   for (const x of [-.22, .22]) parts.push(box(.041,1.18,.041,dark,[x,-.55,-.69]));
   for (let i = 0; i < 6; i++) parts.push(box(.42,.027,.034,flange,[0,-1.05+i*.18,-.69]));
-  return mergeParts(parts);
+  return mergeParts(parts, true);
 }
 
 function chairSheaveGeometry(distant = false) {
@@ -1179,7 +1200,7 @@ function chairSheaveGeometry(distant = false) {
     parts.push(part(axle, '#a4b0b2', [0, -.142, z]));
     for (const x of [-.107,.107]) parts.push(box(.038,.13,.11,'#8b9b9f',[x,-.205,z]));
   }
-  return mergeParts(parts);
+  return mergeParts(parts, true);
 }
 
 function latticeGeometry() {
@@ -1204,7 +1225,7 @@ function latticeGeometry() {
       }
     }
   }
-  return mergeParts(pieces);
+  return mergeParts(pieces, true);
 }
 
 function surfaceLift(def, group, grid, material) {
@@ -1322,6 +1343,8 @@ function buildLifts(scene, grid, detail) {
   const group = new THREE.Group();
   group.name = 'Lift network';
   scene.add(group);
+  const staticNetwork = new THREE.Group();
+  group.add(staticNetwork);
 
   const towers = [];
   const cableMat = new THREE.MeshStandardMaterial({ color: 0x424e53, roughness: 0.48, metalness: 0.42 });
@@ -1436,7 +1459,7 @@ function buildLifts(scene, grid, detail) {
       const key = detail.budget ? 'reduced' : 'full';
       rope[key] = build(detail.budget);
       const cable = new THREE.Mesh(rope[key], cableMat);
-      group.add(cable);
+      staticNetwork.add(cable);
       return { cable, rope, build };
     });
 
@@ -1581,7 +1604,7 @@ function buildLifts(scene, grid, detail) {
       mesh.castShadow = true;
       towers.forEach((tower, i) => fill(mesh, tower, i * stride));
       mesh.computeBoundingSphere();
-      group.add(mesh);
+      staticNetwork.add(mesh);
       let distant;
       if (distantGeometry) {
         distant = new THREE.InstancedMesh(distantGeometry, material, 0);
@@ -1590,7 +1613,7 @@ function buildLifts(scene, grid, detail) {
         distant.boundingSphere = mesh.boundingSphere;
         distant.name = name + ' · distant';
         distant.visible = false;
-        group.add(distant);
+        staticNetwork.add(distant);
       }
       towerBatches.push({ mesh, distant });
     }
@@ -1627,6 +1650,7 @@ function buildLifts(scene, grid, detail) {
       }
     }
   }, 4, chairSheaveGeometry(true));
+  cacheStaticTransforms(staticNetwork);
 
   function setPassenger(lift, direction, t, doorOpening) {
     if (occupied && (!lift || occupied.lift !== lift)) occupied.lift.passenger.visible = false;

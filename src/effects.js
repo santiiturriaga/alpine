@@ -199,8 +199,10 @@ export function createSky(scene) {
         float longPath = exp(-h * 6.5) * pow(sd, 3.0) * uGolden;
         col = mix(col, uSunColor, longPath * uSunStrength * .40);
         vec3 sunlight = uSunColor*uSunStrength*(solarDisk*6.1 + pow(sd,175.0)*.33 + forwardScatter);
-        float md = max(dot(d, uMoon), 0.0);
-        col += vec3(.66,.77,.98)*uMoonStrength*(smoothstep(.999968,.999984,md)*1.75 + pow(md,150.0)*.041);
+        if (uMoonStrength > 0.) {
+          float md = max(dot(d, uMoon), 0.0);
+          col += vec3(.66,.77,.98)*uMoonStrength*(smoothstep(.999968,.999984,md)*1.75 + pow(md,150.0)*.041);
+        }
         col = mix(col, uHorizon, 1.0-smoothstep(-.12,0.0,d.y));
         if (d.y > .008 && uWhiteout < .995) {
           vec2 wind=vec2(uTime*.007,-uTime*.0028);
@@ -212,20 +214,25 @@ export function createSky(scene) {
           col=mix(col,uCloudLight,veil);
           vec2 nearPlane=(uEye.xz*.57+d.xz*(1470.0/(d.y+.084)))*.00165+wind;
           float cloud=cloudDensity(nearPlane);
-          float shade = cloudDensity(nearPlane + uSun.xz*.155);
-          float ridges=cloudNoise(nearPlane*4.18+vec2(11.4,-9.5));
-          cloud=clamp(cloud+(ridges-.5)*.76*cloud*(1.-cloud),0.,1.);
-          float light = clamp(.57+.22*ridges-.24*shade+(cloud-shade)*.89+pow(sd,8.)*.24, 0.0, 1.0);
-          vec3 cloudColor=mix(uCloudShade,uCloudLight,light);
-          float backlit = pow(sd, 11.0) * uSunStrength * (.25 + .75 * uGolden);
-          cloudColor += uSunColor * backlit * (.18 + .80 * max(0.0, cloud - shade));
-          col=mix(col,cloudColor,cloud*.88*smoothstep(.008,.14,d.y)*(1.0-uWhiteout));
+          // A clear gap has zero density after the ridge adjustment as well.
+          if (uBakedClouds || cloud > 0.) {
+            float shade = cloudDensity(nearPlane + uSun.xz*.155);
+            float ridges=cloudNoise(nearPlane*4.18+vec2(11.4,-9.5));
+            cloud=clamp(cloud+(ridges-.5)*.76*cloud*(1.-cloud),0.,1.);
+            float light = clamp(.57+.22*ridges-.24*shade+(cloud-shade)*.89+pow(sd,8.)*.24, 0.0, 1.0);
+            vec3 cloudColor=mix(uCloudShade,uCloudLight,light);
+            float backlit = pow(sd, 11.0) * uSunStrength * (.25 + .75 * uGolden);
+            cloudColor += uSunColor * backlit * (.18 + .80 * max(0.0, cloud - shade));
+            col=mix(col,cloudColor,cloud*.88*smoothstep(.008,.14,d.y)*(1.0-uWhiteout));
+          }
           sunlight *= (1.0-veil*.33) * (1.0-cloud*mix(.74,.99,solarDisk));
           // A few dim stars emerge through clear gaps at the end of dusk.
-          vec2 starUv = vec2(atan(d.z,d.x),asin(d.y))*460.0;
-          vec2 cell = floor(starUv);
-          float star = step(.9965,skyHash(cell))*exp(-length(fract(starUv)-.5)*18.0);
-          col += vec3(.48,.61,.87)*star*uNight*(1.0-cloud)*smoothstep(.12,.45,d.y);
+          if (uNight > 0. && d.y > .12 && cloud < 1.) {
+            vec2 starUv = vec2(atan(d.z,d.x),asin(d.y))*460.0;
+            vec2 cell = floor(starUv);
+            float star = step(.9965,skyHash(cell))*exp(-length(fract(starUv)-.5)*18.0);
+            col += vec3(.48,.61,.87)*star*uNight*(1.0-cloud)*smoothstep(.12,.45,d.y);
+          }
         }
         col += sunlight * smoothstep(-.02,.015,d.y) * (1.0-uWhiteout);
         if (uWhiteout > .01) {

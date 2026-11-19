@@ -77,6 +77,30 @@ test('frame cap preserves cadence on aligned and unaligned refresh rates', () =>
   }
 });
 
+test('60 FPS cap resumes without a catch-up burst after a stall', () => {
+  const limiter = createFrameLimiter();
+  const times = [0, 16.7, 33.4, 140, 144.2, 148.4, 152.6, 156.8, 161, 173.5];
+  assert.deepEqual(times.filter(time => limiter(time, 60)), [0, 16.7, 33.4, 140, 156.8, 173.5]);
+});
+
+test('60 FPS cap keeps near-aligned callbacks with timestamp jitter', () => {
+  for (const refresh of [59.94, 60, 62.7]) {
+    let seed = 90;
+    const callbacks = Array.from({ length: Math.floor(refresh * 20) }, (_, index) => {
+      seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;
+      const jitter = seed / 2 ** 32 * 4 - 2;
+      return 10 + index * 1000 / refresh + jitter;
+    });
+    const limiter = createFrameLimiter();
+    const frames = callbacks.filter(now => limiter(now, 60));
+    const intervals = frames.slice(1).map((now, index) => now - frames[index]).sort((a, b) => a - b);
+    const fps = 1000 * intervals.length / (frames.at(-1) - frames[0]);
+    const p95 = intervals[Math.floor(intervals.length * .95)];
+    assert.ok(fps >= Math.min(refresh, 60) - .2 && fps <= 60.15, { refresh, fps });
+    assert.ok(p95 < 21 && intervals[0] >= 500 / 60 - .01, { refresh, p95, minimum: intervals[0] });
+  }
+});
+
 function setupCalibration() {
   const storage = new Map();
   globalThis.window = { devicePixelRatio: 1 };
@@ -86,8 +110,8 @@ function setupCalibration() {
   };
   const viewport = { clientWidth: 960, clientHeight: 540 };
   const profiles = [{ name: 'BUDGET' }, { name: 'LOW' }];
-  const open = (resort = 'test', compact = false) => createPerformanceCalibration({
-    query: new URLSearchParams(), profiles, resort, viewport, compact,
+  const open = (resort = 'test', compact = false, search = '') => createPerformanceCalibration({
+    query: new URLSearchParams(search), profiles, resort, viewport, compact,
   });
   return { open, storage, viewport };
 }
@@ -141,4 +165,110 @@ test('a persisted result is scoped to its resort and a comparable render viewpor
   await new Promise(resolve => setTimeout(resolve, 350));
   assert.equal(first.result, null);
   assert.equal(first.measuring, true);
+});
+
+test('adaptive resolution holds 60 FPS at native and respects a lower manual cap', () => {
+  const { open, storage } = setupCalibration();
+  for (const [preference, cap] of [[0, 60], [120, 60], [240, 60], [30, 30]]) {
+    storage.set('alpine.performance-options', JSON.stringify({ frameLimit: preference }));
+    const calibration = open('test', false, 'resolution=adaptive&quality=low');
+    const { renders } = simulate(calibration, { duration: 6000, fps: 240 });
+    assert.ok(Math.abs(renders - cap * 6) <= 1, { preference, renders });
+    assert.equal(calibration.resolutionScale, 1);
+    assert.equal(calibration.quality, 1);
+    assert.equal(calibration.testing, false);
+  }
+});
+
+test('adaptive resolution ignores the menu and a pause, then steps down on sustained gameplay shortfall', async () => {
+  const { open, viewport } = setupCalibration();
+  const calibration = open('test', true, 'resolution=adaptive&quality=low');
+  const intro = simulate(calibration, { duration: 8000, fps: 24, context: 'intro' });
+  const active = simulate(calibration, { start: intro.now, duration: 1600, fps: 45 });
+  const pause = simulate(calibration, { start: active.now, duration: 6000, fps: 30, eligible: false });
+  const resumed = simulate(calibration, { start: pause.now, duration: 1900, fps: 45 });
+  assert.equal(calibration.resolutionScale, 1);
+  const downscaled = simulate(calibration, { start: resumed.now, duration: 1200, fps: 45 });
+  assert.equal(calibration.resolutionScale, .85);
+  const stable = simulate(calibration, { start: downscaled.now, duration: 10_000, fps: 60 });
+  assert.equal(calibration.resolutionScale, .85);
+  assert.equal(calibration.quality, 1);
+
+  viewport.clientWidth = 540;
+  viewport.clientHeight = 960;
+  calibration.viewportChanged();
+  simulate(calibration, { start: stable.now, duration: 5000, fps: 20 });
+  assert.equal(calibration.resolutionScale, .85);
+  await new Promise(resolve => setTimeout(resolve, 350));
+  assert.equal(calibration.resolutionScale, 1);
+});
+
+test('adaptive resolution rolls back a scale drop when the device delivers no more frames', () => {
+  const { open } = setupCalibration();
+  const calibration = open('test', false, 'resolution=adaptive');
+  const trial = simulate(calibration, { duration: 3600, fps: 45 });
+  assert.equal(calibration.resolutionScale, .85);
+  simulate(calibration, { start: trial.now, duration: 11_000, fps: 45 });
+  assert.equal(calibration.resolutionScale, 1);
+});
+
+function bindControls(calibration) {
+  class Control extends EventTarget {
+    setAttribute() {}
+    get valueAsNumber() { return Number(this.value); }
+  }
+  const controls = new Map();
+  const control = id => {
+    if (!controls.has(id)) controls.set(id, new Control());
+    return controls.get(id);
+  };
+  globalThis.document = { getElementById: control };
+  const draw = { calls: 1100, triangles: 2_200_000 };
+  const renderer = {
+    domElement: { width: 960, height: 540 }, info: { render: draw },
+    getContext: () => ({ getExtension: () => null, getContextAttributes: () => ({ antialias: false }) }),
+  };
+  calibration.bind({ apply() {}, resize() {}, renderer });
+  return { control, draw };
+}
+
+test('adaptive plateau is reconsidered after graphics or the rendered scene changes', () => {
+  const { open } = setupCalibration();
+  const calibration = open('test', false, 'resolution=adaptive');
+  const { control, draw } = bindControls(calibration);
+  assert.ok(control('pause-auto-quality').disabled && control('pause-benchmark').disabled);
+  assert.match(control('benchmark-status').textContent, /Adaptive cap 60 FPS.*Graphics stay Budget/);
+  const plateau = simulate(calibration, { duration: 15_000, fps: 45 });
+  assert.equal(calibration.resolutionScale, 1);
+
+  draw.calls = 660;
+  const changed = simulate(calibration, { start: plateau.now, duration: 3200, fps: 45 });
+  assert.equal(calibration.resolutionScale, .85);
+  const returned = simulate(calibration, { start: changed.now, duration: 3900, fps: 45 });
+  assert.equal(calibration.resolutionScale, 1);
+
+  const slider = control('pause-quality');
+  slider.value = '1';
+  slider.dispatchEvent(new Event('change'));
+  simulate(calibration, { start: returned.now, duration: 3200, fps: 45 });
+  assert.equal(calibration.quality, 1);
+  assert.equal(calibration.resolutionScale, .85);
+});
+
+test('adaptive recovers detail after headroom returns and avoids repeating a failed recovery', () => {
+  const { open } = setupCalibration();
+  const calibration = open('test', false, 'resolution=adaptive');
+  const { draw } = bindControls(calibration);
+  const down = simulate(calibration, { duration: 3200, fps: 45 });
+  assert.equal(calibration.resolutionScale, .85);
+  const up = simulate(calibration, { start: down.now, duration: 13_000, fps: 60 });
+  assert.equal(calibration.resolutionScale, 1);
+  const failed = simulate(calibration, { start: up.now, duration: 3800, fps: 45 });
+  assert.equal(calibration.resolutionScale, .85);
+  const held = simulate(calibration, { start: failed.now, duration: 25_000, fps: 60 });
+  assert.equal(calibration.resolutionScale, .85);
+
+  draw.triangles = 1_400_000;
+  simulate(calibration, { start: held.now, duration: 16_000, fps: 60 });
+  assert.equal(calibration.resolutionScale, 1);
 });

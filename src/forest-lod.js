@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { climateUniforms } from './climate-state.js';
+import { compactCrownBatch, forestView } from './forest-culling.js';
 
 const profiles = {
   BUDGET: { mapped: [90, 205], regional: [145, 320], detail: .46 },
@@ -13,7 +14,7 @@ const transitions = {
   mapped: { value: new THREE.Vector2() },
   regional: { value: new THREE.Vector2() },
 };
-let budget = false;
+let budget = false, maxCrowns = false;
 export const forestQuality = { detail: { value: 1 } };
 export const forestDetailTiers = {
   '-0.5': [105, 165],
@@ -24,6 +25,7 @@ export const forestDetailTiers = {
 export function setForestQuality(name) {
   const profile = profiles[name] || profiles.HIGH;
   budget = name === 'BUDGET';
+  maxCrowns = name === 'MAX';
   forestQuality.detail.value = profile.detail;
   transitions.mapped.value.fromArray(profile.mapped);
   transitions.regional.value.fromArray(profile.regional);
@@ -166,6 +168,105 @@ export function makeForestCrowns(region, species) {
   return mesh;
 }
 
+export function batchMaxForestCrowns(group, entries, enabled = () => maxCrowns) {
+  if (!entries.length) return;
+  const phase = new THREE.LOD();
+  phase.name = 'Visible far conifer crowns';
+  group.add(phase);
+  const capacity = entries.reduce((sum, { mesh }) => sum + mesh.count, 0);
+  const candidates = [], center = new THREE.Vector3();
+  let batch, previousView, revision, layout = 0;
+
+  function resize(count) {
+    if (batch) {
+      phase.remove(batch);
+      batch.dispose();
+      batch.geometry.dispose();
+    }
+    const limit = Math.min(capacity, Math.ceil(count / 4096) * 4096);
+    const geometry = card.clone();
+    geometry.setAttribute('crownSpecies', new THREE.InstancedBufferAttribute(new Float32Array(limit), 1)
+      .setUsage(THREE.DynamicDrawUsage));
+    batch = new THREE.InstancedMesh(geometry, entries[0].mesh.material, limit);
+    batch.name = entries[0].mesh.name;
+    batch.matrixAutoUpdate = batch.matrixWorldAutoUpdate = false;
+    batch.frustumCulled = false;
+    batch.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    if (entries[0].mesh.instanceColor) {
+      batch.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(limit * 3), 3)
+        .setUsage(THREE.DynamicDrawUsage);
+    }
+    layout++;
+    phase.add(batch);
+  }
+
+  phase.update = camera => {
+    if (!enabled()) {
+      if (batch) batch.visible = false;
+      previousView = undefined;
+      return;
+    }
+    const view = forestView(camera);
+    if (batch) batch.visible = batch.count > 0;
+    if (previousView === view && revision === view.revision) return;
+    previousView = view;
+    revision = view.revision;
+    candidates.length = 0;
+    let count = 0;
+    for (const item of entries) {
+      const { inRange, mesh } = item;
+      if (!inRange || !mesh.layers.test(camera.layers) || !view.frustum.intersectsObject(mesh)) continue;
+      item.depth = center.copy(mesh.boundingSphere.center).applyMatrix4(mesh.matrixWorld).applyMatrix4(view.clip).z;
+      candidates.push(item);
+      count += mesh.count;
+    }
+    if (!count) {
+      if (batch) { batch.visible = false; batch.count = 0; }
+      return;
+    }
+    // Opaque depth ties keep the same cell and instance order as separate draws.
+    candidates.sort((a, b) => a.depth - b.depth || a.mesh.id - b.mesh.id);
+    if (!batch || count > batch.instanceMatrix.count) resize(count);
+    const matrices = batch.instanceMatrix.array;
+    const tints = batch.instanceColor?.array;
+    const species = batch.geometry.attributes.crownSpecies;
+    let first = count, last = 0, offset = 0;
+    for (const item of candidates) {
+      const { mesh } = item;
+      // Another cell may have overwritten this slot while this one was hidden.
+      if (item.batchLayout !== layout || item.batchOffset !== offset) {
+        item.batchOffset = offset;
+        const transform = mesh.matrixWorld.elements;
+        const dx = Math.fround(transform[12]), dy = Math.fround(transform[13]), dz = Math.fround(transform[14]);
+        const start = offset * 16, end = start + mesh.count * 16;
+        matrices.set(mesh.instanceMatrix.array, start);
+        // The source models only translate. Preserve the shader's Float32 sum
+        // of its cell translation and the per-instance root.
+        if (dx || dy || dz) for (let i = start + 12; i < end; i += 16) {
+          matrices[i] += dx;
+          matrices[i + 1] += dy;
+          matrices[i + 2] += dz;
+        }
+        if (tints) tints.set(mesh.instanceColor.array, offset * 3);
+        species.array.set(mesh.geometry.attributes.crownSpecies.array, offset);
+        first = Math.min(first, offset);
+        last = offset + mesh.count;
+      }
+      item.batchLayout = layout + 1;
+      offset += mesh.count;
+    }
+    layout++;
+    batch.count = count;
+    batch.visible = true;
+    if (last <= first) return;
+    for (const attribute of [batch.instanceMatrix, batch.instanceColor, species]) {
+      if (!attribute) continue;
+      attribute.addUpdateRange(first * attribute.itemSize, (last - first) * attribute.itemSize);
+      attribute.needsUpdate = true;
+    }
+  };
+}
+
 const budgetCard = new THREE.BufferGeometry()
   .setAttribute('position', new THREE.Float32BufferAttribute([
     -.37,-.0625,0, .37,-.0625,0, -.37,1.0625,0, .37,1.0625,0,
@@ -190,6 +291,7 @@ export function batchBudgetForestCrowns(group, region, patchSize) {
     cell.combinedCrowns = true;
   }
   if (!patches.size) return;
+  batchMaxForestCrowns(group, [...patches.values()].flatMap(patch => patch.cells.map(cell => cell.proxyEntry)));
   const batches = new THREE.LOD();
   batches.name = 'Distant conifer crowns';
   group.add(batches);
@@ -246,6 +348,8 @@ export class ForestCell extends THREE.LOD {
     this.near = near;
     this.far = far;
     this.proxy = proxy;
+    this.proxyEntry = proxy && { mesh: proxy, inRange: false };
+    this.crowns = (near.isGroup ? near.children : [near]).map(mesh => ({ mesh, select: compactCrownBatch(mesh) }));
     this.add(near,far);
     if (proxy) this.add(proxy);
     this.traverse(object => {
@@ -257,15 +361,22 @@ export class ForestCell extends THREE.LOD {
   update(camera) {
     const distanceSq = this.position.distanceToSquared(camera.position);
     const useProxy = !!this.proxy;
-    this.near.visible = distanceSq <= (this.range.y + this.radius)**2;
-    if (this.near.visible && this.near.isGroup) {
-      for (const mesh of this.near.children) {
+    const near = distanceSq <= (this.range.y + this.radius)**2;
+    if (this.near.isGroup) this.near.visible = near;
+    if (near || !this.near.isGroup) {
+      const view = near && forestView(camera);
+      for (const { mesh, select } of this.crowns) {
         const bounds = mesh.boundingSphere;
-        mesh.visible = !budget || bounds.center.distanceToSquared(camera.position) <= (this.range.y + bounds.radius + 5)**2;
+        const visible = near && (!budget || !this.near.isGroup ||
+          bounds.center.distanceToSquared(camera.position) <= (this.range.y + bounds.radius + 5)**2);
+        select(view, this.range.y, visible);
       }
     }
     const distant = distanceSq >= Math.max(0,this.range.x - this.radius)**2;
     this.far.visible = distant && !useProxy;
-    if (this.proxy) this.proxy.visible = distant && (!budget || !this.combinedCrowns);
+    if (this.proxy) {
+      this.proxyEntry.inRange = distant;
+      this.proxy.visible = distant && (!(budget || maxCrowns) || !this.combinedCrowns);
+    }
   }
 }
