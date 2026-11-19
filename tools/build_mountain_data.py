@@ -557,6 +557,8 @@ def build(config, cache, output):
                   forest={"file": "forest.bin", "cols": cols, "rows": rows},
                   runs=runs, runAreas=areas, lifts=lifts, buildings=buildings,
                   roads=roads, parking=parking, landmarks=landmarks)
+    if (output / "forest-survey.bin").is_file():
+        result["forest"]["survey"] = "forest-survey.bin"
     if not config.get("terrainOnly"):
         metadata = json.loads((cache / "metadata.json").read_text(encoding="utf-8"))
         result["osmTimestamp"] = metadata["source"]["openStreetMap"]["dataTimestamp"]

@@ -14,6 +14,8 @@ Each binary grid stores an unsigned 16-bit little-endian elevation in decimetres
 
 ### Roundhouse and alpine landmarks
 
+The Roundhouse entrance uses an open timber canopy, horizontal cedar balustrade and stone arch. At the PEAK 2 PEAK entrance, the snow apron joins the scanner level and the overhead return rail follows the cabin circuit. The lodge framing, glazing and machinery finishes were interpreted from photographs. [Roundhouse entrance photos](https://www.accessinmotion.org/whistler-blackcomb) · [Ecosign Whistler terminal photos](https://www.ecosign.com/projects/whistler-blackcomb) · [PEAK 2 PEAK machinery photos](https://liftblog.com/peak-2-peak-gondola-whistler-blackcomb-bc/)
+
 The arrival area, terminal, Olympic rings, and inukshuk were modeled from the supplied photographs and mapped station locations and building footprints. Building heights, sculpture and banner placement, and fine surface details are estimates. The supplied JPEGs did not contain GPS metadata. [Roundhouse Lodge footprint](https://www.openstreetmap.org/way/50909775), [Whistler PEAK 2 PEAK footprint](https://www.openstreetmap.org/way/173634036), [Whistler Blackcomb arrival and access notes](https://www.whistlerblackcomb.com/explore-the-resort/about-the-resort/accessibility-in-whistler.aspx)
 
 ### Source notices

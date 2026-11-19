@@ -65,10 +65,13 @@ export function createStationGrading(sampleOriginal) {
         else {
           const entry = whistlerPeakTerminalSite(lift);
           const front = entry.depth / 2;
-          const level = sampleOriginal(entry.surveyX, entry.surveyZ) + entry.datumOffset + entry.deck - .025;
-          // Keep the original ropeway elevation at the survey point, beside the graded footpath.
-          apron(entry, entry.entryX - 4.9, entry.entryX + 4.9, front - 4.2, 55, 7.5, level,
-            { landing: front + 5.2, slope: .125 });
+          // The walk-in apron meets the constructed deck, whose survey point
+          // lies at the terrace grading and terrain LOD transition.
+          const level = sampleOriginal(entry.surveyX, entry.surveyZ) + entry.datumOffset + entry.deck + .67;
+          // The broad pad falls gradually toward the plaza. Keep the survey
+          // point behind it at the existing ropeway elevation.
+          apron(entry, entry.entryX - 7.8, entry.entryX + 7.4, front - 3.3, 55, 6.4, level,
+            { landing: front + 8.2, slope: .10 });
         }
         continue;
       }

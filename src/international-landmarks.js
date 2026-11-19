@@ -4,6 +4,7 @@ import { liftFrame, liftPoint } from './mapped-lift-profile.js';
 import { pointInPolygon } from './mapped-resort-ground.js';
 import { makeTextTexture } from './util.js';
 import { finishLandmarkMaterial } from './international-landmark-materials.js';
+import { buildNisekoLandmarks } from './niseko-landmarks.js';
 
 const concrete = '#a5a49d', snow = '#e1e8e9', trim = '#a9b6bf';
 const steel = '#596970', iron = '#333d43', zinc = '#b9c2c6';
@@ -39,15 +40,16 @@ function setUp(scene, name, ground, env, floorTests, x = 0, y = 0, z = 0, yaw = 
     env.addBox(midpoint(ax, bx), midpoint(az, bz), Math.hypot(ax - bx, az - bz) * .5, depth,
       Math.atan2(bz - az, bx - ax), 'building', { minY: bottom + y, maxY: top + y });
   }
-  function surface(a, b, width, margin = .12) {
+  function surface(a, b, width, margin = .12, maxRise = Infinity) {
     const [ax, ay, az] = world(a), [bx, by, bz] = world(b);
     const length = Math.hypot(bx - ax, bz - az);
     const dx = (bx - ax) / length, dz = (bz - az) / length;
-    floorTests.push((qx, qz) => {
+    floorTests.push((qx, qz, currentY) => {
       const rx = qx - ax, rz = qz - az;
       const t = rx * dx + rz * dz;
       if (t < -margin || t > length + margin || Math.abs(rx * dz - rz * dx) > width * .5) return;
-      return THREE.MathUtils.lerp(ay, by, THREE.MathUtils.clamp(t / length, 0, 1));
+      const surfaceY = THREE.MathUtils.lerp(ay, by, THREE.MathUtils.clamp(t / length, 0, 1));
+      if (currentY == null || surfaceY <= currentY + maxRise) return surfaceY;
     });
   }
   function deck(outline, height, holes = []) {
@@ -444,17 +446,18 @@ function aiguilleDuMidi(scene, _config, ground, env, floors) {
   top.finish();
 }
 
-const builders = { 'ski-arlberg': galzig, 'verbier-4-vallees': montFort, 'chamonix-mont-blanc': aiguilleDuMidi };
+const builders = { 'ski-arlberg': galzig, 'verbier-4-vallees': montFort, 'chamonix-mont-blanc': aiguilleDuMidi,
+  'niseko-united': buildNisekoLandmarks };
 
 export function buildInternationalLandmarks(scene, config, ground, env) {
   const build = builders[config.id];
   if (!build) return;
   const floors = [];
-  build(scene, config, ground, env, floors);
+  build(scene, config, ground, env, floors, setUp);
   if (!floors.length) return;
-  env.walkSurfaceAt = (x, z) => {
+  env.walkSurfaceAt = (x, z, currentY) => {
     let y = -Infinity;
-    for (const height of floors) y = Math.max(y, height(x, z) ?? -Infinity);
+    for (const height of floors) y = Math.max(y, height(x, z, currentY) ?? -Infinity);
     return Number.isFinite(y) ? Math.max(y, ground.heightAt(x, z)) : undefined;
   };
 }

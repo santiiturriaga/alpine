@@ -24,6 +24,7 @@ For company, have a friend open the same resort and drop in. You’ll join the s
 - Open **G** for the Blackcomb Glacier cave, Springboard race, Whiskey Jack slalom, or summer biking. **L** opens the outfitter. Your gear, coins, field photos, and profile save in your browser.
 - Visit the outfitter and barber in Whistler Village to try on a shell or change your hair. Traverse ski shoes cost eight mountain coins and make it easier to walk uphill through snow.
 - Ride Galzigbahn at St. Anton, climb the stairs at Mont Fort, or cross the footbridge at Aiguille du Midi. Each is marked on its resort map. [Landmark photos, plans and elevation sources](data/mountains/INTERNATIONAL-LANDMARKS.md)
+- At Niseko, step onto the NEST813 terrace for a view of Mount Yōtei, then ski through the birches at Grand Hirafu. At Stevens Pass, start on foot and cross US 2 from the parking lots to the lodge. [NEST813 terrace](https://santiiturriaga.github.io/alpine/?mountain=niseko-united&start=view:nest813) · [Stevens footbridge](https://santiiturriaga.github.io/alpine/?mountain=stevens-pass&start=stevens-overpass)
 - Press **Esc** for graphics quality, **Realism**, and the Field Guide. Realism uses the terrain around each point to shade sheltered snow as the sun moves. Ice and gondola glass reflect the colour of the sky.
 
 ## Run it locally

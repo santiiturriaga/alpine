@@ -102,10 +102,11 @@ function clearTerminalPoint(anchor, towardLine, gauge, shoulder, ground, roofHei
   return anchor;
 }
 
-function addSupportDistances(route, towers) {
+function addSupportDistances(route, towers, enclosure) {
   const explicit = towers.map(liftPoint).map(route.project).filter(p => p.gap < 20)
     .map(p => p.distance).sort((a, b) => a - b);
-  const candidates = [0, ...route.levels.slice(1, -1), ...explicit, route.length].sort((a, b) => a - b);
+  const mouths = [enclosure.bottom, route.length - enclosure.top];
+  const candidates = [0, ...route.levels.slice(1, -1), ...explicit, ...mouths, route.length].sort((a, b) => a - b);
   const stops = [0];
   for (const distance of candidates.slice(1, -1)) {
     if (distance - stops.at(-1) > 7 && distance < route.length - 7) stops.push(distance);
@@ -138,17 +139,23 @@ export function buildLiftProfile(def, ground, gauge, shoulder, surface, carpet, 
   const route = sampleRoute(points);
   const stationDrop = def.kind === 'gondola' ? 3.62 : stationClearance;
   const bottom = route.at(0), top = route.at(route.length);
-  const supports = surface ? route.levels : addSupportDistances(route, def.towers ?? []);
+  const enclosure = { bottom: 0, top: 0, ...def.stationEnclosure };
+  const enclosureAt = distance => distance < route.length * .5 ? enclosure.bottom : enclosure.top;
+  const supports = surface ? route.levels : addSupportDistances(route, def.towers ?? [], enclosure);
   const edges = supports.map(route.at);
+  const terrainRail = frame => Math.max(...[-gauge - shoulder, -gauge, gauge, gauge + shoulder]
+    .map(lateral => frame.world(lateral, 0)).map(p => ground.heightAt(p.x, p.z)));
   const heights = edges.map((frame, i) => {
     if (surface) return ground.heightAt(frame.x, frame.z) + (carpet ? .09 : 1.55);
     if (i === edges.length - 1 && def.upperCableElevation != null) return def.upperCableElevation;
     if (i === 0 || i === edges.length - 1) return stationY(frame, ground, gauge, i > 0, stationDrop, shoulder);
+    const distance = supports[i];
+    if (Math.min(distance, route.length - distance) <= enclosureAt(distance) + .001) {
+      return terrainRail(frame) + stationDrop + .08;
+    }
     return ground.heightAt(frame.x, frame.z) + 6.65;
   });
 
-  const terrainRail = (frame) => Math.max(...[-gauge - shoulder, -gauge, gauge, gauge + shoulder]
-    .map(lateral => frame.world(lateral, 0)).map(p => ground.heightAt(p.x, p.z)));
   const sweepRadius = Math.hypot(shoulder, 1.5) + .55;
   const roofRail = (frame) => {
     const a = frame.world(gauge, 0), b = frame.world(-gauge, 0);
@@ -160,10 +167,12 @@ export function buildLiftProfile(def, ground, gauge, shoulder, surface, carpet, 
       for (let j = 1; j <= Math.ceil(span); j++) {
         const fraction = j / Math.ceil(span), distance = start + span * fraction;
         const terminal = Math.min(distance, route.length - distance);
+        const shelterLength = enclosureAt(distance);
         const frame = route.at(distance);
         const groundY = terrainRail(frame);
-        const clearance = lerp(stationDrop - .24, Math.max(cableClearance, stationDrop + 1.05), smoothstep(0, 12, terminal));
-        const roofY = roofHeightNear && terminal >= stationApproach ? roofRail(frame) : -Infinity;
+        const clearance = lerp(stationDrop - .24, Math.max(cableClearance, stationDrop + 1.05),
+          smoothstep(shelterLength, shelterLength + 12, terminal));
+        const roofY = roofHeightNear && terminal >= Math.max(stationApproach, shelterLength) ? roofRail(frame) : -Infinity;
         const requiredY = Math.max(groundY + clearance, roofY + stationDrop + .55);
         const deficit = requiredY + 4 * sag(span) * fraction * (1 - fraction)
           - lerp(heights[i - 1], heights[i], fraction);

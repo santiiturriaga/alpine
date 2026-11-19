@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { box, mergeParts, part } from './scenery.js';
 import { lerp, makeCanvas, makeTextTexture, mulberry32 } from './util.js';
 import { GEMINI_TRAVERSE, STEVENS_CREEKS } from './stevens-pass-terrain.js';
+import { buildStevensCrossing } from './stevens-pass-crossing.js';
+import { buildParkedVehicles } from './parked-vehicles.js';
 
 const steel = '#697878';
 const snow = '#edf3f4';
@@ -125,8 +127,7 @@ function drawCreeks(group, ground) {
   }
 }
 
-function parking(group, config, ground, env, pointInPolygon) {
-  const colors = ['#566775', '#acb0ab', '#51473f', '#a7a693', '#315053', '#694341', '#3d4347'];
+function parking(group, config, ground, env, pointInPolygon, nearCrossing) {
   const random = mulberry32(200131);
   for (const lot of config.parking) {
     const { points } = lot;
@@ -140,45 +141,26 @@ function parking(group, config, ground, env, pointInPolygon) {
     const sin = Math.sin(yaw), cos = Math.cos(yaw);
     const rows = points.map(([x,z]) => x*sin + z*cos);
     const spans = points.map(([x,z]) => x*cos - z*sin);
-    const pieces = [];
+    const vehicles = [];
     const minRow = Math.min(...rows) + 8, maxRow = Math.max(...rows) - 8;
     const minSpan = Math.min(...spans) + 3.5, maxSpan = Math.max(...spans) - 3.5;
-    let cars = 0;
     for (let lane = minSpan; lane < maxSpan; lane += 12.8) {
       for (let bay = minRow; bay < maxRow; bay += 4.1) {
         const x = lane*cos + bay*sin, z = bay*cos - lane*sin;
-        if (cars >= 29 || random() < .45 || !pointInPolygon(x, z, points) || Math.hypot(x+152,z+39) < 5.8) continue;
+        if (vehicles.length >= 29 || random() < .45 || !pointInPolygon(x, z, points) ||
+            Math.hypot(x+152,z+39) < 5.8 || nearCrossing(x, z)) continue;
         if (![[-2.7,-1.45],[-2.7,1.45],[2.7,-1.45],[2.7,1.45]].every(([dx,dz]) =>
           pointInPolygon(x + dx*cos + dz*sin, z + dz*cos - dx*sin, points))) continue;
         const y = ground.heightAt(x, z);
         if (!env.isOpen(x, y + .6, z, 2.2) || ground.normalAt(x, z).y < .9) continue;
         const carYaw = yaw + (random() < .55 ? Math.PI / 2 : -Math.PI / 2);
-        const carSin = Math.sin(carYaw), carCos = Math.cos(carYaw);
-        const at = (u,h,v) => [x + u*carCos + v*carSin, y + h, z - u*carSin + v*carCos];
-        const paint = colors[Math.floor(random() * colors.length)], height = .51 + random() * .35;
-        const make = (w,h,d,tint,loc) => pieces.push(box(w,h,d,tint,at(...loc),[0,carYaw,0]));
-        make(1.81,.50,4.53,paint,[0,.61,0]);
-        make(1.57,height,2.43,'#323e44',[0,.84+height/2,-.16]);
-        make(1.61,.09,2.46,paint,[0,.84+height,-.15]);
-        make(1.61,.064,2.44,snow,[0,.90+height,-.13]);
-        make(1.67,.07,.89,paint,[0,.912,1.52]);
-        make(1.75,.17,.12,'#263139',[0,.48,2.22]);
-        make(1.75,.14,.11,'#263139',[0,.47,-2.20]);
-        for (const side of [-1,1]) {
-          make(.32,.12,.06,'#dadccb',[side*.66,.71,2.28]);
-          make(.30,.13,.06,'#a33830',[side*.67,.67,-2.26]);
-          make(.064,height+.03,.085,paint,[side*.80,.84+height/2,-.61]);
-          for (const axle of [-1.44,1.34]) {
-            const tire = new THREE.CylinderGeometry(.355,.355,.22,10).rotateZ(Math.PI/2);
-            pieces.push(part(tire,'#232626',at(side*.82,.33,axle),[0,carYaw,0]));
-          }
-        }
+        const colorRoll = random(), shapeRoll = random();
+        const height = .51 + shapeRoll * .35;
+        vehicles.push({ x, y, z, yaw:carYaw, colorRoll, shapeRoll });
         env.addBox(x, z, .92, 2.26, -carYaw, 'parked-car', { minY: y, maxY: y + height + 1 });
-        cars++;
       }
     }
-    if (!pieces.length) continue;
-    buildParts(group, pieces, 'Parking lot ' + lot.name + ' · parked vehicles', .59);
+    if (vehicles.length) buildParkedVehicles(group, ground, vehicles, 'Parking lot ' + lot.name + ' · parked vehicles');
   }
 }
 
@@ -299,13 +281,15 @@ export function buildStevensPassDetails(scene, config, ground, env, pointInPolyg
   const group = new THREE.Group();
   group.name = 'Stevens Pass · basecamp, Tye River and Mill Valley';
   scene.add(group);
+  const nearCrossing = buildStevensCrossing(group, config, ground, env);
   drawCreeks(group, ground);
-  parking(group, config, ground, env, pointInPolygon);
+  parking(group, config, ground, env, pointInPolygon, nearCrossing);
   basecamp(group, ground, env);
   pylons(group, ground, env);
   geminiRockCut(group, ground);
   directionalSign(group,ground,env,557.6,1388.8,Math.PI,'GEMINI','MILL VALLEY   •   SKID ROAD ↓');
   directionalSign(group,ground,env,754,1841.7,-Math.PI/2,'GEMINI','JUPITER EXPRESS   •   MILL VALLEY ↖');
   directionalSign(group,ground,env,-120,-40,Math.PI/2,'STEVENS PASS','WEST PARKING 3   •   BASE AREA →');
+  directionalSign(group,ground,env,200.4,-135.7,1.25,'LOT A','DROP-OFF  ·  PEDESTRIAN BRIDGE',2.4);
   return group;
 }

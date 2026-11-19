@@ -5,6 +5,8 @@ import { buildAerialLanes, buildLiftConnector, buildLiftTerminal, buildSurfaceLi
   createLiftInstances, gondolaGeometry, movingGlass, seatedRiderGeometry } from './mapped-lift-machinery.js';
 
 const TAU = Math.PI * 2;
+const carrierRange = 1450;
+const carrierRadius = 4;
 const views = ['forward','valley','chase'];
 const chairShades = ['#45616a','#6e7d78','#52707a','#71828c'];
 const palettes = [
@@ -178,7 +180,35 @@ function sampleSection(section, elapsed, position,tangent) {
   return 0;
 }
 
-function makeFleet(group, first, second, connector, guestGeometry) {
+function fleetBounds(first, second, connector) {
+  const bounds = new THREE.Box3();
+  for (const lift of second ? [first, second] : [first]) {
+    for (const { point } of lift.profile.samples) bounds.expandByPoint(point);
+  }
+  bounds.expandByScalar(Math.max(first.gauge, second?.gauge ?? 0) + carrierRadius);
+  for (const path of connector ?? []) {
+    const points = path.points;
+    const curveBounds = new THREE.Box3().setFromPoints(points);
+    let maxSpan = 0;
+    for (let i = 1; i < points.length; i++) {
+      maxSpan = Math.max(maxSpan, points[i - 1].distanceTo(points[i]));
+    }
+    // Include the interpolated bend between connector knots as well as the cabin.
+    bounds.union(curveBounds.expandByScalar(maxSpan * 2 + carrierRadius));
+  }
+  return bounds;
+}
+
+function setInstanceCount(mesh, count) {
+  mesh.count = count;
+  mesh.visible = count > 0;
+  if (!count) return;
+  mesh.instanceMatrix.clearUpdateRanges();
+  mesh.instanceMatrix.addUpdateRange(0, count * 16);
+  mesh.instanceMatrix.needsUpdate = true;
+}
+
+function makeFleet(group, first, second, connector, guestGeometry, distantDetail) {
   const sections=fleetSections(first,second,connector);
   let duration=0;
   for(const section of sections) {
@@ -189,14 +219,16 @@ function makeFleet(group, first, second, connector, guestGeometry) {
   const throughput=first.def.chairsPerHour??((first.def.ridersPerHour??(first.detachable?2400:1400))/first.seats);
   const interval=3600/Math.max(1,throughput);
   const n=clamp(Math.round(duration/interval),3,265);
-  const geometry=first.gondola?gondolaGeometry(first):chairGeometry(first);
+  const geometry=first.gondola?gondolaGeometry(first,distantDetail):chairGeometry(first);
   const prefix=second?`${first.def.name} / ${second.def.name}`:first.def.name;
   const body=createLiftInstances(group,geometry.body,n,`${prefix} · carriers`);
   const far=geometry.far?createLiftInstances(group,geometry.far,n,`${prefix} · distant carriers`):null;
   const bar=geometry.bar?createLiftInstances(group,geometry.bar,n,`${prefix} · restraints`):null;
   const glass=geometry.glass?createLiftInstances(group,geometry.glass,n,`${prefix} · glazing`,movingGlass):null;
   const guests=first.gondola?[]:guestGeometry.map((geo,i)=>createLiftInstances(group,geo,Math.ceil(n/2),`${prefix} · riders ${i+1}`));
-  const fleet={sections,duration,n,step:duration/n,shift:0,body,bar,far,glass,guests,first,guestSeats:new Uint8Array(n)};
+  const fleet={sections,duration,n,step:duration/n,shift:0,body,bar,far,glass,guests,first,
+    bounds:fleetBounds(first,second,connector),guestSeats:new Uint8Array(n),riderCounts:new Uint16Array(guests.length),
+    detailDistanceSquared:(first.gondola ? 235 : 175)**2};
   first.fleet=fleet;
   if(second)second.fleet=fleet;
   return fleet;
@@ -220,7 +252,8 @@ export async function buildMappedResortLifts(scene, config, ground, env) {
     const a=liftPoint(point),b=liftPoint(def.points[0]);
     return Math.hypot(a.x-b.x,a.z-b.z)>.015;
   }));
-  let deadline=definitions.length>30 ? performance.now()+40 : Infinity;
+  const distantDetail = definitions.length > 30;
+  let deadline=distantDetail ? performance.now()+40 : Infinity;
   async function yieldAfterBatch() {
     if(performance.now()<deadline)return;
     await new Promise(resolve=>setTimeout(resolve,0));
@@ -235,6 +268,8 @@ export async function buildMappedResortLifts(scene, config, ground, env) {
   const mounted=createLiftInstances(group,guestGeometry[0],1,'Player · seated lift rider');
   const mountedPosition=new THREE.Vector3(), mountedTangent=new THREE.Vector3();
   const carrierPosition=new THREE.Vector3(),carrierTangent=new THREE.Vector3();
+  const carrierSphere=new THREE.Sphere(carrierPosition,carrierRadius);
+  const viewProjection=new THREE.Matrix4(),frustum=new THREE.Frustum();
   const cameraPosition=new THREE.Vector3(), chaseDesired=new THREE.Vector3();
   const cameraTarget=new THREE.Vector3(), cameraBoom=new THREE.Vector3();
   const matrix=new THREE.Matrix4(), carriage=new THREE.Matrix4(), local=new THREE.Matrix4();
@@ -259,7 +294,7 @@ export async function buildMappedResortLifts(scene, config, ground, env) {
       Math.hypot(candidate.profile.top.x-top.x,candidate.profile.top.z-top.z)<45&&
       Math.cos(candidate.profile.top.heading-top.heading)<-.45);
     for(const branch of other?[lift,other]:[lift]) {
-      buildAerialLanes(branch.group,branch,ground,colliders,!!other);
+      buildAerialLanes(branch.group,branch,ground,colliders,!!other,distantDetail);
       buildLiftTerminal(branch.group,branch,false,ground,colliders);
       if (branch.def.topArchitecture !== 'aiguille-du-midi') {
         buildLiftTerminal(branch.group,branch,true,ground,colliders,!!other);
@@ -267,7 +302,7 @@ export async function buildMappedResortLifts(scene, config, ground, env) {
     }
     const connector=other?buildLiftConnector(group,lift,other,ground,colliders):null;
     if(other)paired.add(other);
-    fleets.push(makeFleet(group,lift,other,connector,guestGeometry));
+    fleets.push(makeFleet(group,lift,other,connector,guestGeometry,distantDetail));
   }
   for(const lift of lifts) {
     lift.exitPose=mappedExit(lift,config,ground,colliders,env);
@@ -304,59 +339,66 @@ export async function buildMappedResortLifts(scene, config, ground, env) {
   }
 
   function animateFleets(camera) {
-    mounted.count=0;
+    setInstanceCount(mounted,0);
+    if(camera) {
+      camera.updateWorldMatrix(true,false);
+      frustum.setFromProjectionMatrix(viewProjection.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse));
+    }
     for(const lift of lifts) for(const wheel of lift.wheels) wheel.rotation.y=-clock*lift.speed/lift.gauge;
     for(const fleet of fleets) {
       let nearCount=0,farCount=0;
-      const riderCounts=[0,0,0,0];
-      let occupied=false;
-      for(let i=0;i<fleet.n;i++) {
-        const phase=carrierPhase(fleet,i,clock), section=carrierSection(fleet,phase);
-        const stationDistance=sampleSection(section,phase-section.offset,carrierPosition,carrierTangent);
-        const distance=camera?camera.position.distanceToSquared(carrierPosition):0;
-        const passenger=active?.lift.fleet===fleet&&active.slot===i;
-        if(distance>1450**2&&!passenger)continue;
-        const heading=Math.atan2(carrierTangent.x,carrierTangent.z);
-        carriage.makeRotationY(heading).setPosition(carrierPosition);
-        if(fleet.far&&distance>175**2&&!passenger) {
-          fleet.far.setMatrixAt(farCount++,carriage);
-          continue;
-        }
-        if(!fleet.first.gondola) {
-          const roll=Math.sin(clock*1.4+i*3.17)*.012*smoothstep(2,16,stationDistance);
-          lean.makeRotationZ(roll);carriage.multiply(lean);
-        }
-        fleet.body.setMatrixAt(nearCount,carriage);
-        if(fleet.glass)fleet.glass.setMatrixAt(nearCount,carriage);
-        if(fleet.bar) {
-          anchor.makeTranslation(0,-1.77,-.253);
-          turn.makeRotationX(turnClass(fleet.first,stationDistance));
-          matrix.copy(carriage).multiply(anchor).multiply(turn);
-          fleet.bar.setMatrixAt(nearCount,matrix);
-        }
-        nearCount++;
-        if(passenger&&fleet.bar&&active.view==='chase') {
-          local.makeTranslation(.19,-2.54,.01);
-          mounted.setMatrixAt(0,matrix.copy(carriage).multiply(local));
-          occupied=true;
-        } else if(ambientRiders&&!passenger&&!fleet.guestSeats[i]&&fleet.guests.length&&distance<106**2&&stationDistance>8.5&&i%3===0) {
-          const palette=(i+fleet.first.seats)%fleet.guests.length;
-          const riderIndex=riderCounts[palette]++;
-          if(riderIndex<fleet.guests[palette].instanceMatrix.count) {
-            local.makeTranslation((i%2===0?-1:1)*.27,-2.54,.01);
-            fleet.guests[palette].setMatrixAt(riderIndex,matrix.copy(carriage).multiply(local));
+      const { riderCounts } = fleet;
+      riderCounts.fill(0);
+      const activeFleet=active?.lift.fleet===fleet;
+      if(!camera||activeFleet||
+        (fleet.bounds.distanceToPoint(camera.position)<=carrierRange&&frustum.intersectsBox(fleet.bounds))) {
+        for(let i=0;i<fleet.n;i++) {
+          const phase=carrierPhase(fleet,i,clock), section=carrierSection(fleet,phase);
+          const stationDistance=sampleSection(section,phase-section.offset,carrierPosition,carrierTangent);
+          const distance=camera?camera.position.distanceToSquared(carrierPosition):0;
+          const passenger=activeFleet&&active.slot===i;
+          if(camera&&!passenger&&(distance>carrierRange**2||!frustum.intersectsSphere(carrierSphere)))continue;
+          const heading=Math.atan2(carrierTangent.x,carrierTangent.z);
+          carriage.makeRotationY(heading).setPosition(carrierPosition);
+          if(fleet.far&&distance>fleet.detailDistanceSquared&&!passenger) {
+            fleet.far.setMatrixAt(farCount++,carriage);
+            continue;
+          }
+          if(!fleet.first.gondola) {
+            const roll=Math.sin(clock*1.4+i*3.17)*.012*smoothstep(2,16,stationDistance);
+            lean.makeRotationZ(roll);carriage.multiply(lean);
+          }
+          fleet.body.setMatrixAt(nearCount,carriage);
+          if(fleet.glass)fleet.glass.setMatrixAt(nearCount,carriage);
+          if(fleet.bar) {
+            anchor.makeTranslation(0,-1.77,-.253);
+            turn.makeRotationX(turnClass(fleet.first,stationDistance));
+            matrix.copy(carriage).multiply(anchor).multiply(turn);
+            fleet.bar.setMatrixAt(nearCount,matrix);
+          }
+          nearCount++;
+          if(passenger&&fleet.bar&&active.view==='chase') {
+            local.makeTranslation(.19,-2.54,.01);
+            mounted.setMatrixAt(0,matrix.copy(carriage).multiply(local));
+            setInstanceCount(mounted,1);
+          } else if(ambientRiders&&!passenger&&!fleet.guestSeats[i]&&fleet.guests.length&&distance<106**2&&stationDistance>8.5&&i%3===0) {
+            const palette=(i+fleet.first.seats)%fleet.guests.length;
+            const riderIndex=riderCounts[palette]++;
+            if(riderIndex<fleet.guests[palette].instanceMatrix.count) {
+              local.makeTranslation((i%2===0?-1:1)*.27,-2.54,.01);
+              fleet.guests[palette].setMatrixAt(riderIndex,matrix.copy(carriage).multiply(local));
+            }
           }
         }
       }
-      fleet.body.count=nearCount;fleet.body.instanceMatrix.needsUpdate=nearCount>0;
-      if(fleet.glass){fleet.glass.count=nearCount;fleet.glass.instanceMatrix.needsUpdate=nearCount>0;}
-      if(fleet.bar){fleet.bar.count=nearCount;fleet.bar.instanceMatrix.needsUpdate=nearCount>0;}
-      if(fleet.far){fleet.far.count=farCount;fleet.far.instanceMatrix.needsUpdate=farCount>0;}
+      setInstanceCount(fleet.body,nearCount);
+      if(fleet.glass)setInstanceCount(fleet.glass,nearCount);
+      if(fleet.bar)setInstanceCount(fleet.bar,nearCount);
+      if(fleet.far)setInstanceCount(fleet.far,farCount);
       for(let i=0;i<fleet.guests.length;i++) {
-        const mesh=fleet.guests[i];mesh.count=Math.min(riderCounts[i],mesh.instanceMatrix.count);
-        mesh.instanceMatrix.needsUpdate=mesh.count>0;
+        const mesh=fleet.guests[i];
+        setInstanceCount(mesh,Math.min(riderCounts[i],mesh.instanceMatrix.count));
       }
-      if(occupied){mounted.count=1;mounted.instanceMatrix.needsUpdate=true;}
     }
   }
 
@@ -455,7 +497,7 @@ export async function buildMappedResortLifts(scene, config, ground, env) {
     const ride=active;
     active=null;
     ride.progress=1;ride.elapsed=ride.duration;ride.remaining=0;
-    mounted.count=0;
+    setInstanceCount(mounted,0);
     if(player.setRiding)player.setRiding(false);
     else player.riding=false;
     if(player.setFootMode)player.setFootMode(!!ride.lift.exitPose.footMode);
@@ -500,7 +542,7 @@ export async function buildMappedResortLifts(scene, config, ground, env) {
     },
     cancel(player) {
       if(!active)return;
-      active=null;mounted.count=0;
+      active=null;setInstanceCount(mounted,0);
       if(player) {
         if(player.setRiding)player.setRiding(false);
         else player.riding=false;

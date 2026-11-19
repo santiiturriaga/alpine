@@ -1,10 +1,11 @@
 import { addPassGate } from './pass-gates.js';
 import * as THREE from 'three';
 import { LIFTS, PEAK_TO_PEAK, VILLAGE_GONDOLA_UPPER } from './worlddata.js';
-import { heightAt } from './terrain.js';
+import { heightAt, terrain } from './terrain.js';
+import { triangleHeight } from './terrain-grid.js';
 import { beam, box, mergeParts, mergedMesh, part } from './scenery.js';
 import { surfaceMaterial } from './materials.js';
-import { makeCanvas, canvasTexture, mulberry32 } from './util.js';
+import { makeCanvas, canvasTexture, mulberry32, smoothstep } from './util.js';
 import { slowBanner } from './alpine-landmarks.js';
 import { timberMesh } from './plaza-materials.js';
 import { makePeak2PeakBadge } from './lift-stations.js';
@@ -40,6 +41,7 @@ function layer(parent, parts, options = {}, surface) {
     mesh.castShadow = mesh.receiveShadow = true;
   } else {
     mesh = mergedMesh(parts, options);
+    if (options.side !== undefined) mesh.material.side = options.side;
   }
   parent.add(mesh);
 }
@@ -58,32 +60,15 @@ function sign(parent, title, subtitle, width, height, position, color = '#293947
     mesh.rotation.y = options.yaw ?? 0; parent.add(mesh); return mesh;
   }
   const { canvas, ctx } = makeCanvas(1024, 256);
-  if (options.badge) {
-    ctx.fillStyle = '#c3c5c4';
-    ctx.beginPath();
-    ctx.moveTo(8, 128); ctx.lineTo(102, 18); ctx.lineTo(922, 18); ctx.lineTo(1016, 128);
-    ctx.lineTo(922, 238); ctx.lineTo(102, 238); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(22, 128); ctx.lineTo(109, 31); ctx.lineTo(915, 31); ctx.lineTo(1002, 128);
-    ctx.lineTo(915, 225); ctx.lineTo(109, 225); ctx.closePath(); ctx.fill();
-    if (options.peakBadge) {
-      // The photo's left PEAK is red; the 2 and right PEAK sit on black.
-      ctx.save(); ctx.clip();
-      ctx.fillStyle='#151b20'; ctx.fillRect(468,0,556,256);
-      ctx.restore();
-    }
-  } else {
-    ctx.fillStyle = color;
-    ctx.fillRect(0, 0, 1024, 256);
-    ctx.strokeStyle = '#c3c5c4';
-    ctx.lineWidth = 6;
-    ctx.strokeRect(8, 8, 1008, 240);
-  }
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, 1024, 256);
+  ctx.strokeStyle = '#c3c5c4';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(8, 8, 1008, 240);
   ctx.fillStyle = '#f3f3ee';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = options.badge ? 'bold 119px Arial' : 'bold 100px Barlow, Arial';
+  ctx.font = 'bold 100px Barlow, Arial';
   ctx.fillText(title, 512, subtitle ? 113 : 132, 865);
   if (subtitle) {
     ctx.fillStyle = '#c7d8e0';
@@ -91,8 +76,8 @@ function sign(parent, title, subtitle, width, height, position, color = '#293947
     ctx.fillText(subtitle, 512, 195, 890);
   }
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height),
-    new THREE.MeshStandardMaterial({ map: canvasTexture(canvas), transparent: !!options.badge,
-      alphaTest: .4, roughness: .67, emissive: 0xffffff, emissiveIntensity: .045 }));
+    new THREE.MeshStandardMaterial({ map: canvasTexture(canvas), roughness: .67,
+      emissive: 0xffffff, emissiveIntensity: .045 }));
   mesh.position.set(...position);
   mesh.rotation.y = options.yaw ?? 0;
   parent.add(mesh);
@@ -120,25 +105,42 @@ function pier(parts, group, x, z, width, length, top, color) {
 function roundhouseBadge(parent, position) {
   const {canvas,ctx}=makeCanvas(512,512);
   ctx.translate(256,256);
-  ctx.fillStyle='#7f3437';ctx.strokeStyle='#e0d9c7';ctx.lineWidth=12;
-  ctx.beginPath();ctx.arc(0,0,224,0,Math.PI*2);ctx.fill();ctx.stroke();
-  ctx.lineWidth=4;ctx.beginPath();ctx.arc(0,0,192,0,Math.PI*2);ctx.stroke();
-  ctx.fillStyle='#e9ddc5';ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.font='bold 51px Arial';ctx.fillText('ROUNDHOUSE',0,-46,365);
-  ctx.font='bold 45px Arial';ctx.fillText('LODGE',0,110);
-  ctx.lineWidth=10;ctx.beginPath();ctx.moveTo(-116,62);ctx.lineTo(-39,-5);
-  ctx.lineTo(5,39);ctx.lineTo(55,-20);ctx.lineTo(121,62);ctx.stroke();
-  const mesh=new THREE.Mesh(new THREE.PlaneGeometry(1.18,1.18),
-    new THREE.MeshStandardMaterial({map:canvasTexture(canvas),transparent:true,alphaTest:.4,roughness:.78}));
+  ctx.fillStyle='#a64632';ctx.strokeStyle='#f0dec0';ctx.lineWidth=11;
+  ctx.beginPath();
+  for(let i=0;i<=160;i++) {
+    const angle=i/160*2*Math.PI, radius=205+13*Math.cos(angle*8);
+    const x=radius*Math.cos(angle),y=radius*Math.sin(angle);
+    if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+  }
+  ctx.closePath();ctx.fill();ctx.stroke();
+  ctx.lineWidth=3;ctx.beginPath();ctx.arc(0,0,179,0,Math.PI*2);ctx.stroke();
+  ctx.fillStyle='#f0dec0';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.font='bold 47px Georgia';
+  const arced = (text, above) => {
+    const radius=135, span=text.length*.148;
+    for(let i=0;i<text.length;i++) {
+      const angle=(i+.5)/text.length*span-span/2;
+      ctx.save();ctx.rotate(angle*(above?1:-1));
+      ctx.fillText(text[i],0,radius*(above?-1:1));ctx.restore();
+    }
+  };
+  arced('ROUNDHOUSE',true);arced('LODGE',false);
+  ctx.fillStyle='#214e68';ctx.lineWidth=6;ctx.beginPath();ctx.arc(0,0,72,0,Math.PI*2);ctx.fill();ctx.stroke();
+  ctx.strokeStyle='#e3be72';ctx.lineWidth=8;
+  ctx.beginPath();ctx.moveTo(-49,29);ctx.lineTo(-19,-12);ctx.lineTo(-2,6);
+  ctx.lineTo(22,-40);ctx.lineTo(51,29);ctx.stroke();
+  const mesh=new THREE.Mesh(new THREE.PlaneGeometry(1.55,1.55),
+    new THREE.MeshStandardMaterial({map:canvasTexture(canvas),transparent:true,alphaTest:.4,roughness:.65,side:THREE.DoubleSide}));
+  mesh.name='Roundhouse Lodge suspended medallion';
   mesh.position.set(...position);parent.add(mesh);
 }
 
-const masonryTones = ['#827463','#968b79','#817b6a','#a49986','#8c806b','#968876','#948a79'];
+const masonryTones = ['#aca699','#c5bcac','#a7a398','#bfb8aa','#9b958a','#d0c7b4','#b3aa9c'];
 function splitStone(parts, left, right, bottom, top, face, rng) {
   for(let y=bottom;y<top-.035;){
-    const height=Math.min(top-y,.089+rng()*.082);
+    const height=Math.min(top-y,.068+rng()*.072);
     for(let x=left;x<right-.026;){
-      const width=Math.min(right-x,.24+rng()*.57),proud=.018+rng()*.041;
+      const width=Math.min(right-x,.17+rng()*.45),proud=.018+rng()*.041;
       const color=masonryTones[Math.floor(rng()*masonryTones.length)];
       parts.push(box(width-.018,height-.014,proud+.018,color,[x+width/2,y+height/2,face+proud/2],
         [(rng()-.5)*.08,0,(rng()-.5)*.022]));
@@ -150,7 +152,7 @@ function splitStone(parts, left, right, bottom, top, face, rng) {
 
 function entranceArch(group, grid, masonry, woodwork, roof) {
   const { x, front, floor, width, steps, tread } = LODGE_CAFE;
-  const z = front + .59, stone = '#8d8980', spring = 2.36, crown = 3.11, half = 3.35;
+  const z = front + .59, stone = '#a8a298', spring = 2.43, crown = 3.19, half = 3.35;
   const bottom = Math.min(-.28, groundFoot(group, x, z, width + 1.8, 1.3));
   const archHeight = px => spring + (crown - spring) * Math.sqrt(Math.max(0, 1 - (px / half) ** 2));
   for (const side of [-1, 1]) {
@@ -161,16 +163,20 @@ function entranceArch(group, grid, masonry, woodwork, roof) {
     const sideX = x + side * 5.87;
     pier(masonry, group, sideX, z - .32, sideWallWidth, 1.08, .83, stone);
   }
-  // Each tapered stone has an actual curved opening below it.
+  // Pale arch blocks ring the opening, with staggered stone courses above them.
   const random=mulberry32(6630);
-  const joints = [];
-  for (let i = 0; i <= 24; i++) joints.push(-half * Math.cos(Math.PI * i / 24));
-  for (let i = 0; i < 24; i++) {
-    const a = joints[i], b = joints[i + 1], left = x + a, right = x + b;
-    const yA = archHeight(a), yB = archHeight(b), color = masonryTones[(random()*masonryTones.length)|0];
-    panel(masonry,[left,yA,z+.68],[right,yB,z+.68],[right,3.828,z+.68],[left,3.828,z+.68],color);
-    panel(masonry,[right,yB,z-.65],[left,yA,z-.65],[left,3.828,z-.65],[right,3.828,z-.65],color);
-    panel(masonry,[left,yA,z-.65],[right,yB,z-.65],[right,yB,z+.68],[left,yA,z+.68],color);
+  for (let i = 0; i < 15; i++) {
+    const a = -half+2*half*i/15, b = -half+2*half*(i+1)/15;
+    const left=x+a, right=x+b, yA=archHeight(a), yB=archHeight(b);
+    panel(masonry,[left,yA,z+.67],[right,yB,z+.67],[right,3.83,z+.67],[left,3.83,z+.67],stone);
+    panel(masonry,[right,yB,z-.65],[left,yA,z-.65],[left,3.83,z-.65],[right,3.83,z-.65],stone);
+    panel(masonry,[left,yA,z-.65],[right,yB,z-.65],[right,yB,z+.72],[left,yA,z+.72],'#a19b8e');
+    const blockA=archHeight(a+.009), blockB=archHeight(b-.009), show=z+.726;
+    const cap=i===7?.37:.255, color=i%2?'#bab3a2':'#cec5b0';
+    panel(masonry,[left+.009,blockA,show],[right-.009,blockB,show],
+      [right-.009,blockB+cap,show],[left+.009,blockA+cap,show],color);
+    const top=Math.max(yA,yB)+cap+.019;
+    splitStone(masonry,left,right,top,3.82,z+.675,random);
   }
   for (const side of [-1, 1]) {
     const pillarX=x+side*3.96;
@@ -183,8 +189,9 @@ function entranceArch(group, grid, masonry, woodwork, roof) {
     masonry.push(box(width - i * .09 + .035, .065, tread + .026, '#a8a398', [x, y - .032, at]));
   }
   woodwork.push(box(width + 1.53,.19,1.45,'#865b3c',[x,3.84,z]));
-  woodwork.push(box(width + 1.65,.14,1.54,'#50372a',[x,3.99,z]));
-  sign(group,'ROUNDHOUSE LODGE','',3.45,.36,[x,3.51,z+.691],'#51392a');
+  woodwork.push(box(width + 1.65,.14,1.54,'#694635',[x,3.99,z]));
+  sign(group,'ROUNDHOUSE LODGE','',3.25,.39,[x,3.10,front+.021],'#352e2a');
+  for (const dx of [-2,0,2]) roof.push(box(.16,.045,.17,'#d6cbac',[x+dx,3.16,z+.11]));
   roof.push(box(width-.5,.034,.08,'#adaca2',[x,floor+.014,front+.078]));
 }
 
@@ -234,26 +241,45 @@ function lodge(scene, grid) {
 
   // Timber-framed entrance, deep gable and matching balcony from the photos.
   const atrium = LODGE_CAFE.x, span = 17.25, gable = 12.55, eave = 9.65, depth = 12.7;
-  const front = LODGE_CAFE.front, back = front - depth, portalZ = front + .59;
-  panel(woodwork, [atrium-span/2,eave,front], [atrium+span/2,eave,front],
-    [atrium,gable,front], [atrium,gable,front], '#64473a');
-  woodwork.push(beam([atrium-span/2-.8,eave,front+.67], [atrium,gable+.25,front+.67], .33, .42, timber));
-  woodwork.push(beam([atrium,gable+.25,front+.67], [atrium+span/2+.8,eave,front+.67], .33, .42, timber));
+  const front = LODGE_CAFE.front, back = front - depth, portalZ = front + .86;
+  const lip = span/2+1.1, postDistance = 4.32;
+  const underRoof = dx => gable - Math.abs(dx) / lip * (gable-eave) - .22;
+  const glulam = '#a26940', fascia = '#8e5634', braces = '#72513a';
+  const collar = new THREE.CylinderGeometry(.278,.278,.55,16);
+  const post = new THREE.CylinderGeometry(.234,.255,1,16);
+  const steel = [];
   for (const side of [-1, 1]) {
-    panel(roof, [atrium,gable,back-1], [atrium + side*(span/2+1.1),eave,back-1],
-      [atrium + side*(span/2+1.1),eave,front+1.2], [atrium,gable,front+1.2], '#49382d');
-    const ridgeX=atrium+side*.06, lipX=atrium+side*(span/2+1.1);
+    const lipX=atrium+side*lip;
+    panel(roof, [atrium,gable,back-1], [lipX,eave,back-1],
+      [lipX,eave,front+1.2], [atrium,gable,front+1.2], '#4c3d32');
+    const ridgeX=atrium+side*.06;
     const eaveFront=[lipX,eave,front+1.2],eaveBack=[lipX,eave,back-1];
     group.add(createRoofSnow([[ridgeX,gable,front+1.2],[ridgeX,gable,back-1],eaveBack,eaveFront],
       {seed:136+side,depth:.32,overhang:.17}),createIcicles(eaveBack,eaveFront,{seed:809+side,length:.49}));
-    const x = atrium + side*4.00;
-    woodwork.push(box(.54, 5.95, .56, timber, [x, 6.73, portalZ]));
-    woodwork.push(beam([x,6.93,portalZ], [atrium+side*1.6,10.40,portalZ], .34,.48, timber));
-    woodwork.push(beam([x,8.08,portalZ], [atrium+side*6.9,10.03,portalZ], .34,.45, timber));
+    woodwork.push(beam([lipX,eave-.10,front+1.23],[atrium,gable-.10,front+1.23],.23,.34,fascia));
+    woodwork.push(beam([lipX,eave+.09,front+1.27],[atrium,gable+.09,front+1.27],.12,.12,'#ba8d64'));
+    for (const dx of [1.85,4.62,7.18,9.16]) {
+      const x=atrium+side*dx;
+      woodwork.push(beam([x,underRoof(dx)+.05,back-.95],[x,underRoof(dx)+.05,front+1.25],.22,.26,fascia));
+    }
+    const x=atrium+side*postDistance, top=underRoof(postDistance)-.04;
+    const deckLevel=LODGE_TERRACE.floor;
+    for (const [z,floor] of [[portalZ,deckLevel],[portalZ-3.1,deckLevel],[portalZ-6.5,8.84]]) {
+      woodwork.push(part(post,glulam,[x,(floor+top)/2,z],[0,0,0],[1,top-floor,1]));
+      woodwork.push(beam([x,top-2.9,z],[atrium+side*1.7,underRoof(1.7)-.25,z],.24,.32,braces));
+      woodwork.push(beam([x,top-2.7,z],[atrium+side*7.22,underRoof(7.22)-.10,z],.23,.32,braces));
+      woodwork.push(beam([lipX,eave-.22,z],[atrium,gable-.24,z],.22,.27,braces));
+      if (floor === deckLevel) {
+        steel.push(part(collar,'#9a9b92',[x,7.87,z]));
+        for (const y of [7.61,8.13]) steel.push(part(new THREE.CylinderGeometry(.292,.292,.07,16),'#bec0b8',[x,y,z]));
+        collide(grid,group,x,z,.49,.49,0,top,floor);
+      }
+    }
+    const badgeAnchor=atrium+side*.48;
+    steel.push(beam([atrium+side*3.7,underRoof(3.7),portalZ],[badgeAnchor,10.75,portalZ+.11],.023,.023,'#a9a8a2'));
+    steel.push(beam([x,7.92,portalZ],[badgeAnchor,9.95,portalZ+.11],.023,.023,'#8b8a81'));
   }
-  woodwork.push(box(16.3, .36, .56, timber, [atrium,9.50,portalZ]));
-  woodwork.push(beam([atrium-4.05,7.95,portalZ], [atrium,10.55,portalZ], .20,.27, '#796352'));
-  woodwork.push(beam([atrium+4.05,7.95,portalZ], [atrium,10.55,portalZ], .20,.27, '#796352'));
+  roundhouseBadge(group,[atrium,10.30,portalZ+.13]);
   entranceArch(group,grid,masonry,woodwork,roof);
   carvedBears(group,grid,masonry,woodwork);
 
@@ -264,14 +290,21 @@ function lodge(scene, grid) {
     collide(grid, group, x, 28.8, .75, .88, 0, 3.38);
     splitStone(masonry,x-.365,x+.365,0,3.36,29.233,random);
   }
+  const deckEdge=deckZ+2.36, porchWidth=postDistance*2+.86;
   for (const y of [3.77, 4.76]) {
-    woodwork.push(box(44.2,.15,.12,timber,[1.6,y,deckZ+2.36]));
+    woodwork.push(box(44.2,.15,.12,timber,[1.6,y,deckEdge]));
     woodwork.push(box(3.2,.15,.12,timber,[28.9,y,deckZ+2.36]));
     for(const x of [-20.45,30.45])woodwork.push(box(.12,.15,4.88,timber,[x,y,deckZ-.06]));
   }
+  for (const [i,color] of ['#986138','#a77041','#a26235','#b27945'].entries()) {
+    const y=3.94+.218*i;
+    woodwork.push(box(porchWidth,.204,.148,color,[atrium,y,deckEdge+.031]));
+  }
+  woodwork.push(box(porchWidth+.16,.12,.205,'#ca9b6b',[atrium,4.79,deckEdge+.05]));
   for (let i = 0; i <= 101; i++) {
     const x = deckX - 25.2 + .5*i;
     if(x>23.7 && x<27.3)continue; // open stair landing
+    if(Math.abs(x-atrium)<porchWidth/2)continue;
     woodwork.push(box(i%7===0?.16:.065,.96,.10,timber,[x,4.24,deckZ+2.36]));
   }
   const { stairX, stairTop, stairBottom, stairWidth, floor, steps } = LODGE_TERRACE;
@@ -389,9 +422,9 @@ function lodge(scene, grid) {
     glazing.push(box(2.24,h,.064,color,[x,y,z+.085]));
     block.push(box(.065,h,.13,'#adb0a8',[x,y,z+.09]));
   }
-  roundhouseBadge(group,[atrium,11.05,front+.74]);
   layer(group,masonry,{},'stone');
   layer(group,block);
+  layer(group,steel,{roughness:.52,metalness:.21});
   layer(group,woodwork,{},'timber');
   layer(group,roof,{roughness:.85,side:THREE.DoubleSide});
   layer(group,glazing,{roughness:.29,metalness:.14,transparent:true,opacity:.44,depthWrite:false},'glass');
@@ -433,19 +466,116 @@ function scannerGate(parent, structure, x, y, z) {
   addPassGate(parent,x,y,z,-.69);
 }
 
+function peakApron(terminal, xCenter, doorWidth, zStart, deck) {
+  // The DEM is sampled at metre-scale intervals around the entrance. Stitch
+  // the last approach to the exact threshold and walk the very same triangles.
+  const count=25, length=14.4, halfWidth=doorWidth*.5+2.7;
+  const positions=[], colors=[], indices=[], heights=new Float32Array(count*count);
+  const world=new THREE.Vector3(), color=new THREE.Color(), normal=new THREE.Vector3();
+  for(let j=0;j<count;j++) {
+    const run=j/(count-1)*length, z=zStart+run;
+    for(let i=0;i<count;i++) {
+      const side=(i/(count-1)*2-1)*halfWidth, x=xCenter+side;
+      world.set(x,0,z);
+      terminal.localToWorld(world);
+      const ground=heightAt(world.x,world.z)-terminal.position.y;
+      terrain.sampleSnowSurface(world.x,world.z,color,normal);
+      const taper=(1-smoothstep(8.8,length-.1,run))*(1-smoothstep(doorWidth*.5,halfWidth-.1,Math.abs(side)));
+      const apronY=deck-.086*Math.max(0,run-.38);
+      const elevation=ground-.065+taper*Math.max(0,apronY-(ground-.065));
+      const k=j*count+i;
+      heights[k]=elevation;
+      positions.push(x,elevation,z);
+      colors.push(color.r,color.g,color.b);
+      if(i<count-1&&j<count-1)indices.push(k,k+count,k+1,k+1,k+count,k+count+1);
+    }
+  }
+  const geometry=new THREE.BufferGeometry();
+  geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
+  geometry.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  const snowbank=new THREE.Mesh(geometry,terrain.snowMaterial);
+  snowbank.receiveShadow=true;
+  snowbank.name='PEAK 2 PEAK plaza · doorstep snow';
+  terminal.add(snowbank);
+  return function apronAt(x,z,worldX,worldZ) {
+    const u=(x-xCenter+halfWidth)/(2*halfWidth), v=(z-zStart)/length;
+    if(u<0||u>1||v<0||v>1)return null;
+    const y=terminal.position.y+triangleHeight(heights,count,u*(count-1),v*(count-1));
+    return y>heightAt(worldX,worldZ)?y:null;
+  };
+}
+
+function terminalMachinery(terminal, grid, lift, deck, portalZ) {
+  const path=lift.circulation.sections.find(section=>section.kind==='turn' && !section.upper);
+  const toLocal=point=>terminal.worldToLocal(point.clone());
+  const turn=path.curve.getSpacedPoints(48).map(toLocal);
+  const center=toLocal(path.center);
+  // Keep the visible steel and wheel bogies centered on the moving cabin grips.
+  const start=turn[0], end=turn.at(-1);
+  const approach=point=>new THREE.Vector3(point.x,point.y,portalZ+.7);
+  const points=[approach(start),...turn,approach(end)];
+  const drive=[], floor=[], horizontalRoller=new THREE.CylinderGeometry(.145,.145,.092,12);
+  horizontalRoller.rotateX(Math.PI/2);
+  const hub=new THREE.CylinderGeometry(.057,.057,.105,10); hub.rotateX(Math.PI/2);
+  const red='#9d3229', deckZ=center.z-4.05;
+  function edge(point, across, up) {
+    const inward=new THREE.Vector3(center.x-point.x,0,center.z-point.z);
+    // Each straight guide extends along the lift lanes before it enters the return arc.
+    if(point.z<center.z)inward.z=0;
+    return point.clone().addScaledVector(inward.normalize(),across).addScaledVector(THREE.Object3D.DEFAULT_UP,up);
+  }
+  for(let i=0;i<points.length-1;i++) {
+    const a=points[i],b=points[i+1];
+    for(const [offset,y,color] of [[.03,.21,red],[.04,.62,red],[.47,.49,'#777e7b']]) {
+      drive.push(beam(edge(a,offset,y).toArray(),edge(b,offset,y).toArray(),.16,.19,color));
+    }
+    const gravel=['#51585b','#555a58','#595c5a','#535959'][i%4];
+    const ground=(point,offset)=>edge(point,offset,deck+.012-point.y).toArray();
+    panel(floor,ground(a,-1.90),ground(a,1.82),ground(b,1.82),ground(b,-1.90),gravel);
+    panel(floor,ground(a,-1.92),ground(b,-1.92),ground(b,-2.02),ground(a,-2.02),'#c6a948');
+  }
+  for(let i=0;i<turn.length;i+=2) {
+    const p=turn[i], tangent=turn[Math.min(i+1,turn.length-1)].clone().sub(turn[Math.max(i-1,0)]).normalize();
+    const yaw=Math.atan2(tangent.x,tangent.z), rotation=[0,yaw+Math.PI/2,0];
+    drive.push(part(horizontalRoller,'#32383a',edge(p,-.02,.41).toArray(),rotation));
+    drive.push(part(hub,'#a7ada7',edge(p,-.032,.41).toArray(),rotation));
+    if(i%6===0)drive.push(beam(edge(p,.02,.19).toArray(),edge(p,.47,.62).toArray(),.10,.095,red));
+  }
+  for(let z=portalZ+1.2;z<start.z-.35;z+=.93) {
+    for(const line of [start,end]) {
+      drive.push(part(horizontalRoller,'#2b3438',[line.x,line.y+.41,z],[0,Math.PI/2,0]));
+      drive.push(part(hub,'#9ba19c',[line.x,line.y+.41,z],[0,Math.PI/2,0]));
+    }
+  }
+  const column=new THREE.CylinderGeometry(.245,.285,center.y+.66-deck,16);
+  const sleeve=new THREE.CylinderGeometry(.308,.308,.14,16);
+  for(const z of [deckZ,center.z]) {
+    drive.push(part(column,'#bc873b',[center.x,(deck+center.y+.66)/2,z]));
+    drive.push(part(sleeve,'#9a773f',[center.x,deck+1.54,z]));
+    drive.push(box(.83,.14,.83,'#777975',[center.x,deck+.07,z]));
+    drive.push(box(end.x-start.x+.65,.30,.31,'#6c777c',[center.x,center.y+.68,z]));
+    collide(grid,terminal,center.x,z,.55,.55,0,center.y+.67,deck);
+  }
+  layer(terminal,drive,{roughness:.58,metalness:.18});
+  layer(terminal,floor,{side:THREE.DoubleSide},'stone');
+}
+
 function peakTerminal(scene, grid, lift) {
-  const {x,z,yaw,surveyX,surveyZ,width:span,depth,datumOffset,deck,entryX,entryWidth,canopyDepth}=whistlerPeakTerminalSite(lift);
+  const {x,z,yaw,surveyX,surveyZ,width:span,depth,datumOffset,deck,entryX,entryWidth,canopyDepth}=whistlerPeakTerminalSite(lift.def);
   const terminal = site(scene, 'PEAK 2 PEAK · Whistler terminal', x,z,yaw,heightAt(surveyX,surveyZ)+datumOffset);
   const w=span/2, d=depth/2, entryLeft=entryX-entryWidth/2, entryRight=entryX+entryWidth/2;
   const canopyTop=deck+2.96, canopyFront=d+canopyDepth;
-  const platform=[], roof=[], structure=[], glass=[], windows=[];
+  const platform=[], roof=[], structure=[], glass=[], windows=[], lights=[];
   const rng=mulberry32(2803);
   const upper = (x) => 9.7 - x * .115;
 
   platform.push(box(span-.18,.43,depth+.10,'#818783',[0,deck-.215,0]));
   const threshold=.92;
-  platform.push(box(entryWidth,.18,threshold,'#a0a5a1',[entryX,deck-.09,d+threshold/2]));
+  pier(platform,terminal,entryX,d+threshold/2,entryWidth,threshold,deck,'#a0a5a1');
   structure.push(box(entryWidth-.02,.022,.19,'#929c9e',[entryX,deck+.011,d+.05]));
+  const apronAt=peakApron(terminal,entryX,entryWidth,d+threshold,deck);
   for (const x of [-w+1.4, -6.75, 0, 6.75, w-1.4]) {
     for (const z of [-d+1.4, -12, 0, 12]) {
       const width=1.22, length=1.33, top=deck-.40;
@@ -462,21 +592,33 @@ function peakTerminal(scene, grid, lift) {
   }
   for (const [lo,hi] of [[-w,entryLeft],[entryRight,w]]) {
     const width=hi-lo,x=(lo+hi)/2;
-    pier(platform,terminal,x,d,width,.36,deck+.68,'#878e8e');
+    pier(platform,terminal,x,d,width,.36,deck+.24,'#848984');
     collide(grid,terminal,x,d,width,.32,0,canopyTop,groundFoot(terminal,x,d,width,.36));
-    const count=Math.ceil(width/1.5), pane=width/count;
+    const count=Math.ceil(width/1.38), pane=width/count;
     for (let i=0;i<count;i++) {
       const x=lo+(i+.5)*pane;
-      windows.push(box(pane-.084,1.83,.055,'#75909e',[x,deck+1.63,d+.14]));
-      structure.push(box(.094,2.05,.133,'#6f7d7e',[lo+i*pane,deck+1.62,d+.17]));
+      const tone=['#597989','#71909a','#63828c'][i%3];
+      windows.push(box(pane-.088,2.30,.042,tone,[x,deck+1.42,d+.157]));
+      structure.push(box(.091,2.34,.138,'#82949a',[lo+i*pane,deck+1.42,d+.19]));
+      structure.push(box(.057,2.30,.043,'#a9b4b5',[lo+i*pane,deck+1.42,d+.278]));
     }
-    structure.push(box(width,.122,.22,'#8d9a9e',[x,deck+.72,d+.14]));
-    structure.push(box(width,.34,.23,'#adb2b0',[x,deck+2.66,d+.14]));
+    for (const [y,thickness] of [[.25,.13],[1.16,.065],[2.58,.12]]) {
+      structure.push(box(width,thickness,.22,'#9eaaac',[x,deck+y,d+.17]));
+    }
+    structure.push(box(width,.27,.23,'#a0a8a8',[x,deck+2.73,d+.16]));
   }
 
   // The plaza canopy shelters the front glazing and the low passenger opening.
-  structure.push(box(span+.36,.26,canopyDepth+.3,'#aeb7b7',[0,canopyTop-.13,d+canopyDepth/2]));
-  roof.push(box(span+.40,.12,canopyDepth+.35,snow,[0,canopyTop+.06,d+canopyDepth/2]));
+  const canopyWidth=span+.35, canopyLeft=-canopyWidth/2, canopyRight=canopyWidth/2;
+  const canopyBack=canopyTop+.13, canopyZ=(d+canopyFront)/2;
+  const canopyCorners=[[canopyLeft,canopyBack,d],[canopyRight,canopyBack,d],
+    [canopyRight,canopyTop,canopyFront+.12],[canopyLeft,canopyTop,canopyFront+.12]];
+  panel(roof,...canopyCorners,'#777f80');
+  terminal.add(createRoofSnow(canopyCorners,{depth:.15,seed:526,overhang:.09}),
+    createIcicles(canopyCorners[3],canopyCorners[2],{seed:562,length:.26,spacing:.79}));
+  structure.push(box(canopyWidth,.26,canopyDepth+.14,'#7f8c8e',[0,canopyTop-.135,canopyZ]));
+  structure.push(box(canopyWidth+.10,.21,.16,'#b1b9ba',[0,canopyTop-.045,canopyFront+.09]));
+  structure.push(box(canopyWidth+.10,.047,.22,'#66767a',[0,canopyTop-.163,canopyFront+.10]));
   // The outer corner cantilevers over the Roundhouse stair approach.
   // Its nearest bearing column stays on the station side of that route.
   for (const x of [-w+3.65,entryLeft-.22,entryRight+.22,w-.38]) {
@@ -484,15 +626,24 @@ function peakTerminal(scene, grid, lift) {
     structure.push(box(.25,canopyTop-foot,.28,'#8a9799',[x,(canopyTop+foot)/2,z]));
     collide(grid,terminal,x,z,.25,.28,0,canopyTop,foot);
   }
-  for (const x of [entryLeft,entryRight]) structure.push(box(.15,2.86,.19,'#a0acad',[x,deck+1.43,d+.22]));
+  for (const [x,side] of [[entryLeft,-1],[entryRight,1]]) {
+    const leaf=1.11, center=x+side*leaf/2, z=d+.324;
+    structure.push(box(.152,2.75,.17,'#a4b2b5',[x,deck+1.38,z]));
+    structure.push(box(.083,2.45,.089,'#7d8e94',[x+side*leaf,deck+1.255,z+.056]));
+    for(const y of [.08,1.0,2.45]) structure.push(box(leaf,.064,.09,'#889a9e',[center,deck+y,z+.058]));
+    windows.push(box(leaf-.076,2.34,.04,'#89a5ad',[center,deck+1.26,z+.053]));
+    structure.push(box(.035,.26,.061,'#a6adab',[x+side*.32,deck+1.01,z+.127]));
+  }
+  structure.push(box(entryWidth+2.35,.20,.24,'#6f7c80',[entryX,deck+2.58,d+.325]));
+  structure.push(box(entryWidth-.15,.014,.82,'#474e50',[entryX,deck+.01,d-.58]));
   for (const x of [-9.2,entryX,9.2]) {
-    structure.push(box(1.8,.042,.15,'#d4d3c1',[x,canopyTop-.27,d+1.1]));
+    lights.push(box(1.8,.042,.15,'#e1e2d3',[x,canopyTop-.27,d+1.1]));
   }
 
   // Angled blue upper curtain wall over the sheltered walkway.
   for (const xSide of [-1,1]) {
     const x = w*xSide;
-    const tones = ['#477181','#4d7486','#497889','#507487'];
+    const tones = ['#275063','#305567','#2a5367','#365b6c'];
     const dz = depth/33;
     for (let i=0;i<33;i++) {
       const z0 = -d+i*dz, z1=z0+dz;
@@ -501,22 +652,22 @@ function peakTerminal(scene, grid, lift) {
       panel(glass,[x+outward,deck+1.62,z0],[x+outward,deck+1.62,z1],[x+outward,y,z1],[x+outward,y,z0],
         tones[Math.floor(rng()*tones.length)]);
       windows.push(box(.048,1.43,dz-.055,'#78919f',[x+outward,deck+.87,(z0+z1)/2]));
-      structure.push(box(.078,y-deck,.09,'#70929f',[x+outward,(y+deck)/2,z0]));
+      structure.push(box(.080,y-deck,.125,'#6a8791',[x+outward,(y+deck)/2,z0]));
     }
     for (const y of [deck+.10,deck+1.62,6.51,7.48,8.37,9.54].filter(y=>y<upper(x))) {
-      structure.push(box(.13,.071,depth+.13,frame,[x+xSide*.14,y,0]));
+      structure.push(box(.13,.09,depth+.13,frame,[x+xSide*.14,y,0]));
     }
   }
   for (let i=0;i<28;i++) {
     const x0=-w+span*i/28,x1=-w+span*(i+1)/28;
-    const color=['#426777','#456d81','#456a7c'][Math.floor(rng()*3)];
+    const color=['#254a62','#315973','#2b5168','#2d566c'][Math.floor(rng()*4)];
     panel(glass,[x0,canopyTop,d+.09],[x1,canopyTop,d+.09],[x1,upper(x1),d+.09],[x0,upper(x0),d+.09],color);
-    structure.push(box(.065,upper(x0)-canopyTop,.10,'#75949f',[x0,(upper(x0)+canopyTop)/2,d+.143]));
+    structure.push(box(.070,upper(x0)-canopyTop,.11,'#64818b',[x0,(upper(x0)+canopyTop)/2,d+.143]));
   }
   structure.push(box(span,.15,.18,'#c4cac9',[0,canopyTop+.14,d+.18]));
   for (const y of [7.25,8.29,9.33,10.37]) {
     const xEnd=Math.min(w,(9.67-y)/.115);
-    structure.push(box(xEnd+w,.054,.12,'#b7c5c7',[(xEnd-w)/2,y,d+.14]));
+    structure.push(box(xEnd+w,.083,.12,'#a0b2b6',[(xEnd-w)/2,y,d+.14]));
   }
   sign(terminal,'THE DOUG FORSETH','CHAIR PLAZA',3.35,.71,[10.35,7.62,d+.25],'#586164');
   for(const side of [-1,1]) {
@@ -526,58 +677,84 @@ function peakTerminal(scene, grid, lift) {
   }
   const topCorners=[[-w-.32,upper(-w)+.19,-d-.58],[w+.32,upper(w)+.19,-d-.58],
     [w+.32,upper(w)+.19,d+.58],[-w-.32,upper(-w)+.19,d+.58]];
-  panel(roof,...topCorners,'#606e76');
+  panel(roof,...topCorners,'#7a807d');
   terminal.add(createRoofSnow(topCorners,{depth:.24,seed:474,overhang:.12}),
     createIcicles(topCorners[1],topCorners[2],{seed:95,length:.48}));
   for(const z of [-d-.52,d+.55]) {
     structure.push(beam([-w-.37,upper(-w)+.08,z],[w+.36,upper(w)+.08,z],.22,.3,'#bac3c8'));
   }
-  for(let i=0;i<6;i++){
-    const z = -d + 3.1*i + 1.2;
-    structure.push(box(span-.75,.28,.32,frame,[0,8.15,z]));
-  }
-  for(const x of [-11.05,-4.05]){
-    structure.push(box(.15,.14,depth,'#667984',[x,7.36,0]));
-    for(let z=-d+.8;z<d;z+=1.35){
-      const wheel=new THREE.CylinderGeometry(.19,.19,.15,12);wheel.rotateZ(Math.PI/2);
-      structure.push(part(wheel,'#2c3b43',[x,7.37,z]));
+  // Tapered roof trusses and service purlins are visible from the loading floor.
+  for(let z=-d+1.4;z<d;z+=4.75) {
+    structure.push(box(span-.5,.17,.19,'#88908b',[0,8.07,z]));
+    structure.push(beam([-w+.25,upper(-w)-.16,z],[w-.25,upper(w)-.16,z],.22,.23,'#9aa19d'));
+    for(let x=-w+.45;x<w-.6;x+=3.13) {
+      structure.push(beam([x,8.08,z],[x+1.5,upper(x+1.5)-.17,z],.085,.077,'#899395'));
+    }
+    for(const x of [-9.7,1.1,9.6]) {
+      lights.push(box(1.25,.077,.16,'#ddddc8',[x,7.93,z]));
     }
   }
-  structure.push(box(5.75,.075,8.0,'#d0d2b5',[-3.95,deck+.038,d-8.5]));
-  for(const x of [-12.93,-2.48]){
-    structure.push(box(.085,.055,13.65,'#c4aa49',[x,deck+.035,d-8.1]));
+  for(let x=-w+.20;x<w;x+=1.76) {
+    structure.push(box(.079,.115,depth,'#757e7e',[x,upper(x)-.08,0]));
   }
+  terminalMachinery(terminal,grid,lift,deck,-d);
   const operator=controlBooth(terminal,grid,4.65,d-4.75,deck);
   for(const x of [entryX-1.04,entryX+1.04]){
     scannerGate(terminal,structure,x,deck,d-1.7);
     collide(grid,terminal,x,d-1.7,.27,.30,0,deck+1.34,deck-.02);
   }
   sign(terminal,'GONDOLA ENTRANCE','TICKET SCAN',3.35,.56,[entryX,canopyTop-.40,canopyFront+.16],'#344e59');
-  // The northeast door admits moving cabins from the mapped ropeway.
-  for (const x of [-w,-7.25,7.25,w]) structure.push(box(.42,upper(x),.49,slate,[x,upper(x)/2,-d]));
-  structure.push(box(15.55,.29,.62,'#7b858e',[0,8.3,-d]));
-  sign(terminal,'PEAK 2 PEAK','',8.48,1.76,[-6.45,8.19,d+.28],'#b91f35',{badge:true,peakBadge:true});
-  sign(terminal,'PEAK 2 PEAK','',8.6,1.82,[-w-.235,7.82,4.3],'#b91f35',{badge:true,peakBadge:true,yaw:-Math.PI/2});
-  sign(terminal,'GONDOLA','TO BLACKCOMB',3.2,.76,[-5.4,deck+1.35,d+.235],'#233f50');
+  // The open ropeway bays sit under a continuous ribbed metal end wall.
+  const portal=-d-.06, lintel=8.22;
+  for (const x of [-w,-7.72,-1.46,7.25,w]) {
+    structure.push(box(.42,upper(x)-deck,.47,slate,[x,(upper(x)+deck)/2,portal]));
+  }
+  for(let x0=-w;x0<w;x0+=.275) {
+    const x1=Math.min(w,x0+.265), top=Math.max(lintel+.005,upper(x1));
+    const color=Math.round((x0+w)/.275)%2?'#a5afb2':'#aeb8bb';
+    structure.push(box(x1-x0,top-lintel,.12,color,[(x0+x1)/2,(top+lintel)/2,portal]));
+  }
+  structure.push(box(12.25,.29,.59,'#79868c',[-7.56,lintel-.11,portal]));
+  structure.push(box(w+1.46,.55,.21,'#929d9f',[(w-1.46)/2,deck+.275,portal]));
+  for(const [lo,hi] of [[-1.3,7.04],[7.46,w-.22]]) {
+    const count=Math.ceil((hi-lo)/1.45), bay=(hi-lo)/count;
+    for(let i=0;i<count;i++) {
+      const x=lo+(i+.5)*bay;
+      windows.push(box(bay-.082,upper(x)-deck-.72,.042,'#748e96',[x,(upper(x)+deck+.72)/2,portal]));
+      structure.push(box(.07,upper(x)-deck-.52,.09,'#788e96',[lo+i*bay,(upper(x)+deck+.52)/2,portal]));
+    }
+  }
+  sign(terminal,'PEAK 2 PEAK','',8.48,1.76,[-6.45,8.19,d+.28],'#b91f35',{peakBadge:true});
+  sign(terminal,'PEAK 2 PEAK','',8.6,1.82,[-w-.235,7.82,4.3],'#b91f35',{peakBadge:true,yaw:-Math.PI/2});
+  sign(terminal,'GONDOLA','TO BLACKCOMB',3.2,.76,[-5.4,deck+1.35,d+.312],'#233f50');
   layer(terminal,platform,{},'stone');
-  layer(terminal,structure);
+  layer(terminal,structure,{roughness:.60,metalness:.11});
   layer(terminal,roof,{roughness:.8,side:THREE.DoubleSide});
-  // Double-sided faces keep the glass continuous on both tapered sides.
-  const glazing = new THREE.Mesh(mergeParts(glass),
-    surfaceMaterial('glass', { vertexColors:true, side:THREE.DoubleSide, roughness:.27, metalness:.13 }));
+  const lightMesh=mergedMesh(lights);
+  lightMesh.castShadow=false;
+  lightMesh.material.emissive.set('#d6ddcf'); lightMesh.material.emissiveIntensity=.49;
+  terminal.add(lightMesh);
+  const glazing = new THREE.Mesh(mergeParts(glass, true),
+    surfaceMaterial('glass', { vertexColors:true, side:THREE.DoubleSide, roughness:.36, metalness:.05,
+      transparent:true, opacity:.77, depthWrite:false }));
+  glazing.renderOrder=1;
   terminal.add(glazing);
-  layer(terminal,windows,{transparent:true,opacity:.63,depthWrite:false,roughness:.32},'glass');
+  layer(terminal,windows,{transparent:true,opacity:.39,depthWrite:false,roughness:.32},'glass');
   for(const side of [-1,1]) collide(grid,terminal,side*w,0,.24,depth+.2,0,upper(side*w),deck-.06);
   collide(grid,terminal,0,d+.09,span,.16,0,upper(-w),canopyTop);
+  const c=Math.cos(yaw), s=Math.sin(yaw), level=terminal.position.y+deck;
+  function local(x,z) {
+    const dx=x-terminal.position.x,dz=z-terminal.position.z;
+    return {u:dx*c-dz*s,v:dx*s+dz*c};
+  }
   return { operator, walkSurfaceAt(x,z,y) {
-    const dx=x-terminal.position.x,dz=z-terminal.position.z,c=Math.cos(yaw),s=Math.sin(yaw);
-    const u=dx*c-dz*s,v=dx*s+dz*c;
-    const level=terminal.position.y+deck;
-    if (y<level-.7) return null;
-    if(u>=entryLeft&&u<=entryRight&&v>=d&&v<=d+threshold)return level;
+    const {u,v}=local(x,z);
+    if(v>d+threshold) return apronAt(u,v,x,z);
+    if(y<level-.7)return null;
+    if(u>=entryLeft&&u<=entryRight&&v>=d)return level;
     if(u>=-w+.09&&u<=w-.09&&v<=d&&v>=-d)return level;
     return null;
-  }};
+  } };
 }
 
 
@@ -895,9 +1072,9 @@ function plazaFixtures(scene, grid) {
   return (time) => { slow(time); traffic(time); for(const update of animateFlags) update(time); };
 }
 
-export function buildRoundhouseArrival(scene, grid) {
+export function buildRoundhouseArrival(scene, grid, lifts) {
   const villageLift = LIFTS.find(({id}) => id === VILLAGE_GONDOLA_UPPER);
-  const peakLift = LIFTS.find(({id}) => id === PEAK_TO_PEAK);
+  const peakLift = lifts.lifts.find(({def}) => def.id === PEAK_TO_PEAK);
   lodge(scene,grid);
   const village=villageTerminal(scene,grid,villageLift);
   const peak=peakTerminal(scene,grid,peakLift);
@@ -905,5 +1082,6 @@ export function buildRoundhouseArrival(scene, grid) {
   umbrellaBar(scene,grid);
   const ridge=ridgeView(scene,grid);
   return { update:plazaFixtures(scene,grid), operators:[village.operator,peak.operator],
+    raisedPadAt:peak.walkSurfaceAt,
     walkSurfaceAt(x,z,y) { return olympic(x,z,y)??peak.walkSurfaceAt(x,z,y)??village.walkSurfaceAt(x,z,y)??ridge(x,z,y); } };
 }

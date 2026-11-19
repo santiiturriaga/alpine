@@ -1,5 +1,7 @@
 import { clamp, lerp, smoothstep } from './util.js';
 
+export const STEVENS_OVERPASS_OSM = '167552492';
+
 // Open surveyed channels near Hogsback and Skyline. The culverted reaches
 // under the ski approaches stay covered.
 export const STEVENS_CREEKS = [

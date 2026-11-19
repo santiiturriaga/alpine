@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { bindSnowTraffic, compressSnow, snowTrafficGLSL } from './snow-traffic.js';
-import { stevensHeightDetails } from './stevens-pass-terrain.js';
+import { STEVENS_OVERPASS_OSM, stevensHeightDetails } from './stevens-pass-terrain.js';
 import { climateUniforms } from './climate-state.js';
+import { loadForestSurvey } from './forest-survey.js';
 import { bindSnowCrystals } from './snow-crystals.js';
 import { terrainHorizon, bindTerrainHorizon } from './terrain-horizon.js';
 import { nightRunsFor } from './slope-fixtures.js';
@@ -276,9 +277,15 @@ const materialSource = /* glsl */ `
 function snowMaterial(bounds, field, regional = false, nightLight = null) {
   const material = new THREE.MeshStandardMaterial({ roughness: .91, metalness: 0 });
   const summerTrails = !regional && !!field.summerTexture;
-  material.customProgramCacheKey = () => `mapped-resort-snow-${regional}-${summerTrails}-${!!nightLight}`;
+  const forest = regional ? field.survey?.region : field.survey?.local;
+  material.customProgramCacheKey = () => `mapped-resort-snow-${regional}-${summerTrails}-${!!nightLight}-${!!forest}`;
   material.onBeforeCompile = (shader) => {
     shader.uniforms.resortField = { value: field.texture };
+    if (forest) {
+      shader.uniforms.standMap = { value: forest.texture };
+      shader.uniforms.standBounds = { value: forest.limits };
+      shader.uniforms.standAutumn = climateUniforms.autumn;
+    }
     if (summerTrails) shader.uniforms.summerField = { value: field.summerTexture };
     shader.uniforms.snowpack = climateUniforms.snowpack;
     shader.uniforms.realism = climateUniforms.realism;
@@ -296,6 +303,7 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
       ${materialSource}
       uniform sampler2D resortField;
+      ${forest ? 'uniform sampler2D standMap; uniform vec4 standBounds; uniform float standAutumn;' : ''}
       ${summerTrails ? 'uniform sampler2D summerField;' : ''}
       uniform vec4 resortLimits;
       uniform float snowpack;
@@ -319,13 +327,23 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
         * (1. - groom * .94) * (.63+.37*cliffBed);
       float weather = smoothstep(snowline-165.,snowline+280.,p.y);
       float snow = max(weather, snowpack);
+      ${forest ? `
+        vec4 stand = texture2D(standMap, (p.xz-standBounds.xy)/standBounds.zw) * 2.55;
+        // Keep observed permanent snow through summer. Seasonal snow retreats to those cells.
+        snow = max(stand.b, max(snowpack, weather * smoothstep(.0,.60,snowpack)));
+        vec3 grove = mix(vec3(.105,.184,.075),vec3(.33,.197,.064),standAutumn);
+        // A leafless stand reveals the snow between branches.
+        vec3 bareGrove = mix(vec3(.077,.073,.071),vec3(.35,.365,.372),mountainside);
+        grove = mix(grove, bareGrove, smoothstep(.24,.83,snowpack));
+      ` : ''}
       ${regional ? `
-        float forests = (1.-smoothstep(1330.,1860.+(mountainside-.5)*320.,p.y))
-          * smoothstep(.56,.87,up);
+        float forests = ${forest ? 'stand.r' : '(1.-smoothstep(1330.,1860.+(mountainside-.5)*320.,p.y)) * smoothstep(.56,.87,up)'};
         float canopy = resortNoise(p * vec3(.055,.041,.055));
         vec3 spruce = mix(vec3(.018,.027,.029),vec3(.112,.160,.163),canopy*.7+mountainside*.3);
+        ${forest ? 'spruce = mix(spruce,grove*(.84+.23*canopy),stand.g);' : ''}
         vec3 alpine = mix(vec3(.49,.58,.66),vec3(.85,.91,.95),.55*flutes+.45*mountainside);
         vec3 stone = vec3(.11,.134,.15) * (.54+.70*cliffBed);
+        ${forest ? 'stone = mix(stone,vec3(.16,.21,.095)*(.73+.45*mountainside),stand.a*(1.-cliff));' : ''}
         diffuseColor.rgb *= mix(mix(stone,alpine,(1.-cliff)*snow),spruce,forests*.96);
       ` : `
         float nearDetail = 1. - smoothstep(28.,140.,eye);
@@ -352,14 +370,19 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
         float canopy = resortNoise(p * vec3(.085,.041,.085));
         float underTrees = smoothstep(.17,.81,surface.a);
         vec3 spruce = mix(vec3(.042,.066,.066),vec3(.215,.302,.329),.76*canopy+.24*drift);
+        ${forest ? 'spruce = mix(spruce,grove*(.84+.23*canopy),stand.g);' : ''}
         snowColor *= 1. - underTrees * (.055+.22*(1.-canopy)) * (1.-groom);
         snowColor = mix(snowColor,spruce,underTrees * smoothstep(740.,1720.,eye)*.94);
         snowColor = mix(snowColor,vec3(.207,.25,.279)*(.7+.3*drift),road*.75);
-        ${summerTrails ? `
-          float bare = (1. - smoothstep(.04,.25,snowpack)) * (1. - weather);
-          float grass = smoothstep(.55,.86,up) * (1. - cliff) * bare;
+        ${summerTrails || forest ? `
+          float grass = ${forest ? 'max(stand.a,underTrees*.47)*(1.-road)' : '1.'} * smoothstep(.55,.86,up) * (1. - cliff);
           vec3 meadow = mix(vec3(.095,.127,.055),vec3(.261,.305,.106),mountainside*.55+drift*.45);
-          granite = mix(granite,meadow,grass*.83);
+          ${forest ? 'meadow = mix(meadow,vec3(.29,.22,.105)*(.72+.52*drift),standAutumn*.8);' : ''}
+          granite = mix(granite,meadow,grass*(1.-snow));
+          ${forest ? 'granite = mix(granite,spruce,underTrees*smoothstep(740.,1720.,eye)*(1.-snow));' : ''}
+        ` : ''}
+        ${summerTrails ? `
+          float bare = 1.-snow;
           float path = texture2D(summerField,(p.xz-resortLimits.xy)/resortLimits.zw).r;
           vec3 dirt = mix(vec3(.16,.094,.053),vec3(.30,.211,.115),.56*drift+.44*shallow);
           granite = mix(granite,dirt,smoothstep(.07,.61,path)*bare*.94);
@@ -508,10 +531,11 @@ function sealTerrainEdge(group, main, regional, material) {
 export async function loadMappedGround(scene, config, baseURL) {
   const { bounds, terrain, backdrop, forest, runs, runAreas = [], roads = [], parking = [], summerRoutes = [] } = config;
   const detail = internationalLandmarkSite(config.id)?.terrain;
-  const [dem, regionalDem, cover, detailDem] = await Promise.all([
+  const [dem, regionalDem, cover, detailDem, survey] = await Promise.all([
     loadResortRaster(baseURL, terrain, 2), loadResortRaster(baseURL, backdrop, 2),
     loadResortRaster(baseURL, forest, 1),
     detail ? loadResortRaster(baseURL, detail, 2) : null,
+    loadForestSurvey(baseURL, config).catch(error => { console.warn('Using base forest data.', error); return null; }),
   ]);
   const grid = rasterGrid(dem, terrain, bounds);
   const localPatches = config.id === 'stevens-pass' ? stevensHeightDetails().map((detail) => {
@@ -550,7 +574,10 @@ export async function loadMappedGround(scene, config, baseURL) {
   const heightAt = (x, z, normal, exact) => surfaceGrid(x, z).sample(x, z, normal, exact);
   const regional = rasterGrid(regionalDem, backdrop, backdrop.bounds);
   const forestAt = forestSampler(cover, forest, forest.bounds || bounds);
-  const field = makeSurfaceField(bounds, grid, forestAt, runs, runAreas, roads, parking, summerRoutes);
+  const surfaceRoads = config.id === 'stevens-pass'
+    ? roads.filter(road => road.osmId !== STEVENS_OVERPASS_OSM) : roads;
+  const field = makeSurfaceField(bounds, grid, forestAt, runs, runAreas, surfaceRoads, parking, summerRoutes);
+  field.survey = survey;
   field.horizon = terrainHorizon(dem, terrain.cols, terrain.rows, bounds);
   const nightLight = nightRunsFor(config).length
     ? { texture: { value: null }, limits: { value: new THREE.Vector4() }, strength: { value: 0 } } : null;
@@ -574,11 +601,15 @@ export async function loadMappedGround(scene, config, baseURL) {
   scene.add(group);
 
   const fieldSample = {};
+  const landscapeSample = [0, 0, 0];
+  const liftBases = config.lifts.map(lift => lift.bottomElevation).filter(Number.isFinite);
   const snowColor = new THREE.Color(), packed = new THREE.Color().setRGB(.847, .908, .973);
   const powder = new THREE.Color().setRGB(.831, .890, .956), iceColor = new THREE.Color().setRGB(.591, .725, .833);
   const ground = {
     mesh: group, bounds, snowMaterial: localMaterial,
-    forestAt, fieldAt(x, z, out = {}) { return field.at(x, z, out); },
+    snowlineOffset: survey && liftBases.length ? Math.min(...liftBases) - 630 : 0,
+    forestAt, sampleStand: survey?.local.sample,
+    fieldAt(x, z, out = {}) { return field.at(x, z, out); },
     heightAt,
     setNightLightField({ texture, limits }) {
       if (!nightLight) return null;
@@ -589,8 +620,12 @@ export async function loadMappedGround(scene, config, baseURL) {
     normalAt(x, z, out = new THREE.Vector3()) { heightAt(x, z, out, true); return out; },
     surfaceAt(x, z, out = {}) {
       const pack = climateUniforms.snowpack.value;
-      const cover = pack > .98 ? 1 : Math.max(pack, smoothstep(-165, 280,
-        heightAt(x, z) - climateUniforms.snowline.value));
+      let cover = 1;
+      if (pack <= .98) {
+        const weather = smoothstep(-165, 280, heightAt(x, z) - climateUniforms.snowline.value);
+        cover = survey ? Math.max(survey.local.sample(x,z,landscapeSample)[2] / 100, pack,
+          weather * smoothstep(0,.60,pack)) : Math.max(pack, weather);
+      }
       if (cover < .28) {
         out.id = 'ground';
         out.grip = 1;

@@ -4,6 +4,12 @@ These structures use hand-built geometry in the same local metre grids as the re
 
 The two summit terrain patches use metre-scale triplanar granite shading on exposed slopes. Stone joints, concrete weathering and the variation between panes are procedural finishes based on the reference photographs.
 
+## Grand Hirafu and Hanazono, Niseko United
+
+The Ace Gondola follows its mapped lift axis. At the upper terminal, the glazed NEST813 terrace, stairs and cloud-shaped seats face Mount Yōtei. The operator lists the terrace at 813 m. Its walking surface sits at 815.2 m in the game to fit the terrain grid and moving cable. [Grand Hirafu terrace](https://www.grand-hirafu.jp/green/restaurants/?tab=nest813) · [Tokyu Land station announcement](https://www.tokyu-land.co.jp/english/news/2024/001408.html)
+
+At Hanazono, the sloping roof and tall glass façade of EDGE face the lift plaza. The 308 Resort Center and the canopies over Hanazono #1 and Symphony use local footprints and reference photos. GSI aerial imagery sets the roof outlines and adjacent clearings. Frame sections, interior fittings and clearances are modeled estimates. [Nikken Sekkei's EDGE project](https://www.nikken.co.jp/en/projects/office/niseko_hanazono_resort_new_restaurant_cafe_and_bar_hanazono_edge.html) · [Hanazono lift photographs](https://hanazononiseko.com/en/blog/height-rescue-drill-2021-22winter) · [GSI map imagery](https://maps.gsi.go.jp/development/ichiran.html)
+
 ## Galzigbahn valley station, Ski Arlberg
 
 The glass and triangulated steel shell follows the long axis of the cable line in St. Anton. OpenStreetMap way 193437922 sets the plan envelope, approximately 67 m long and 24 m wide on the main apron. The glazed shell rises toward the uphill cable opening, above sloping concrete sidewalls. The two visible 9 m raise wheels are based on the manufacturer’s installation description. The lift carries riders along the game’s existing loading and cable path. The exposed wheels are fixed scenery. Glazing panel sizes, concrete grades, the varying section heights and the wall openings are photo-based estimates.

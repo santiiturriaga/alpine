@@ -24,6 +24,7 @@ import {
 import { buildMappedResortLifts } from './mapped-resort-lifts.js';
 import { buildMappedResortPeople } from './mapped-resort-people.js';
 import { buildMappedResortWorld } from './mapped-resort-world.js';
+import { STEVENS_OVERPASS_START } from './stevens-pass-crossing.js';
 import { applyInternationalLandmarkSites } from './international-landmark-sites.js';
 import { Outfitter } from './outfitter.js';
 import { Expeditions } from './expeditions.js';
@@ -394,6 +395,8 @@ export async function startMappedResort(mountain) {
     quickChoices.push({ id, label: spot.name });
   }
   if (config.id === 'stevens-pass') {
+    arrivals.set('stevens-overpass', { name: 'US 2 Pedestrian Bridge', pose: STEVENS_OVERPASS_START, footMode: true });
+    quickChoices.push({ id: 'stevens-overpass', label: 'US 2 Pedestrian Bridge' });
     for (const [id, name, x, z, heading] of [
       ['clock-tower', 'Basecamp · Clock Tower', 169.4, -20.6, 2.12],
       ['west-parking', 'West Parking · Lift View', -152, -39, 1.18],

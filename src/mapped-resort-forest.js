@@ -59,7 +59,7 @@ function exclusionMap(config) {
   }
   for (const road of config.roads ?? []) corridor(road.points, /primary|motorway|trunk/i.test(road.kind) ? 11 : 7);
   if (config.id === 'stevens-pass') corridor(STEVENS_POWERLINE, 15);
-  for (const { points } of [...(config.buildings ?? []), ...(config.parking ?? []), ...(config.runAreas ?? [])]) {
+  for (const { points } of [...(config.buildings ?? []), ...(config.parking ?? []), ...(config.runAreas ?? []), ...(config.landmarkClearings ?? [])]) {
     if (points.length < 3) continue;
     const x = points.map(p => p[0]), z = points.map(p => p[1]);
     add((x, z) => pointInPolygon(x, z, points), Math.min(...x), Math.max(...x), Math.min(...z), Math.max(...z));
@@ -101,7 +101,7 @@ function resortForestTiles(config) {
 export async function buildMappedForest(scene, ground, config, env) {
   await preloadForestCrowns();
   const group = new THREE.Group();
-  group.name = 'Cascade conifers · mapped canopy and clearings';
+  group.name = 'Mapped woodland and ski clearings';
   scene.add(group);
   const { minX, minZ, maxX, maxZ } = ground.bounds;
   // Keep the close spacing around ski terrain even on multi-valley maps.
@@ -111,14 +111,16 @@ export async function buildMappedForest(scene, ground, config, env) {
   const fullDensity = stride > 1 ? resortForestTiles(config) : null;
   const patchSize = fullDensity ? PATCH * 2 : PATCH;
   const excluded = exclusionMap(config);
-  const patches = new Map();
+  const patches = new Map(), deciduousPatches = new Map();
+  const standSample = [0, 0];
   const normal = new THREE.Vector3();
   let count = 0;
   function plant(tree) {
     const { x, y, z, height } = tree;
     const id = `${Math.floor(x / patchSize)}:${Math.floor(z / patchSize)}`;
-    if (!patches.has(id)) patches.set(id, []);
-    patches.get(id).push(tree);
+    const stands = tree.kind === 'deciduous' ? deciduousPatches : patches;
+    if (!stands.has(id)) stands.set(id, []);
+    stands.get(id).push(tree);
     env.addCircle(x, z, .19 + height * .012, 'tree', { maxY: y + height, minY: y - .7, tree });
     count++;
   }
@@ -134,18 +136,25 @@ export async function buildMappedForest(scene, ground, config, env) {
     const cover = ground.forestAt(x, z);
     const patchiness = .73 + .27 * Math.sin(x * .009 - z * .014 + Math.sin(z * .035) * .9) ** 2;
     if (hash2(ix, iz, 1291) > smoothstep(.10, .84, cover) * patchiness || excluded(x, z)) return;
-    if (ground.normalAt(x, z, normal).y < .56) return;
-    const y = ground.heightAt(x, z);
+    const y = ground.heightAt(x, z, normal, true);
+    if (normal.y < .56) return;
     if (config.id === 'stevens-pass' && !env.isOpen(x, y + .4, z, 1.4)) return;
-    const wind = smoothstep(1430, 1900, y);
+    ground.sampleStand?.(x, z, standSample);
+    const observed = standSample[0];
+    const wind = observed >= 1 ? 1 - smoothstep(5, 19, observed) : smoothstep(1430, 1900, y);
     const age = hash2(ix, iz, 1923);
-    const height = (14 + 29 * age ** .67) * (1 - .59 * wind);
+    const height = observed >= 1 ? Math.max(3, observed) * (.72 + .45 * age ** .68)
+      : (14 + 29 * age ** .67) * (1 - .59 * wind);
     const variety = hash2(ix, iz, 2497);
     const kind = variety > .76 ? 1 : variety > .29 - wind * .14 ? 2 : 0;
     const yaw = hash2(ix, iz, 2131) * Math.PI * 2;
     const spread = .78 + .28 * hash2(ix, iz, 2789);
     const tint = hash2(ix, iz, 311);
-    plant({ x, y, z, height, kind, yaw, spread, tint });
+    if (hash2(ix, iz, 7331) * 100 < standSample[1]) {
+      plant({ x, y, z, height, kind: 'deciduous', rotation: yaw, width: spread });
+    } else {
+      plant({ x, y, z, height, kind, yaw, spread, tint });
+    }
   }
   const lastX = maxX / TREE_SPACING, lastZ = maxZ / TREE_SPACING;
   const center = stride * .5;
@@ -164,8 +173,15 @@ export async function buildMappedForest(scene, ground, config, env) {
   const range = { value: new THREE.Vector2() };
   const farRange = { value: 4400 };
   const branchRange = { value: 0 }, sprayRange = { value: 0 }, twigRange = { value: 0 };
-  let quality = 1;
+  let hardwoods = null;
+  if (deciduousPatches.size) {
+    const forest = await import('./deciduous-forest.js');
+    await forest.preloadDeciduousCrowns();
+    hardwoods = forest.buildDeciduousForest(group, deciduousPatches, config.id);
+  }
+  let quality = 1, qualityName;
   function setQuality(name) {
+    qualityName = name;
     const [min, max, far, detail] = detailProfiles[name] ?? detailProfiles.BALANCED;
     range.value.set(min, max);
     farRange.value = far;
@@ -278,11 +294,15 @@ export async function buildMappedForest(scene, ground, config, env) {
   const details = [...boughs, ...sprays, ...twigs];
   const last = new THREE.Vector3(Infinity, Infinity, Infinity);
   const lastFacing = new THREE.Quaternion();
+  const lastProjection = new THREE.Matrix4();
   const projection = new THREE.Matrix4(), frustum = new THREE.Frustum(), crown = new THREE.Sphere();
   let oldQuality = -1;
   function update(camera) {
+    hardwoods?.update(camera, qualityName);
     const eye = camera.position;
-    if (last.distanceToSquared(eye) < 18 && lastFacing.angleTo(camera.quaternion) < .08 && quality === oldQuality) return;
+    if (last.distanceToSquared(eye) < 18 && lastFacing.angleTo(camera.quaternion) < .08
+      && quality === oldQuality && lastProjection.equals(camera.projectionMatrix)) return;
+    lastProjection.copy(camera.projectionMatrix);
     last.copy(eye);
     lastFacing.copy(camera.quaternion);
     oldQuality = quality;
@@ -301,7 +321,7 @@ export async function buildMappedForest(scene, ground, config, env) {
     const sprayRadius = forestDetailTiers[1][1] * sprayRange.value + 6;
     const twigRadius = forestDetailTiers[2][1] * twigRange.value + 6;
     for (const { tree } of env.queryColliders(eye.x, eye.z, radius)) {
-      if (!tree) continue;
+      if (!tree || tree.kind === 'deciduous') continue;
       const { x, y, z, height, kind } = tree;
       const d = Math.hypot(x - eye.x, z - eye.z, Math.max(0, y - eye.y, eye.y - y - height));
       if (d > radius) continue;

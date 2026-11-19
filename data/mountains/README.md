@@ -9,7 +9,7 @@ Whistler uses its original authored world. The other ski resorts use the shared 
 
 For a new pack, check a known lift's measured vertical rise, a downhill run, a boarding and unload position, and the agreement between the rendered snow and the ski contact surface. Preserve the source date and distinguish measurements from inferred widths, station hardware and façade details.
 
-[International landmark sources](INTERNATIONAL-LANDMARKS.md) documents the research and local terrain patches used at Galzigbahn, Mont Fort and Aiguille du Midi.
+[International landmark sources](INTERNATIONAL-LANDMARKS.md) documents the buildings at Grand Hirafu and Hanazono, the Galzigbahn terminal, and the terrain patches at Mont Fort and Aiguille du Midi.
 
 ## Terrain and trail inventory
 
@@ -30,6 +30,14 @@ The mapped path counts include individual route segments and unnamed connectors.
 The seven mountain visits open at [Paradise](mount-rainier/sources.json), [Col du Midi](mont-blanc/sources.json), [Schwarzsee](matterhorn/sources.json), [Kleine Scheidegg](eiger/sources.json), [Kahiltna Base Camp](denali/sources.json), [Everest Base Camp](everest/sources.json) and [Concordia](k2/sources.json). Their grids sample public elevation sources at 15–35 m spacing and include mapped summit and viewpoint coordinates. The regional grids use 100 m spacing. The sample spacing of the game grid can be smaller than the source resolution. Narrow ridges, crevasses and sharp peaks are generalized by the source and the game grid. Building textures, lift hardware and tree positions are procedural.
 
 ### Attribution
+
+The twelve mapped ski resorts also carry a local landscape survey. The 2021 ESA woodland mask controls where trees can grow, with additional clearings for mapped runs, lifts and buildings. A 64 m game grid supplies estimated canopy height and the proportion of deciduous broadleaf trees. A separate 240 m grid colors woodland on the surrounding mountains. Both grids include grass and permanent snow cover. These shape summer meadows and the snow that survives the summer thaw. Spring and autumn snow are modeled relative to the local lift elevations.
+
+The forest data describe stands of trees. Trunk positions, individual ages and branches are generated. Mixed forest uses a half-broadleaf approximation, and unclassified areas fall back to the existing conifers. Niseko's birch and Vail's aspen models draw on the resorts' descriptions of their forests. Other mapped broadleaf stands use a general branching form. [Hanazono's birch forest](https://hanazononiseko.com/en/summer/resort) · [Vail's Tea Cup Glade](https://www.vail.com/the-mountain/about-the-mountain/the-back-bowls.aspx)
+
+The height samples adapt the 2020 ETH 10 m product from Lang, Jetz, Schindler and Wegner, *A high-resolution canopy height model of the Earth* (2023). Forest class and cover adapt the 2019 100 m Copernicus Global Land Service product by Buchhorn and colleagues. Both datasets have been reprojected, resampled and quantized for the game. [ETH dataset](https://doi.org/10.3929/ethz-b-000609802) · [Journal article](https://doi.org/10.1038/s41559-023-02206-6) · [Copernicus dataset](https://doi.org/10.5281/zenodo.3939050) · [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+
+To rebuild a survey, run `python tools/build_forest_survey.py niseko-united` with NumPy, SciPy, pyproj and rasterio installed. Substitute any mapped resort folder. The builder reads only the source raster windows covering the requested local and regional extents. After editing the deciduous tree geometry, run `python tools/build_deciduous_atlas.py` with Playwright and Chrome installed. It renders the distant crowns from those same branches and packages all mip levels.
 
 - © OpenStreetMap contributors. Pistes, lifts, roads, building outlines, parking and map points use OSM data under ODbL 1.0. [OpenStreetMap attribution](https://www.openstreetmap.org/copyright)
 - Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved. The organisations in charge of the Copernicus programme by law or by delegation do not incur any liability for any use of the Copernicus WorldDEM-30. [Data access](https://registry.opendata.aws/copernicus-dem/) · [Copernicus DEM licence](https://dataspace.copernicus.eu/sites/default/files/media/files/2025-06/copernicus_contributing_mission_data_access_v2_cop_dem_licenses.pdf)

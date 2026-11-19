@@ -1101,6 +1101,8 @@ export class SkiTracks {
     this.maxSegments = maxSegments;
     this.segmentCount = 0;
     this.segmentCursor = 0;
+    this.segmentBirth = new Float64Array(maxSegments);
+    this.chunkSize = 128;
     this.spacing = .24;
     this.columns = [-1, -.81, -.55, -.34, 0, .34, .55, .81, 1];
     this.profile = [0, .08, .75, .22, 0, .22, .75, .08, 0];
@@ -1121,6 +1123,9 @@ export class SkiTracks {
     mat.transparent=true;
     mat.depthWrite=false;
     mat.side=THREE.DoubleSide;
+    // This is an open snow surface, so drawing its front/back in separate
+    // transparent passes only repeats work; the same normals serve both sides.
+    mat.forceSinglePass=true;
     mat.polygonOffset=true;
     mat.polygonOffsetFactor=-1;
     mat.polygonOffsetUnits=-1;
@@ -1205,11 +1210,12 @@ export class SkiTracks {
     geo.setIndex(new THREE.BufferAttribute(idx, 1));
     geo.setDrawRange(0, 0);
     const mat = this.createMaterial();
-    this.mesh = new THREE.Mesh(geo, mat);
+    this.mesh = new THREE.Group();
+    this.material=mat;
     this.mesh.name = 'Continuous pressed ski tracks and powder berms';
+    // Child spans share the ribbon buffers/material and have their own live
+    // bounds so a wake behind the camera can be skipped.
     this.mesh.frustumCulled = false;
-    this.mesh.receiveShadow = true;
-    this.mesh.renderOrder = 1;
     this.scene.add(this.mesh);
     this.geo = geo;
     this.posAttr = geo.attributes.position;
@@ -1218,6 +1224,22 @@ export class SkiTracks {
     this.softAttr = geo.attributes.aSoft;
     this.colorAttr=geo.attributes.color;
     this.normalAttr=geo.attributes.normal;
+    this.chunks=[];
+    for (let start=0;start<max;start+=this.chunkSize) {
+      const geometry=new THREE.BufferGeometry();
+      for (const [name,attribute] of Object.entries(geo.attributes)) geometry.setAttribute(name,attribute);
+      geometry.setIndex(geo.index);
+      geometry.setDrawRange(0,0);
+      geometry.boundingBox=new THREE.Box3();
+      geometry.boundingSphere=new THREE.Sphere();
+      const mesh=new THREE.Mesh(geometry,[mat]);
+      mesh.name=`Pressed ski trail span ${this.chunks.length+1}`;
+      mesh.receiveShadow=true;
+      mesh.renderOrder=1;
+      mesh.visible=false;
+      this.mesh.add(mesh);
+      this.chunks.push({start,end:Math.min(max,start+this.chunkSize),geometry,mesh,dirty:false});
+    }
   }
 
   addStep(left, right, time, snowDepth = 0, options = {}) {
@@ -1274,7 +1296,6 @@ export class SkiTracks {
       this.remainder[ski]=(this.remainder[ski]+length)%this.spacing;
       this.inputs[ski]=row;
     }
-    this.geo.setDrawRange(0,this.segmentCount*(this.columns.length-1)*6);
   }
 
   writeSegment(a,b) {
@@ -1310,6 +1331,8 @@ export class SkiTracks {
         this.normalAttr.setXYZ(vertex,nx/length,ny/length,nz/length);
       }
     }
+    this.segmentBirth[this.segmentCursor]=Math.max(a.time,b.time);
+    this.chunks[Math.floor(this.segmentCursor/this.chunkSize)].dirty=true;
     if (this.uploadCount === 0) this.uploadStart = this.segmentCursor;
     this.uploadCount = Math.min(this.maxSegments, this.uploadCount + 1);
     this.segmentCursor = (this.segmentCursor + 1) % this.maxSegments;
@@ -1327,11 +1350,67 @@ export class SkiTracks {
     this.segmentCursor = 0;
     this.geo.setDrawRange(0, 0);
     this.uploadCount=0;
+    for (const attribute of Object.values(this.geo.attributes)) attribute.clearUpdateRanges();
+    for (const chunk of this.chunks) {
+      chunk.mesh.visible=false;
+      chunk.geometry.clearGroups();
+      chunk.geometry.setDrawRange(0,0);
+      chunk.dirty=false;
+    }
+  }
+
+  updateChunks(time) {
+    let oldest=(this.segmentCursor-this.segmentCount+this.maxSegments)%this.maxSegments;
+    // The shader is completely transparent after 210 seconds. Retire a
+    // segment only when both endpoints have reached that same fade boundary.
+    while (this.segmentCount && time-this.segmentBirth[oldest]>=210) {
+      this.chunks[Math.floor(oldest/this.chunkSize)].dirty=true;
+      oldest=(oldest+1)%this.maxSegments;
+      this.segmentCount--;
+    }
+    const full=this.segmentCount===this.maxSegments;
+    const wraps=!full && this.segmentCount>0 && oldest>=this.segmentCursor;
+    const indices=(this.columns.length-1)*6,vertices=this.columns.length*2;
+    for (const chunk of this.chunks) {
+      if (!chunk.dirty) continue;
+      const geometry=chunk.geometry;
+      geometry.clearGroups();
+      const addSpan=(start,end)=>{
+        start=Math.max(chunk.start,start);end=Math.min(chunk.end,end);
+        if (end>start) geometry.addGroup(start*indices,(end-start)*indices,0);
+      };
+      if (full) addSpan(0,this.maxSegments);
+      else if (this.segmentCount) {
+        if (wraps) { addSpan(0,this.segmentCursor);addSpan(oldest,this.maxSegments); }
+        else addSpan(oldest,this.segmentCursor);
+      }
+      chunk.mesh.visible=geometry.groups.length>0;
+      if (chunk.mesh.visible) {
+        const first=geometry.groups[0],last=geometry.groups[geometry.groups.length-1];
+        geometry.setDrawRange(first.start,last.start+last.count-first.start);
+        // Bounds follow the live rows, including both sides of a partially
+        // overwritten chunk. Endpoints are unchanged across chunk boundaries.
+        const bounds=geometry.boundingBox;
+        bounds.makeEmpty();
+        for (const group of geometry.groups) {
+          const begin=group.start/indices*vertices,end=begin+group.count/indices*vertices;
+          for (let i=begin;i<end;i++) {
+            const x=this.posAttr.getX(i),y=this.posAttr.getY(i),z=this.posAttr.getZ(i);
+            bounds.min.x=Math.min(bounds.min.x,x);bounds.max.x=Math.max(bounds.max.x,x);
+            bounds.min.y=Math.min(bounds.min.y,y);bounds.max.y=Math.max(bounds.max.y,y);
+            bounds.min.z=Math.min(bounds.min.z,z);bounds.max.z=Math.max(bounds.max.z,z);
+          }
+        }
+        bounds.getBoundingSphere(geometry.boundingSphere);
+      } else geometry.setDrawRange(0,0);
+      chunk.dirty=false;
+    }
   }
 
   update(time,player=null,active=true) {
-    this.mesh.material.uniforms.uTime.value = time;
-    const uniforms=this.mesh.material.uniforms;
+    this.material.uniforms.uTime.value = time;
+    this.updateChunks(time);
+    const uniforms=this.material.uniforms;
     uniforms.uSink.value.set(0,0);
     if (player && active) {
       for (let i=0;i<2;i++) {

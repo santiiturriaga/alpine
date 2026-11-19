@@ -2335,7 +2335,7 @@ export async function buildEnvironment(scene, { onProgress = () => {} } = {}) {
   for (const lodge of LODGES) {
     if (lodge.id !== 'roundhouse' && lodge.id !== 'rendezvous') buildLodge(scene, grid, markers, lodge, rand);
   }
-  const roundhouseArrival = buildRoundhouseArrival(scene, grid);
+  const roundhouseArrival = buildRoundhouseArrival(scene, grid, lifts);
   const updateSummitSigns = buildSummitLandmarks(scene);
   roundhouseArrival.update(0);
   updateSummitSigns(0);
@@ -2390,6 +2390,7 @@ export async function buildEnvironment(scene, { onProgress = () => {} } = {}) {
       return glacierCave.walkSurfaceAt(x,z,y) ?? skiersPlaza.walkSurfaceAt(x,z,y) ?? creeksideVillage.walkSurfaceAt(x,z,y)
         ?? roundhouseArrival.walkSurfaceAt(x,z,y) ?? interiors.walkSurfaceAt(x,z,y);
     },
+    raisedPadAt: roundhouseArrival.raisedPadAt,
     interiorAt(x, z, y) { return glacierCave.interiorAt(x,z,y) ?? interiors.interiorAt(x,z,y); },
     lodgeEntrances: interiors.rooms.map(({ id, name, entry }) => ({ id, name, ...entry })),
     queryColliders(x, z, r = 3) { return grid.query(x, z, r); },

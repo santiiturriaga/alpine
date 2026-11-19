@@ -1,6 +1,6 @@
 import { addPassGate } from './pass-gates.js';
 import * as THREE from 'three';
-import { beam, box, mergeParts, part } from './scenery.js';
+import { beam, box, cacheStaticTransforms, mergeParts, part } from './scenery.js';
 import { canvasTexture, makeCanvas } from './util.js';
 
 const dark = '#28343a', zinc = '#7d8c93', light = '#aebbc0', iron = '#53646b';
@@ -29,7 +29,7 @@ function elbow(points, radius, tint) {
 }
 
 export function liftParts(parts) {
-  const geometry = mergeParts(parts);
+  const geometry = mergeParts(parts,true);
   for (const item of parts) item.geo.dispose();
   return geometry;
 }
@@ -131,7 +131,7 @@ export function seatedRiderGeometry(palette) {
   return liftParts(pieces);
 }
 
-export function gondolaGeometry(lift) {
+export function gondolaGeometry(lift, distantDetail = false) {
   const parts = [box(.25,.15,.46,iron,[0,-.06,0]),
     elbow([[0,-.09,0],[0,-.39,.05],[0,-.775,0]],.068,zinc),
     box(1.80,.14,1.91,lift.paint,[0,-.92,0]),
@@ -148,7 +148,39 @@ export function gondolaGeometry(lift) {
     glass.push(box(1.82,1.94,.012,'#4d707f',[0,-1.995,z]));
     for (const x of [-.91,.91]) parts.push(box(.091,2.18,.092,zinc,[x,-1.992,z]));
   }
-  return { body:liftParts(parts), glass:liftParts(glass) };
+  const far = distantDetail ? liftParts([
+    box(.25,.15,.46,iron,[0,-.06,0]),
+    beam([0,-.09,0],[0,-.88,0],.117,.117,zinc),
+    box(1.80,.14,1.91,lift.paint,[0,-.92,0]),
+    box(1.92,.29,2.02,lift.paint,[0,-3.13,0]),
+    box(1.92,.08,2.02,light,[0,-2.946,0]),
+    box(1.84,1.95,1.94,'#455963',[0,-1.988,0]),
+    ...[-.91,.91].flatMap(x => [-.965,.965].map(z => box(.094,2.18,.092,zinc,[x,-1.99,z]))),
+  ]) : null;
+  return { body:liftParts(parts), glass:liftParts(glass), far };
+}
+
+function simplifyRope(points) {
+  const last = points.length - 1;
+  const keep = new Uint8Array(points.length);
+  keep[0] = keep[last] = 1;
+  const pending = [[0,last]], chord = new THREE.Line3(), closest = new THREE.Vector3();
+  while (pending.length) {
+    const [first,end] = pending.pop();
+    chord.set(points[first],points[end]);
+    let next = -1, error = .012**2;
+    for (let i = first + 1; i < end; i++) {
+      chord.closestPointToPoint(points[i],true,closest);
+      const deviation = points[i].distanceToSquared(closest);
+      if (deviation <= error) continue;
+      next = i;
+      error = deviation;
+    }
+    if (next < 0) continue;
+    keep[next] = 1;
+    pending.push([first,next],[next,end]);
+  }
+  return points.filter((point,index) => keep[index]);
 }
 
 function ropeTube(points, radius) {
@@ -197,10 +229,10 @@ function sheaves(parts, gauge, distance, angle, wheels, vintage) {
   }
 }
 
-function support(group, lift, frame, previous, next, index, ground, colliders) {
+function support(group, lift, frame, previous, next, index, ground, colliders, distantDetail) {
   const { gauge, paint, vintage } = lift;
   const y = ground.heightAt(frame.x,frame.z), height = frame.y-y;
-  const root = new THREE.Group();
+  const root = distantDetail ? new THREE.LOD() : new THREE.Group();
   root.position.set(frame.x,frame.y,frame.z); root.rotation.y = frame.heading;
   root.name = `${lift.def.name} · tower ${index + 1}`;
   group.add(root);
@@ -223,11 +255,27 @@ function support(group, lift, frame, previous, next, index, ground, colliders) {
   const grade = Math.atan2(next.y-previous.y,Math.hypot(next.x-previous.x,next.z-previous.z));
   sheaves(parts,gauge,0,-grade,index%4 === 0 ? 8 : 6,vintage);
   parts.push(box(.20,.20,.08,'#5d5131',[0,-1.05,-radius-.05]));
-  assembly(root,parts,'Galvanized mast, foundation, ladder, crosshead and sheaves');
+  const detailed = assembly(root,parts,'Galvanized mast, foundation, ladder, crosshead and sheaves');
+  if (distantDetail) {
+    const silhouette = [
+      cylinder(radius*1.25,height-.20,paint,[0,-height/2-.20,0],undefined,.70*radius,8),
+      cylinder(radius+.25,.55,'#777e7c',[0,-height+.04,0],undefined,radius+.24,8),
+      box(gauge*2+.42,.26,.31,paint,[0,-.42,0]),
+      box(gauge*2+.12,.07,.84,iron,[0,-.645,.155]),
+    ];
+    for (const x of [-gauge,gauge]) {
+      silhouette.push(beam([0,-1.12,0],[x*.79,-.47,0],.095,.122,paint),
+        box(.26,.33,index%4 === 0 ? 2.55 : 1.96,dark,[x,-.17,0],[-grade,0,0]));
+    }
+    const distant = assembly(root,silhouette,'Distant mast, crosshead and sheaves');
+    root.addLevel(detailed);
+    root.addLevel(distant,210,.08);
+    distant.visible = false;
+  }
   colliders.push({ x:frame.x,z:frame.z,r:radius+.21,radius:radius+.21,type:'lift-tower',maxY:frame.y-1.2 });
 }
 
-function sign(group, title, detail, x,y,z,width,heading) {
+function sign(group, title, detail, x,y,z,width,faceOffset) {
   if (typeof document === 'undefined') return;
   const { canvas,ctx } = makeCanvas(768,178);
   ctx.fillStyle='#202e36';ctx.fillRect(0,0,768,178);
@@ -238,8 +286,19 @@ function sign(group, title, detail, x,y,z,width,heading) {
   ctx.font='600 32px "Barlow", Arial';ctx.fillStyle='#d5cdb2';
   ctx.fillText(detail,384,142,714);
   const material = new THREE.MeshStandardMaterial({ map:canvasTexture(canvas), roughness:.74 });
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width,width*178/768),material);
-  mesh.name=title;mesh.position.set(x,y,z);mesh.rotation.y=heading;group.add(mesh);
+  const halfWidth = width / 2, halfHeight = halfWidth * 178 / 768;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position',new THREE.Float32BufferAttribute([
+    -halfWidth,-halfHeight,faceOffset, halfWidth,-halfHeight,faceOffset,
+    -halfWidth,halfHeight,faceOffset, halfWidth,halfHeight,faceOffset,
+    halfWidth,-halfHeight,-faceOffset, -halfWidth,-halfHeight,-faceOffset,
+    halfWidth,halfHeight,-faceOffset, -halfWidth,halfHeight,-faceOffset,
+  ],3));
+  geometry.setAttribute('uv',new THREE.Float32BufferAttribute([0,0,1,0,0,1,1,1,0,0,1,0,0,1,1,1],2));
+  geometry.setIndex([0,1,2,1,3,2,4,5,6,5,7,6]);
+  geometry.computeVertexNormals();
+  const mesh = new THREE.Mesh(geometry,material);
+  mesh.name=title;mesh.position.set(x,y,z);group.add(mesh);
 }
 
 function skinSection(parts, a, b, tint) {
@@ -338,13 +397,15 @@ function operatorShelter(root, parts, frame, ground, colliders, x,z,paint) {
   parts.push(box(2.65,.18,2.95,paint,[x,floor+2.33,z]));
   parts.push(box(2.73,.09,3.03,snow,[x,floor+2.46,z]));
   parts.push(box(2.42,1.01,2.81,iron,[x,floor+1.69,z]));
+  const panes = [];
   for (const s of [-1,1]) {
-    const pane=new THREE.Mesh(new THREE.BoxGeometry(2.19,.71,.026),windowGlass);
-    pane.position.set(x,floor+1.74,z+s*1.412);root.add(pane);
-    const side=new THREE.Mesh(new THREE.BoxGeometry(.027,.71,2.51),windowGlass);
-    side.position.set(x+s*1.22,floor+1.74,z);root.add(side);
+    panes.push(box(2.19,.71,.026,'#fff',[x,floor+1.74,z+s*1.412]),
+      box(.027,.71,2.51,'#fff',[x+s*1.22,floor+1.74,z]));
     for(const dx of [-.37,.37]) parts.push(box(.04,.76,.039,light,[x+dx,floor+1.73,z+s*1.429]));
   }
+  const windows = new THREE.Mesh(liftParts(panes),windowGlass);
+  windows.name = 'Operator shelter windows';
+  root.add(windows);
   parts.push(box(.08,2.05,.83,'#564b3d',[x+1.266,floor+.65,z+.62]));
   colliders.push({ ...p,hw:1.22,hd:1.40,rot:-frame.heading,type:'station',minY:frame.y+bottom,maxY:frame.y+floor+2.46 });
 }
@@ -476,23 +537,29 @@ export function buildLiftTerminal(group, lift, top, ground, colliders, sharedMid
       addPassGate(root,x,y-.24,-2.30,x<gauge?.66:-.66,-1);
     }
   }
-  const signX = top ? -gauge-1.15 : gauge+halfWidth+.83, signZ = top ? -3.65 : -9.0;
-  const signPoint=frame.world(signX,signZ), signY=ground.heightAt(signPoint.x,signPoint.z)-frame.y;
-  parts.push(box(.07,2.05,.08,iron,[signX-1.14,signY+.98,signZ]));
-  parts.push(box(.07,2.05,.08,iron,[signX+1.14,signY+.98,signZ]));
-  parts.push(box(2.66,.618,.08,iron,[signX,signY+1.97,signZ]));
-  sign(root,lift.def.name,top?'UNLOAD':'LIFT ACCESS',signX,signY+1.97,signZ-.042,2.65,Math.PI);
-  sign(root,lift.def.name,top?'UNLOAD':'LIFT ACCESS',signX,signY+1.97,signZ+.042,2.65,0);
+  // The Ace valley architecture already includes its bilingual queue sign.
+  if (architecturalShelter !== 'ace-gondola') {
+    const signX = top ? -gauge-1.15 : gauge+halfWidth+.83, signZ = top ? -3.65 : -9.0;
+    const signPoint=frame.world(signX,signZ), signY=ground.heightAt(signPoint.x,signPoint.z)-frame.y;
+    parts.push(box(.07,2.05,.08,iron,[signX-1.14,signY+.98,signZ]));
+    parts.push(box(.07,2.05,.08,iron,[signX+1.14,signY+.98,signZ]));
+    parts.push(box(2.66,.618,.08,iron,[signX,signY+1.97,signZ]));
+    sign(root,lift.def.name,top?'UNLOAD':'LIFT ACCESS',signX,signY+1.97,signZ,2.65,.042);
+  }
   assembly(root,parts,'Terminal bullwheel, equipment guards and lift queue');
   return root;
 }
 
-export function buildAerialLanes(group,lift,ground,colliders,sharedMidstation) {
+export function buildAerialLanes(parent,lift,ground,colliders,sharedMidstation,distantDetail = false) {
   const { profile,gauge,detachable }=lift;
+  const group = new THREE.Group();
+  group.name = 'Aerial lift line';
+  parent.add(group);
   const samples=profile.samples;
   for(const side of [-1,1]) {
     const points=samples.map(s=>s.point.clone().addScaledVector(s.offset,gauge*side));
-    const rope=ropeTube(points,.029);
+    // Keep the mesh within half a cable radius of the carrier's full path.
+    const rope=ropeTube(distantDetail?simplifyRope(points):points,.029);
     rope.name=side === 1?'Uphill haul rope':'Return haul rope';group.add(rope);
   }
   for(const [top,frame] of [[false,profile.bottom],[true,profile.top]]) {
@@ -505,19 +572,21 @@ export function buildAerialLanes(group,lift,ground,colliders,sharedMidstation) {
     const rope=ropeTube(points,.029);rope.name='Terminal return wrap';group.add(rope);
   }
   const towers=[profile.bottom,...profile.towers,profile.top];
-  profile.towers.forEach((frame,i)=>support(group,lift,frame,towers[i],towers[i+2],i,ground,colliders));
-  if(!detachable&&lift.vintage) return;
-  const droop=[];
-  for(let i=0;i<towers.length-1;i++) {
-    const a=towers[i],b=towers[i+1];
-    for(let j=0;j<5;j++) {
-      const f=j/5;
-      droop.push(new THREE.Vector3(THREE.MathUtils.lerp(a.x,b.x,f),
-        THREE.MathUtils.lerp(a.y,b.y,f)+.26-2.5*f*(1-f),THREE.MathUtils.lerp(a.z,b.z,f)));
+  profile.towers.forEach((frame,i)=>support(group,lift,frame,towers[i],towers[i+2],i,ground,colliders,distantDetail));
+  if (detachable || !lift.vintage) {
+    const droop=[];
+    for(let i=0;i<towers.length-1;i++) {
+      const a=towers[i],b=towers[i+1];
+      for(let j=0;j<5;j++) {
+        const f=j/5;
+        droop.push(new THREE.Vector3(THREE.MathUtils.lerp(a.x,b.x,f),
+          THREE.MathUtils.lerp(a.y,b.y,f)+.26-2.5*f*(1-f),THREE.MathUtils.lerp(a.z,b.z,f)));
+      }
     }
+    droop.push(new THREE.Vector3(profile.top.x,profile.top.y+.26,profile.top.z));
+    const wire=ropeTube(droop,.011);wire.name='Signal line';group.add(wire);
   }
-  droop.push(new THREE.Vector3(profile.top.x,profile.top.y+.26,profile.top.z));
-  const wire=ropeTube(droop,.011);wire.name='Signal line';group.add(wire);
+  cacheStaticTransforms(group);
 }
 
 export function buildLiftConnector(group, a, b, ground, colliders) {
@@ -618,8 +687,7 @@ export function buildSurfaceLine(group, lift, ground, colliders) {
     const signWidth = lift.stationStyle === 'rope-tow' ? 1.64 : 2.58;
     for(const x of [signX-signWidth*.46,signX+signWidth*.46]) terminal.push(box(.076,1.41,.076,zinc,[x,floor+.66,-.4]));
     terminal.push(box(signWidth,.60,.083,iron,[signX,floor+1.67,-.40]));
-    sign(root,lift.def.name,counter?'EXIT':'BEGINNER AREA',signX,floor+1.67,-.443,signWidth-.03,Math.PI);
-    sign(root,lift.def.name,counter?'EXIT':'BEGINNER AREA',signX,floor+1.67,-.357,signWidth-.03,0);
+    sign(root,lift.def.name,counter?'EXIT':'BEGINNER AREA',signX,floor+1.67,-.4,signWidth-.03,.043);
     assembly(root,terminal,'Surface lift drive and approach markers');
   }
 }

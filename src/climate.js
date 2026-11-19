@@ -171,7 +171,8 @@ export function createClimate({ scene, renderer, lighting, sky, storm, villageLi
     scene.environmentIntensity = (1 - night * .73 - overcast * .13) * (1 - .50 * darkness);
     if (renderer) renderer.toneMappingExposure = 1.03 + night * .16 - overcast * .035;
     for (const key of ['snowpack', 'snowline', 'autumn', 'spring']) {
-      climateUniforms[key].value += (season[key] - climateUniforms[key].value) * amount;
+      const target = season[key] + (key === 'snowline' ? terrain?.snowlineOffset ?? 0 : 0);
+      climateUniforms[key].value += (target - climateUniforms[key].value) * amount;
     }
     climateUniforms.night.value = night;
     climateUniforms.terrainSun.value = cycle ? smooth(.78, .98, localTime.sunArc) * .60 : (1 - Math.max(late * .53, golden * .88)) * (1 - night);
@@ -179,7 +180,7 @@ export function createClimate({ scene, renderer, lighting, sky, storm, villageLi
     climateUniforms.reflectedHorizon.value.copy(palette.horizon);
     climateUniforms.reflectedZenith.value.copy(palette.zenith);
     climateUniforms.wetness.value += ((state.weather === 'clear' ? .07 : .72) - climateUniforms.wetness.value) * amount;
-    storm?.setWeather?.({ precipitation, wind, gust, night, whiteout, snowline: season.snowline - 420 });
+    storm?.setWeather?.({ precipitation, wind, gust, night, whiteout, snowline: climateUniforms.snowline.value - 420 });
     villageLights?.update(dt, seconds, { night, season: state.season },camera);
     slopeFixtures?.update(dt, seconds, { night, season: state.season, wind, precipitation, whiteout }, camera);
     Object.assign(summary, state, {

@@ -1,5 +1,8 @@
+import { nisekoSite } from './niseko-sites.js';
+
 // Coordinates use the resort's projected metres, with positive z pointing south.
 const sites = {
+  'niseko-united': nisekoSite,
   'ski-arlberg': {
     markers: [{
       id: 'galzigbahn-terminal', name: 'Galzigbahn Valley Station', kind: 'viewpoint',
@@ -54,5 +57,9 @@ export function applyInternationalLandmarkSites(config) {
   if (!site) return;
   const ids = new Set(site.markers.map(marker => marker.id));
   config.landmarks = [...(config.landmarks ?? []).filter(marker => !ids.has(marker.id)), ...site.markers];
+  if (site.clearings) config.landmarkClearings = site.clearings;
+  if (site.runSections) {
+    for (const run of config.runs) run.section = site.runSections[run.id] ?? run.section;
+  }
   for (const lift of config.lifts) Object.assign(lift, site.lifts[lift.id]);
 }

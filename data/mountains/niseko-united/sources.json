@@ -34,7 +34,14 @@
   "beginnerLift": "ace-family-quad-1",
   "beginnerRun": "family",
   "references": [
-    "https://www.niseko.ne.jp/en/map/"
+    "https://www.niseko.ne.jp/en/map/",
+    "https://maps.gsi.go.jp/development/ichiran.html",
+    "https://www.tokyu-land.co.jp/english/news/2024/001408.html",
+    "https://www.grand-hirafu.jp/green/restaurants/?tab=nest813",
+    "https://www.nikken.co.jp/en/projects/office/niseko_hanazono_resort_new_restaurant_cafe_and_bar_hanazono_edge.html",
+    "https://hanazononiseko.com/en/blog/height-rescue-drill-2021-22winter",
+    "https://hanazononiseko.com/en/blog/lift_gondola_celebration",
+    "https://hanazononiseko.com/en/winter/resort/restaurants"
   ],
   "elevationSources": [
     "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N42_00_E140_00_DEM/Copernicus_DSM_COG_10_N42_00_E140_00_DEM.tif",

@@ -57,13 +57,13 @@ export class Expeditions {
     const pad = this.fleet.find(v=>v.pad)?.pad;
     if (pad && env?.walkSurfaceAt) {
       const walkSurfaceAt = env.walkSurfaceAt.bind(env);
-      env.raisedPadAt = (x,z,y) => {
+      const raisedPadAt = env.raisedPadAt?.bind(env);
+      const helipadAt = (x,z,y) => {
         const deck=pad.walkAt(x,z);
         return deck !== null && deck<=y+.65 ? deck : null;
       };
-      env.walkSurfaceAt = (x,z,y) => {
-        return env.raisedPadAt(x,z,y) ?? walkSurfaceAt(x,z,y);
-      };
+      env.raisedPadAt = (x,z,y) => helipadAt(x,z,y) ?? raisedPadAt?.(x,z,y);
+      env.walkSurfaceAt = (x,z,y) => helipadAt(x,z,y) ?? walkSurfaceAt(x,z,y);
     }
   }
 
