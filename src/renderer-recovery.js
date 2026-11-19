@@ -21,7 +21,7 @@ function recoveryScreen(message, retry) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'destination-recover';
-  button.textContent = 'Retry in Low graphics';
+  button.textContent = 'Retry in Budget graphics';
   button.onclick = () => {
     button.remove();
     delete screen.dataset.recovering;
@@ -37,7 +37,8 @@ export async function enterRenderer(id) {
   if (prior === id) {
     await new Promise(resolve => recoveryScreen('The browser interrupted this mountain. Choose another or try again.', () => {
       const url = new URL(location.href);
-      url.searchParams.set('quality', 'low');
+      url.searchParams.set('quality', 'budget');
+      url.searchParams.set('resolution', 'scaled');
       history.replaceState(null, '', url);
       document.getElementById('load-destinations').hidden = true;
       resolve();
@@ -62,7 +63,8 @@ export function watchRenderer(canvas) {
       active = false;
       remember(null);
       const url = new URL(location.href);
-      url.searchParams.set('quality', 'low');
+      url.searchParams.set('quality', 'budget');
+      url.searchParams.set('resolution', 'scaled');
       location.replace(url);
     });
   });

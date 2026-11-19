@@ -5,6 +5,7 @@ import { loadMappedGround, pointInPolygon, runStyle } from './mapped-resort-grou
 import { buildMappedLodges } from './stevens-pass-buildings.js';
 import { buildInternationalLandmarks } from './international-landmarks.js';
 import { buildStevensPassDetails } from './stevens-pass-details.js';
+import { cacheStaticTransforms } from './scenery.js';
 import { clamp, makeCanvas } from './util.js';
 
 const HASH_CELL = 24;
@@ -145,7 +146,7 @@ function signGraphics(run) {
   return map;
 }
 
-function buildSigns(scene, ground, config, env) {
+function buildSigns(scene, ground, config, env, initialQuality) {
   const group = new THREE.Group();
   group.name = `${config.name} · trail signs`;
   const post = new THREE.CylinderGeometry(.074, .078, 2.23, 8);
@@ -154,6 +155,9 @@ function buildSigns(scene, ground, config, env) {
   const cedar = new THREE.MeshStandardMaterial({ color: 0x605145, roughness: .88 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x242922, roughness: .87 });
   const positions = [];
+  const signs = [];
+  let budget = initialQuality === 'BUDGET';
+  let lastX = Infinity, lastZ = Infinity;
   for (const run of config.runs) {
     if (!run.name || run.connector || run.points.length < 2) continue;
     const route = toRoute(ground, run);
@@ -172,27 +176,55 @@ function buildSigns(scene, ground, config, env) {
     stand.position.set(0, .98, -.12);
     const body = new THREE.Mesh(backing, dark);
     body.position.y = 1.92;
-    const face = new THREE.Mesh(panel, new THREE.MeshStandardMaterial({
-      map: signGraphics(run), roughness: .81,
-    }));
+    const material = new THREE.MeshStandardMaterial({ roughness: .81 });
+    const face = new THREE.Mesh(panel, material);
+    face.onBeforeRender = () => {
+      if (material.map) return;
+      material.map = signGraphics(run);
+      material.needsUpdate = true;
+    };
     face.position.set(0, 1.92, .043);
     sign.add(stand, body, face);
+    sign.visible = !budget;
     group.add(sign);
+    signs.push({ sign, material });
     env.addCircle(x, z, .077, 'trail-post', { minY: y, maxY: y + 2.25 });
   }
   scene.add(group);
-  return group;
+  cacheStaticTransforms(group);
+  function setQuality(name) {
+    if (budget === (name === 'BUDGET')) return;
+    budget = name === 'BUDGET';
+    lastX = lastZ = Infinity;
+  }
+  function update(camera) {
+    if (!group.visible) return;
+    const { x, z } = camera.position;
+    if (!Number.isFinite(lastX) || (budget && (lastX - x) ** 2 + (lastZ - z) ** 2 > 18 ** 2)) {
+      lastX = x;
+      lastZ = z;
+      for (const { sign, material } of signs) {
+        const range = sign.visible ? 470 : 420;
+        sign.visible = !budget || (x - sign.position.x) ** 2 + (z - sign.position.z) ** 2 < range ** 2;
+        if (budget && !sign.visible && material.map) {
+          material.map.dispose();
+          material.map = null;
+        }
+      }
+    }
+  }
+  return { group, setQuality, update };
 }
 
-export async function buildMappedResortWorld(scene, config, baseURL) {
+export async function buildMappedResortWorld(scene, config, baseURL, { quality = 'BALANCED' } = {}) {
   const root = new THREE.Group();
   root.name = config.name;
   const env = createEnvironment();
-  const ground = await loadMappedGround(root, config, baseURL);
-  const lodges = buildMappedLodges(root, config, ground, env);
+  const ground = await loadMappedGround(root, config, baseURL, { quality });
+  const lodges = buildMappedLodges(root, config, ground, env, quality);
   buildInternationalLandmarks(root, config, ground, env);
   if (config.id === 'stevens-pass') buildStevensPassDetails(root, config, ground, env, pointInPolygon);
-  const forest = await buildMappedForest(root, ground, config, env);
+  const forest = await buildMappedForest(root, ground, config, env, quality);
   const start = config.terrainOnly && config.startPoint
     ? (() => {
       const [x,z] = config.startPoint;
@@ -203,12 +235,23 @@ export async function buildMappedResortWorld(scene, config, baseURL) {
   const beginner = config.beginnerRun ? chooseStart(config, ground, env, config.beginnerRun, config.beginnerLift) : start;
   ground.startPose = () => ({ ...start });
   ground.beginnerPose = () => ({ ...beginner });
-  const signs = buildSigns(root, ground, config, env);
-  env.setSignsVisible = (visible) => { signs.visible = visible; };
+  const signs = buildSigns(root, ground, config, env, quality);
+  env.setSignsVisible = (visible) => { signs.group.visible = visible; };
   scene.add(root);
   return {
     root, ground, env, lodges, forest,
-    setQuality: forest.setQuality,
-    update(dt, camera) { if (camera) forest.update(camera); },
+    setQuality(name) {
+      ground.setDetailQuality(name);
+      forest.setQuality(name);
+      signs.setQuality(name);
+      lodges.setQuality(name);
+    },
+    update(dt, camera) {
+      if (!camera) return;
+      ground.updateDetail(camera);
+      forest.update(camera);
+      signs.update(camera);
+      lodges.updateDetail(camera);
+    },
   };
 }

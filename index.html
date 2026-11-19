@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <meta name="theme-color" content="#0b1a22" />
 <link rel="icon" href="data:," />
 <title>Alpine Descent — Whistler · Blackcomb</title>
@@ -19,6 +19,7 @@
   <div id="webgl" aria-hidden="true"></div>
   <div id="vignette" aria-hidden="true"></div>
   <div id="grain" aria-hidden="true"></div>
+  <p id="benchmark-notice" role="status" hidden></p>
 
   <!-- ══════════════ LOADING ══════════════ -->
   <section id="loading-screen" class="screen loading-screen">
@@ -132,7 +133,7 @@
         <strong id="route-guidance-name"></strong>
         <span id="route-guidance-text"></span>
       </div>
-      <button type="button" id="map-open" aria-label="Open full trail map">Trail map <kbd>M</kbd></button>
+      <button type="button" id="map-open" aria-label="Open full trail map"><svg class="touch-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 5 6-2 6 2 6-2v16l-6 2-6-2-6 2zM9 3v16m6-14v16"/></svg><span>Trail map</span> <kbd>M</kbd></button>
     </div>
     <aside id="assignment-hud" hidden aria-label="Current assignment"><b></b><span id="assignment-next"></span></aside>
     <aside id="patrol-nav" hidden aria-label="Patrol flight navigation">
@@ -158,8 +159,9 @@
     <div class="floater-layer" id="floater-layer" aria-hidden="true"></div>
 
     <div class="interaction-prompt hidden" id="interaction-prompt">
-      <button type="button" id="board-lift" class="board-lift" aria-describedby="prompt-sub">
+      <button type="button" id="board-lift" class="board-lift" aria-labelledby="prompt-title" aria-describedby="prompt-sub">
         <kbd class="prompt-key">E</kbd>
+        <svg class="touch-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h13m-5-5 5 5-5 5M20 5v14"/></svg>
         <span><strong id="prompt-title"></strong><small id="prompt-sub"></small></span>
       </button>
       <button type="button" id="next-lift" class="lift-control hidden">Next lift <kbd>Q</kbd></button>
@@ -176,12 +178,30 @@
         <button type="button" class="lift-control" id="ride-skip">Skip ride <kbd>E</kbd></button>
       </div>
     </div>
+
+    <div id="touch-controls" class="touch-controls" role="group" aria-label="Ski controls">
+      <div class="touch-steering">
+        <button type="button" data-ski-key="KeyA" aria-label="Steer left"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12H4m7-7-7 7 7 7"/></svg></button>
+        <button type="button" data-ski-key="KeyD" aria-label="Steer right"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-7-7 7 7-7 7"/></svg></button>
+      </div>
+      <div class="touch-drive">
+        <button type="button" data-ski-key="KeyS" aria-label="Brake or walk backward"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16m-7-7 7 7 7-7"/></svg></button>
+        <button type="button" data-ski-key="Space" aria-label="Jump"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15c3-5 6-7 11-9m-5-2 5 2-2 5M3 20l15-2a3 3 0 0 0 3-3"/></svg></button>
+        <button type="button" data-ski-key="KeyW" aria-label="Go forward or tuck"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V4m-7 7 7-7 7 7"/></svg></button>
+      </div>
+      <div class="touch-tools">
+        <button type="button" data-ski-action="cycleCamera" aria-label="Change camera"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h4l2-3h6l2 3h4v13H3z"/><circle cx="12" cy="13" r="3"/></svg></button>
+        <button type="button" data-ski-action="openMountain" aria-label="Open mountain menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m2 20 7-13 4 7 3-9 6 15zM7 11l2 2 2-2m4-2 1 2 2-1"/></svg></button>
+        <button type="button" data-ski-action="pause" aria-label="Pause game"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14m8-14v14"/></svg></button>
+      </div>
+    </div>
   </section>
 
   <section id="instruments" class="instruments hidden" aria-label="Ski statistics">
     <div class="terrain-readout">
       <div><span id="altitude">2,182 m</span> <span id="trail-name"></span></div>
       <div id="mountain-name">WHISTLER</div>
+      <div id="fps-counter" aria-label="Rendered frames per second" title="Rendered frames per second">— FPS</div>
     </div>
     <div class="collection-readout">
       <span aria-label="Coins"><i class="coin-outline" aria-hidden="true"></i><span id="coin-count">0</span></span>
@@ -191,7 +211,7 @@
       <div><strong id="speed">0</strong> <span id="speed-unit">km/h</span></div>
       <div id="boost-readout" hidden><span></span><progress value="0" max="1" aria-label="Speed boost remaining"></progress></div>
       <div><span id="stat-vertical">0 m</span> descent<span id="snow-surface"></span></div>
-      <button id="gear-mode" type="button"><span id="gear-mode-label">Walk</span> <kbd>B</kbd></button>
+      <button id="gear-mode" type="button" aria-labelledby="gear-mode-label"><svg class="touch-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h7v9l6 3v5H3v-4l5-4zM3 17h18M8 7h4m-4 3h4"/></svg><span id="gear-mode-label">Walk</span> <kbd>B</kbd></button>
     </div>
   </section>
 
@@ -378,7 +398,7 @@
       </div>
       <div class="map-layout">
         <div class="map-paper" id="map-viewport">
-          <canvas id="bigmap" width="1200" height="700" tabindex="0" aria-label="North-up resort trail map" aria-describedby="map-help"></canvas>
+          <canvas id="bigmap" width="1200" height="700" tabindex="0" aria-label="North-up trail and terrain map" aria-describedby="map-help"></canvas>
         </div>
         <aside class="map-side" aria-label="Map key and destination">
           <div class="map-feature">
@@ -399,6 +419,7 @@
             <li class="trail-key-bike"><i data-symbol="bike"></i>Bike trail</li>
             <li><i data-symbol="lift"></i>Lift</li>
             <li><i data-symbol="route"></i>Route</li>
+            <li class="trail-key-generated"><i data-symbol="generated"></i>Generated terrain</li>
           </ul>
         </aside>
       </div>
@@ -431,7 +452,11 @@
         <div class="setting-row"><span>Trail markers</span><button class="toggle on" id="pause-markers"><i></i><span>ON</span></button></div>
         <div class="setting-row"><span>Nearby trail map</span><button class="toggle" id="pause-nearby-map" aria-label="Nearby trail map" aria-controls="nearby-map" aria-pressed="false"><i></i><span>OFF</span></button></div>
         <div class="setting-row"><span>Camera</span><button class="seg" id="pause-camera">CHASE</button></div>
-        <div class="setting-row"><label for="pause-quality">Graphics</label><div class="graphics-control"><span>Low</span><input id="pause-quality" type="range" min="0" max="3" step="1" value="2" aria-describedby="graphics-level"><span>Max</span><output id="graphics-level" for="pause-quality">High</output></div></div>
+        <div class="setting-row"><label for="pause-quality">Graphics</label><div class="graphics-control"><label class="setting-check"><input id="pause-auto-quality" type="checkbox" checked aria-label="Auto graphics"> Auto</label><input id="pause-quality" type="range" min="0" max="4" step="1" value="0" aria-describedby="graphics-level"><output id="graphics-level" for="pause-quality">Budget</output></div></div>
+        <div class="setting-row"><label for="pause-frame-cap">Frame cap</label><select class="seg" id="pause-frame-cap"><option value="0">Auto</option><option value="30">30 FPS</option><option value="60">60 FPS</option><option value="120">120 FPS</option><option value="240">240 FPS</option></select></div>
+        <div class="setting-row"><label for="pause-resolution">Resolution</label><select class="seg" id="pause-resolution"><option value="native">Native</option><option value="scaled">Scaled by graphics</option></select></div>
+        <div class="setting-row"><span>Anti-aliasing</span><div class="graphics-control"><small id="antialias-reload" hidden></small><label class="setting-check"><input id="pause-antialias" type="checkbox" aria-label="Anti-aliasing" aria-describedby="antialias-reload"> MSAA</label></div></div>
+        <div class="setting-row benchmark-setting"><div><p id="benchmark-status" role="status">Benchmark queued.</p><small id="benchmark-device"></small></div><button class="seg" id="pause-benchmark" type="button">Run benchmark</button></div>
         <div class="setting-row"><span>Realism</span><button class="toggle" id="pause-realism" type="button" aria-label="Realistic surface lighting" aria-pressed="false" title="Extra snow sparkle and sharper ice reflections"><i></i><span>OFF</span></button></div>
       </div>
       <div class="pause-foot"><button class="text-btn" id="restart-session">Restart session</button></div>

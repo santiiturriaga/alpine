@@ -65,7 +65,7 @@ const views = [
   view('creekside', 'Creekside Village', -3120, 1650, -1870, 2580),
 ];
 
-export function whistlerAtlasSettings(liftExitFor) {
+export function whistlerAtlasSettings(liftExitFor, terrain) {
   function section(def, direction) {
     const points = direction ? [...def.points].reverse() : def.points;
     const index = direction ? def.points.length - 1 : 0;
@@ -80,7 +80,8 @@ export function whistlerAtlasSettings(liftExitFor) {
     return lift;
   });
   return {
-    name: 'Whistler Blackcomb', bounds: WORLD, heightAt, lakes: mappedLakes(), curatedOverview: true,
+    name: 'Whistler Blackcomb', bounds: WORLD, regionalBounds: terrain.regionalBounds, heightAt,
+    lakes: mappedLakes(), curatedOverview: true,
     buildings: [...buildingData, ...lodgeFootprints],
     runs: RUNS, lifts, landmarks, views, source: new URL('../assets/maps/whistler-blackcomb-winter-2025-26.pdf', import.meta.url).href,
   };

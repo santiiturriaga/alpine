@@ -6,7 +6,44 @@ import { canvasTexture, makeCanvas } from './util.js';
 const dark = '#28343a', zinc = '#7d8c93', light = '#aebbc0', iron = '#53646b';
 const rubber = '#263239', snow = '#f2f5f3';
 const liftMetal = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:.57, metalness:.22 });
-const ropeMetal = new THREE.MeshStandardMaterial({ color:'#26323a', roughness:.69, metalness:.24 });
+const ropeMetal = new THREE.MeshStandardMaterial({ color:'#26323a', roughness:.69, metalness:.24,
+  transparent:true, depthWrite:false });
+const ropeViewportHeight = { value: 720 };
+const ropeViewport = new THREE.Vector2();
+let ropeRenderer, ropeFrame = -1;
+ropeMetal.onBeforeRender = renderer => {
+  if (ropeRenderer === renderer && ropeFrame === renderer.info.render.frame) return;
+  ropeRenderer = renderer;
+  ropeFrame = renderer.info.render.frame;
+  ropeViewportHeight.value = Math.max(1, renderer.getDrawingBufferSize(ropeViewport).y);
+};
+ropeMetal.customProgramCacheKey = () => 'subpixel-lift-cable';
+ropeMetal.onBeforeCompile = shader => {
+  shader.uniforms.ropeViewportHeight = ropeViewportHeight;
+  shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
+      attribute float cableRadius;
+      uniform float ropeViewportHeight;
+      varying float cableCoverage;
+    `).replace('#include <begin_vertex>', `#include <begin_vertex>
+      float depth = -(modelViewMatrix * vec4(position,1.)).z;
+      float projectedDepth = isPerspectiveMatrix(projectionMatrix) ? max(.01, depth) : 1.;
+      float minRadius = min(18., 1.3 * projectedDepth / (ropeViewportHeight * projectionMatrix[1][1]));
+      float drawRadius = max(cableRadius, minRadius);
+      transformed += normal * (drawRadius - cableRadius);
+      cableCoverage = cableRadius / drawRadius;
+    `);
+  shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
+      varying float cableCoverage;
+    `).replace('#include <opaque_fragment>', `
+      if (cableCoverage < .999) {
+        // Approximate fractional coverage without requiring a multisampled target.
+        float facing = abs(dot(normal, normalize(vViewPosition)));
+        float edge = smoothstep(.06,.58,facing);
+        diffuseColor.a *= cableCoverage * mix(edge,1.,smoothstep(.72,1.,cableCoverage));
+      }
+      #include <opaque_fragment>
+    `);
+};
 const windowGlass = new THREE.MeshStandardMaterial({ color:'#435b65', roughness:.24, metalness:.28 });
 export const movingGlass = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:.17, metalness:.14,
   transparent:true, opacity:.27, depthWrite:false, side:THREE.DoubleSide });
@@ -205,8 +242,10 @@ function ropeTube(points, radius) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices,3));
   geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals,3));
+  geometry.setAttribute('cableRadius', new THREE.BufferAttribute(new Float32Array(vertices.length / 3).fill(radius), 1));
   geometry.setIndex(indices);
   geometry.computeBoundingSphere();
+  geometry.boundingSphere.radius += 18;
   return new THREE.Mesh(geometry,ropeMetal);
 }
 
@@ -237,25 +276,27 @@ function support(group, lift, frame, previous, next, index, ground, colliders, d
   root.name = `${lift.def.name} · tower ${index + 1}`;
   group.add(root);
   const radius = vintage ? .31 : .42;
-  const parts = [cylinder(radius*1.25,height-.20,paint,[0,-height/2-.20,0],undefined,.70*radius,12),
-    cylinder(radius+.25,.55,'#777e7c',[0,-height+.04,0],undefined,radius+.24,12),
-    cylinder(radius+.12,.092,'#a7b3b2',[0,-height+.341,0],undefined,radius+.12,12),
-    box(gauge*2+.37,.194,.22,paint,[0,-.37,0]),
-    box(gauge*2+.42,.098,.31,zinc,[0,-.493,0]),
-    box(gauge*2+.12,.07,.84,iron,[0,-.645,.155]),
-    box(.7,.063,.59,'#b3aa70',[0,-.64,.684]),
-    box(.078,height-1.23,.052,light,[-.178,-height/2-.10,-radius]),
-    box(.078,height-1.23,.052,light,[.178,-height/2-.10,-radius])];
-  for (let z = -height + .69; z < -.7; z += .29) parts.push(box(.368,.027,.042,zinc,[0,z,-radius-.015]));
-  for (const x of [-gauge,gauge]) {
-    parts.push(beam([0,-1.12,0],[x*.79,-.47,0],.095,.122,paint));
-    parts.push(beam([x*.89,.18,.58],[x*.89,-.64,.58],.042,.042,light));
-  }
-  parts.push(pipe([-gauge*.89,.18,.58],[gauge*.89,.18,.58],.022,light));
   const grade = Math.atan2(next.y-previous.y,Math.hypot(next.x-previous.x,next.z-previous.z));
-  sheaves(parts,gauge,0,-grade,index%4 === 0 ? 8 : 6,vintage);
-  parts.push(box(.20,.20,.08,'#5d5131',[0,-1.05,-radius-.05]));
-  const detailed = assembly(root,parts,'Galvanized mast, foundation, ladder, crosshead and sheaves');
+  function buildDetail(parent) {
+    const parts = [cylinder(radius*1.25,height-.20,paint,[0,-height/2-.20,0],undefined,.70*radius,12),
+      cylinder(radius+.25,.55,'#777e7c',[0,-height+.04,0],undefined,radius+.24,12),
+      cylinder(radius+.12,.092,'#a7b3b2',[0,-height+.341,0],undefined,radius+.12,12),
+      box(gauge*2+.37,.194,.22,paint,[0,-.37,0]),
+      box(gauge*2+.42,.098,.31,zinc,[0,-.493,0]),
+      box(gauge*2+.12,.07,.84,iron,[0,-.645,.155]),
+      box(.7,.063,.59,'#b3aa70',[0,-.64,.684]),
+      box(.078,height-1.23,.052,light,[-.178,-height/2-.10,-radius]),
+      box(.078,height-1.23,.052,light,[.178,-height/2-.10,-radius])];
+    for (let z = -height + .69; z < -.7; z += .29) parts.push(box(.368,.027,.042,zinc,[0,z,-radius-.015]));
+    for (const x of [-gauge,gauge]) {
+      parts.push(beam([0,-1.12,0],[x*.79,-.47,0],.095,.122,paint));
+      parts.push(beam([x*.89,.18,.58],[x*.89,-.64,.58],.042,.042,light));
+    }
+    parts.push(pipe([-gauge*.89,.18,.58],[gauge*.89,.18,.58],.022,light));
+    sheaves(parts,gauge,0,-grade,index%4 === 0 ? 8 : 6,vintage);
+    parts.push(box(.20,.20,.08,'#5d5131',[0,-1.05,-radius-.05]));
+    return assembly(parent,parts,'Galvanized mast, foundation, ladder, crosshead and sheaves');
+  }
   if (distantDetail) {
     const silhouette = [
       cylinder(radius*1.25,height-.20,paint,[0,-height/2-.20,0],undefined,.70*radius,8),
@@ -267,16 +308,31 @@ function support(group, lift, frame, previous, next, index, ground, colliders, d
       silhouette.push(beam([0,-1.12,0],[x*.79,-.47,0],.095,.122,paint),
         box(.26,.33,index%4 === 0 ? 2.55 : 1.96,dark,[x,-.17,0],[-grade,0,0]));
     }
+    const detailed = new THREE.Group();
     const distant = assembly(root,silhouette,'Distant mast, crosshead and sheaves');
     root.addLevel(detailed);
     root.addLevel(distant,210,.08);
     distant.visible = false;
+    let mesh;
+    root.update = camera => {
+      THREE.LOD.prototype.update.call(root,camera);
+      if (detailed.visible && !mesh) {
+        mesh = buildDetail(detailed);
+        mesh.updateWorldMatrix(false,false);
+        mesh.matrixAutoUpdate = false;
+      } else if (mesh && !detailed.visible && root.position.distanceToSquared(camera.position) > 335 ** 2) {
+        mesh.geometry.dispose();
+        detailed.remove(mesh);
+        mesh = null;
+      }
+    };
+  } else {
+    buildDetail(root);
   }
   colliders.push({ x:frame.x,z:frame.z,r:radius+.21,radius:radius+.21,type:'lift-tower',maxY:frame.y-1.2 });
 }
 
-function sign(group, title, detail, x,y,z,width,faceOffset) {
-  if (typeof document === 'undefined') return;
+function liftSignTexture(title, detail) {
   const { canvas,ctx } = makeCanvas(768,178);
   ctx.fillStyle='#202e36';ctx.fillRect(0,0,768,178);
   ctx.fillStyle='#c5a56e';ctx.fillRect(0,0,768,12);
@@ -285,7 +341,12 @@ function sign(group, title, detail, x,y,z,width,faceOffset) {
   ctx.fillText(title.toUpperCase(),384,83,704);
   ctx.font='600 32px "Barlow", Arial';ctx.fillStyle='#d5cdb2';
   ctx.fillText(detail,384,142,714);
-  const material = new THREE.MeshStandardMaterial({ map:canvasTexture(canvas), roughness:.74 });
+  return canvasTexture(canvas);
+}
+
+function sign(group, title, detail, x,y,z,width,faceOffset) {
+  if (typeof document === 'undefined') return;
+  const material = new THREE.MeshStandardMaterial({ roughness:.74 });
   const halfWidth = width / 2, halfHeight = halfWidth * 178 / 768;
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position',new THREE.Float32BufferAttribute([
@@ -298,6 +359,11 @@ function sign(group, title, detail, x,y,z,width,faceOffset) {
   geometry.setIndex([0,1,2,1,3,2,4,5,6,5,7,6]);
   geometry.computeVertexNormals();
   const mesh = new THREE.Mesh(geometry,material);
+  mesh.onBeforeRender = () => {
+    material.map = liftSignTexture(title, detail);
+    material.needsUpdate = true;
+    mesh.onBeforeRender = THREE.Object3D.prototype.onBeforeRender;
+  };
   mesh.name=title;mesh.position.set(x,y,z);group.add(mesh);
 }
 
@@ -308,7 +374,7 @@ function skinSection(parts, a, b, tint) {
   geometry.computeVertexNormals(); parts.push(part(geometry,tint));
 }
 
-function hood(parts, gauge, length, top, paint, cableRise, stevensHogsback = false) {
+function hood(parts, gauge, length, top, paint, cableRise, stevensHogsback = false, coarse = false) {
   const width = gauge + 1.05, end = top ? 1 : -1;
   const sections = [[-width,0],[-width-.05,.35],[-width+.36,.84],[-width+.82,1.08],
     [-.42,1.22],[.42,1.22],[width-.82,1.08],[width-.36,.84],[width+.05,.35],[width,0]];
@@ -326,17 +392,20 @@ function hood(parts, gauge, length, top, paint, cableRise, stevensHogsback = fal
       panel([loft(i,z1+end*.25),loft(i+1,z1+end*.25)],
         [loft(i,z0-end*.15),loft(i+1,z0-end*.15)],snow);
     }
-    for (const z of [z0,z1]) parts.push(beam(shape(i,z),shape(i+1,z),.08,.11,light));
-    parts.push(pipe(shape(i,z0),shape(i,z1),.025,light));
+    if (!coarse) {
+      for (const z of [z0,z1]) parts.push(beam(shape(i,z),shape(i+1,z),.08,.11,light));
+      parts.push(pipe(shape(i,z0),shape(i,z1),.025,light));
+    }
   }
   for (const s of [-1,1]) {
     const x=s*(width+.009), lo=Math.min(z0,z1), hi=Math.max(z0,z1);
-    for(let i=0;i<Math.ceil(length/.49);i++) {
-      const a=lo+i*.49,b=Math.min(a+.49,hi),z=(a+b)/2;
+    const step = coarse ? length : .49;
+    for(let i=0;i<Math.ceil(length/step);i++) {
+      const a=lo+i*step,b=Math.min(a+step,hi),z=(a+b)/2;
       const slope=-Math.atan2(cableRise(b)-cableRise(a),b-a);
       parts.push(box(.075,.28,b-a+.012,iron,[x,.29+cableRise(z),z],[slope,0,0]));
       parts.push(box(.067,stevensHogsback ? .12 : .078,b-a+.012,stevensHogsback ? '#a93c27' : paint,[x,.13+cableRise(z),z],[slope,0,0]));
-      parts.push(box(.081,.26,.026,zinc,[x,.29+cableRise(a),a]));
+      if (!coarse) parts.push(box(.081,.26,.026,zinc,[x,.29+cableRise(a),a]));
     }
   }
 }
@@ -474,9 +543,11 @@ function tyeMillSummitHardware(parts, frame, ground, colliders, gauge) {
 export function buildLiftTerminal(group, lift, top, ground, colliders, sharedMidstation = false) {
   const frame = top ? lift.profile.top : lift.profile.bottom;
   const { gauge,paint,detachable,seats,vintage }=lift;
-  const root=new THREE.Group();
-  root.name=`${lift.def.name} · ${top?'unload':'loading'}`;
-  root.position.set(frame.x,frame.y,frame.z);root.rotation.y=frame.heading;group.add(root);
+  const detail = new THREE.LOD();
+  detail.name=`${lift.def.name} · ${top?'unload':'loading'}`;
+  detail.position.set(frame.x,frame.y,frame.z);detail.rotation.y=frame.heading;group.add(detail);
+  const root = new THREE.Group();
+  detail.addLevel(root);
   const end = top ? 1 : -1;
   const tyeSummit = lift.stationStyle === 'tye-mill' && top;
   const architecturalShelter = top ? lift.def.topArchitecture : lift.def.bottomArchitecture;
@@ -485,10 +556,18 @@ export function buildLiftTerminal(group, lift, top, ground, colliders, sharedMid
   if (!tyeSummit) deck(root,frame,ground,gauge,(top?-1.8:-4.2),halfWidth*2+.63,top?4.5:10.0);
   const rail = new THREE.Vector3();
   const cableRise = z => lift.profile.at((top?1:0)+z/lift.profile.horizontal,rail,null,0).y-frame.y;
+  const coarseParts = [];
+  function keep(from = 0) {
+    for (let i = from; i < parts.length; i++) {
+      coarseParts.push({ ...parts[i], geo: parts[i].geo.clone() });
+    }
+  }
   if (!sharedMidstation) {
     footing(frame,ground,parts,colliders,0,0,detachable?.59:.44,tyeSummit ? paint : iron,-.24);
     parts.push(box(gauge*1.55,.17,2.75,iron,[0,-.22,-end*.35]));
     parts.push(cylinder(.31,.34,iron,[0,-.104,0],undefined,.31,16));
+    keep();
+    coarseParts.push(part(new THREE.TorusGeometry(gauge - .013, .08, 4, 18), light, [0,-.033,0], [Math.PI/2,0,0]));
     const wheel=[part(new THREE.TorusGeometry(gauge-.013,tyeSummit ? .094 : .062,8,48),tyeSummit ? paint : light,[0,-.033,0],[Math.PI/2,0,0]),
       part(new THREE.TorusGeometry(gauge-.09,.037,7,42),dark,[0,-.106,0],[Math.PI/2,0,0])];
     for (let i=0;i<8;i++) {
@@ -498,9 +577,14 @@ export function buildLiftTerminal(group, lift, top, ground, colliders, sharedMid
     }
     lift.wheels.push(assembly(root,wheel,'Rotating bullwheel'));
     if (detachable) {
-      if (!architecturalShelter) hood(parts,gauge,top?7.3:9.3,top,paint,cableRise,lift.stationStyle === 'hogsback-express');
+      if (!architecturalShelter) {
+        hood(parts,gauge,top?7.3:9.3,top,paint,cableRise,lift.stationStyle === 'hogsback-express');
+        hood(coarseParts,gauge,top?7.3:9.3,top,paint,cableRise,lift.stationStyle === 'hogsback-express',true);
+      }
       const inner = -end*4.25;
+      const supportStart = parts.length;
       footing(frame,ground,parts,colliders,0,inner,.52,iron,cableRise(inner)-.24);
+      keep(supportStart);
       parts.push(beam([0,cableRise(inner*1.7)-.26,inner*1.7],[0,-.26,0],.98,.22,iron));
       for(const z of [end*.61,inner]) {
         const y=cableRise(z);
@@ -513,18 +597,27 @@ export function buildLiftTerminal(group, lift, top, ground, colliders, sharedMid
         parts.push(cylinder(.065,.139,light,[x,cableRise(z)-.119,z],[0,0,Math.PI/2]));
       }
     } else if (tyeSummit) {
+      const cabinStart = parts.length;
       tyeMillSummitHardware(parts, frame, ground, colliders, gauge);
+      keep(cabinStart);
       sheaves(parts,gauge,-1.28,0,4,true);
     } else {
+      const motorStart = parts.length;
       parts.push(box(1.25,.31,1.37,paint,[0,.159,0]));
       parts.push(box(.7,.39,.57,zinc,[0,.394,-end*.16]));
+      keep(motorStart);
       for(let i=0;i<7;i++) parts.push(box(.09,.030,.44,iron,[(i-3)*.10,.597,-end*.16]));
       sheaves(parts,gauge,-end*1.22,0,4,vintage);
     }
-    if (!tyeSummit && !architecturalShelter) operatorShelter(root,parts,frame,ground,colliders,-gauge-3.0,end*1.2,paint);
+    if (!tyeSummit && !architecturalShelter) {
+      const cabinStart = parts.length;
+      operatorShelter(root,parts,frame,ground,colliders,-gauge-3.0,end*1.2,paint);
+      keep(cabinStart);
+    }
   } else {
     footing(frame,ground,parts,colliders,0,0,.42,iron,-.38);
     parts.push(box(gauge*2+.33,.21,.26,paint,[0,-.44,0]));
+    keep();
     sheaves(parts,gauge,0,0,6,true);
   }
   if(!top) {
@@ -547,7 +640,9 @@ export function buildLiftTerminal(group, lift, top, ground, colliders, sharedMid
     sign(root,lift.def.name,top?'UNLOAD':'LIFT ACCESS',signX,signY+1.97,signZ,2.65,.042);
   }
   assembly(root,parts,'Terminal bullwheel, equipment guards and lift queue');
-  return root;
+  detail.addLevel(assembly(detail,coarseParts,'Distant terminal silhouette'),Infinity,.10);
+  detail.levels[1].object.visible = false;
+  return detail;
 }
 
 export function buildAerialLanes(parent,lift,ground,colliders,sharedMidstation,distantDetail = false) {
@@ -559,7 +654,7 @@ export function buildAerialLanes(parent,lift,ground,colliders,sharedMidstation,d
   for(const side of [-1,1]) {
     const points=samples.map(s=>s.point.clone().addScaledVector(s.offset,gauge*side));
     // Keep the mesh within half a cable radius of the carrier's full path.
-    const rope=ropeTube(distantDetail?simplifyRope(points):points,.029);
+    const rope=ropeTube(simplifyRope(points),.029);
     rope.name=side === 1?'Uphill haul rope':'Return haul rope';group.add(rope);
   }
   for(const [top,frame] of [[false,profile.bottom],[true,profile.top]]) {

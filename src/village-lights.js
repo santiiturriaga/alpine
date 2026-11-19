@@ -35,10 +35,10 @@ function clockFace() {
   return { face, ivory };
 }
 
-export function buildVillageLighting(scene, { grid } = {}) {
+export function buildVillageLighting(scene, { grid, budget = () => false } = {}) {
   const root = new THREE.Group(); root.name='Whistler Olympic Plaza · Village North'; scene.add(root);
   const rand=mulberry32(817363);
-  const bulbs=[], wires=[], warmMaterials=[], localLights=[], snowCaps=[];
+  const bulbs=[], wires=[], warmMaterials=[], localLights=[], snowCaps=[], foreground=[];
   const lampUniform={value:0};
   let holiday=true, night=0;
   const addBulb=(x,y,z,color='#ffca71')=>bulbs.push({position:[x,y,z],color});
@@ -130,7 +130,9 @@ export function buildVillageLighting(scene, { grid } = {}) {
       shingles.push(box(.055,.305,.36,color,[side*2.23,py,px],[0,0,-side*.065]));
     }
   }
-  tower.add(new THREE.Mesh(mergeParts(shingles),surfaceMaterial('timber',{vertexColors:true})));
+  const cladding=new THREE.Mesh(mergeParts(shingles),surfaceMaterial('timber',{vertexColors:true}));
+  tower.add(cladding);
+  foreground.push(cladding);
   const wing=new THREE.Group();
   wing.scale.x=.856;wing.position.x=5.3;tower.add(wing);
   const lodgeParts=[box(39,1.2,19,'#777675',[16,.2,1.5]),box(39,6.1,19,'#67473a',[16,3.7,1.5])];
@@ -144,12 +146,15 @@ export function buildVillageLighting(scene, { grid } = {}) {
     lodgeParts.push(box(.19,6.4,.20,'#ae8c66',[x,3.6,z]));
   const woodMesh=new THREE.Mesh(mergeParts(lodgeParts),surfaceMaterial('timber',{vertexColors:true,roughness:.86}));
   woodMesh.castShadow=woodMesh.receiveShadow=true;wing.add(woodMesh);
-  const panes=[];
+  const panes=[],mullions=[];
   for(const z of [-8.12,11.12])for(const x of [1.1,6.6,12.1,17.6,23.1,28.6,33.6])for(const floor of [0,1]) {
     panes.push(box(3.8,1.8,.04,'#b1803e',[x,2.18+floor*2.8,z]));
-    wing.add(mergedMesh([box(.095,1.93,.075,'#b19a71',[x,2.18+floor*2.8,z+(z<0?-.03:.03)]),
-      box(3.92,.10,.075,'#b19a71',[x,2.18+floor*2.8,z+(z<0?-.03:.03)])]));
+    mullions.push(box(.095,1.93,.075,'#b19a71',[x,2.18+floor*2.8,z+(z<0?-.03:.03)]),
+      box(3.92,.10,.075,'#b19a71',[x,2.18+floor*2.8,z+(z<0?-.03:.03)]));
   }
+  const wingTrim=mergedMesh(mullions);
+  wing.add(wingTrim);
+  foreground.push(wingTrim);
   const wingGlass=new THREE.MeshStandardMaterial({vertexColors:true,emissive:'#ffb85a',emissiveIntensity:.12,roughness:.4});
   wing.add(new THREE.Mesh(mergeParts(panes),wingGlass));warmMaterials.push(wingGlass);
   for(const side of [-1,1]) {
@@ -173,6 +178,7 @@ export function buildVillageLighting(scene, { grid } = {}) {
     const angle=side*Math.PI/2;
     face.position.set(Math.sin(angle)*2.29,11.85,Math.cos(angle)*2.29); face.rotation.y=angle;
     tower.add(face); clockMaterials.push(ivory);
+    foreground.push(...face.children.slice(1));
   }
   const glassMat=new THREE.MeshStandardMaterial({color:'#a07737',emissive:'#ffad40',emissiveIntensity:.13,roughness:.36});
   warmMaterials.push(glassMat);
@@ -234,11 +240,13 @@ export function buildVillageLighting(scene, { grid } = {}) {
   const treeDefinitions=[[-130.6,-609.3,10.3],[-138,-608.6,8.7],[-118,-607.7,7.25],
     [-139,-634,10.9],[-119,-639,8.7],[-110,-651,12],[-148,-659,10.2],[-171,-637,9.2],[-101,-624,8.8]];
   const holidayRoot=new THREE.Group(); holidayRoot.name='Village festive spruce lights'; root.add(holidayRoot);
-  const treeMaterial=coniferMaterial(-1);
+  const treeMaterial=coniferMaterial(-1),spruces=[];
   const treeLights=['#6241ff','#5384ff','#ff6649','#ffae52','#9f90ff','#ff9748','#9894ff','#ffe8a8','#ff7963'];
   for(const [i,[x,z,h]] of treeDefinitions.entries()) {
     const y=heightAt(x,z);
-    const spruce=new THREE.Mesh(coniferGeometry('spruce',0,i%3),treeMaterial);
+    const geometry=coniferGeometry('spruce',0,i%3);
+    const spruce=new THREE.Mesh(geometry,treeMaterial);
+    spruces.push({spruce,geometry,distant:coniferGeometry('spruce',-1,i%3)});
     spruce.scale.set(h,h,h); spruce.position.set(x,y,z); spruce.rotation.y=rand()*Math.PI*2;
     // The forest's 'tree' colliders carry an instanced-tree batch. These
     // individually authored plaza spruces have their own draw meshes.
@@ -370,7 +378,13 @@ export function buildVillageLighting(scene, { grid } = {}) {
     update(dt,time,state={},camera) {
       night=state.night??night;
       lampUniform.value=night;
-      holidayRoot.visible=holiday;
+      const close=!budget()||!camera||(camera.position.x-rx)**2+(camera.position.z-rz)**2<520**2;
+      holidayRoot.visible=holiday&&close;
+      for(const mesh of foreground)mesh.visible=close;
+      for(const {spruce,geometry,distant} of spruces) {
+        spruce.geometry=close?geometry:distant;
+        spruce.castShadow=close;
+      }
       bulbMat.color.setScalar(.24+night*.96);
       silver.emissiveIntensity=.06+night*.26;
       for(const mat of warmMaterials) mat.emissiveIntensity=.10+night*1.75;

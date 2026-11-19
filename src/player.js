@@ -299,7 +299,6 @@ export class Player {
     const prevY = this.pos.y;
     this.pos.x += this.vel.x * dt;
     this.pos.z += this.vel.z * dt;
-    this.clampToWorld();
     this.resolveCollisions(dt);
     if (this.crash) return;
     const dx = this.pos.x - this.beforeStep.x, dz = this.pos.z - this.beforeStep.z;
@@ -577,7 +576,6 @@ export class Player {
       const prevY = this.pos.y;
       this.pos.x += this.vel.x * dt;
       this.pos.z += this.vel.z * dt;
-      this.clampToWorld();
       this.resolveCollisions(dt);
       if (this.crash) return;
 
@@ -641,7 +639,6 @@ export class Player {
       this.pos.x += this.vel.x * dt;
       this.pos.z += this.vel.z * dt;
       this.pos.y += this.vy * dt;
-      this.clampToWorld();
       this.resolveCollisions(dt, true);
       if (this.crash) return;
 
@@ -754,32 +751,12 @@ export class Player {
     this.pos.x += this.vel.x * dt;
     this.pos.z += this.vel.z * dt;
     this.vel.multiplyScalar(Math.exp(-2.6 * dt));
-    this.clampToWorld();
     const gy = this.groundHeight(this.pos.x, this.pos.z);
     if (this.pos.y < gy + 0.02) {
       this.pos.y = gy + 0.02;
       this.vy = 0;
     }
     if (this.crashTimer > 1.85) this.recover();
-  }
-
-  clampToWorld() {
-    const bounds=this.ground.bounds;
-    const pad = 150;
-    if (this.pos.x < bounds.minX + pad) {
-      this.pos.x = bounds.minX + pad;
-      this.vel.x = Math.abs(this.vel.x) * 0.35;
-    } else if (this.pos.x > bounds.maxX - pad) {
-      this.pos.x = bounds.maxX - pad;
-      this.vel.x = -Math.abs(this.vel.x) * 0.35;
-    }
-    if (this.pos.z < bounds.minZ + pad) {
-      this.pos.z = bounds.minZ + pad;
-      this.vel.z = Math.abs(this.vel.z) * 0.35;
-    } else if (this.pos.z > bounds.maxZ - pad) {
-      this.pos.z = bounds.maxZ - pad;
-      this.vel.z = -Math.abs(this.vel.z) * 0.35;
-    }
   }
 
   resolveCollisions(dt, inAir = false) {

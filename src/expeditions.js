@@ -339,9 +339,8 @@ export class Expeditions {
       const turn = heli ? 1.1 : 1.27 * clamp(Math.abs(v.speed)/3,0,1) * (v.speed < 0 ? -1 : 1);
       v.yaw -= steering * dt * turn;
     }
-    const { minX,maxX,minZ,maxZ } = ground.bounds;
-    const x = clamp(p.x + Math.sin(v.yaw)*v.speed*dt,minX+8,maxX-8);
-    const z = clamp(p.z + Math.cos(v.yaw)*v.speed*dt,minZ+8,maxZ-8);
+    const x = p.x + Math.sin(v.yaw) * v.speed * dt;
+    const z = p.z + Math.cos(v.yaw) * v.speed * dt;
     const groundY = this.floorAt(v,x,z);
     let altitude = groundY;
     if (heli) altitude = Math.max(groundY,p.y+up*13*dt);

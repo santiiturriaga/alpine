@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { climateUniforms } from './climate-state.js';
 
 const profiles = {
+  BUDGET: { mapped: [90, 205], regional: [145, 320], detail: .46 },
   MAX: { mapped: [740, 980], regional: [1040, 1380], detail: 1.18 },
   HIGH: { mapped: [315, 535], regional: [405, 635], detail: 1 },
   BALANCED: { mapped: [250, 445], regional: [335, 540], detail: .83 },
@@ -12,6 +13,7 @@ const transitions = {
   mapped: { value: new THREE.Vector2() },
   regional: { value: new THREE.Vector2() },
 };
+let budget = false;
 export const forestQuality = { detail: { value: 1 } };
 export const forestDetailTiers = {
   '-0.5': [105, 165],
@@ -21,6 +23,7 @@ export const forestDetailTiers = {
 
 export function setForestQuality(name) {
   const profile = profiles[name] || profiles.HIGH;
+  budget = name === 'BUDGET';
   forestQuality.detail.value = profile.detail;
   transitions.mapped.value.fromArray(profile.mapped);
   transitions.regional.value.fromArray(profile.regional);
@@ -163,6 +166,67 @@ export function makeForestCrowns(region, species) {
   return mesh;
 }
 
+const budgetCard = new THREE.BufferGeometry()
+  .setAttribute('position', new THREE.Float32BufferAttribute([
+    -.37,-.0625,0, .37,-.0625,0, -.37,1.0625,0, .37,1.0625,0,
+  ], 3))
+  .setAttribute('uv', new THREE.Float32BufferAttribute([
+    .5-.37/.84375,0, .5+.37/.84375,0, .5-.37/.84375,1, .5+.37/.84375,1,
+  ], 2))
+  .setIndex([0,1,2,1,3,2]);
+
+// The cards already fade per trunk in the material. Combine them into
+// larger batches on the low-cost profile and keep every surveyed placement.
+export function batchBudgetForestCrowns(group, region, patchSize) {
+  const patches = new Map();
+  for (const cell of group.children) {
+    if (!(cell instanceof ForestCell) || !cell.proxy) continue;
+    const { x, z } = cell.position;
+    const key = `${Math.floor(x / patchSize)},${Math.floor(z / patchSize)}`;
+    if (!patches.has(key)) patches.set(key, { cells: [], count: 0 });
+    const patch = patches.get(key);
+    patch.cells.push(cell);
+    patch.count += cell.proxy.count;
+    cell.combinedCrowns = true;
+  }
+  if (!patches.size) return;
+  const batches = new THREE.LOD();
+  batches.name = 'Distant conifer crowns';
+  group.add(batches);
+  const matrix = new THREE.Matrix4(), transform = new THREE.Matrix4(), tint = new THREE.Color();
+  batches.update = () => {
+    if (budget && !batches.children.length) {
+      for (const { cells, count } of patches.values()) {
+        const geometry = budgetCard.clone();
+        const kinds = new THREE.InstancedBufferAttribute(new Float32Array(count), 1);
+        geometry.setAttribute('crownSpecies', kinds);
+        const mesh = new THREE.InstancedMesh(geometry, crownMaterial(region), count);
+        let index = 0;
+        for (const { proxy, position } of cells) {
+          transform.makeTranslation(position.x + proxy.position.x, position.y + proxy.position.y,
+            position.z + proxy.position.z);
+          const species = proxy.geometry.getAttribute('crownSpecies');
+          for (let i = 0; i < proxy.count; i++, index++) {
+            proxy.getMatrixAt(i, matrix);
+            mesh.setMatrixAt(index, matrix.premultiply(transform));
+            kinds.setX(index, species.getX(i));
+            if (proxy.instanceColor) {
+              proxy.getColorAt(i, tint);
+              mesh.setColorAt(index, tint);
+            }
+          }
+        }
+        mesh.computeBoundingSphere();
+        mesh.matrixAutoUpdate = false;
+        batches.add(mesh);
+        mesh.updateMatrixWorld(true);
+      }
+    }
+    for (const mesh of batches.children) mesh.visible = budget;
+  };
+  batches.update();
+}
+
 // The atlas cards and silhouette use the same fixed tree placements and tint.
 export function shareForestInstances(source, geometry, material) {
   const mesh = new THREE.InstancedMesh(geometry, material, 0);
@@ -194,8 +258,14 @@ export class ForestCell extends THREE.LOD {
     const distanceSq = this.position.distanceToSquared(camera.position);
     const useProxy = !!this.proxy;
     this.near.visible = distanceSq <= (this.range.y + this.radius)**2;
+    if (this.near.visible && this.near.isGroup) {
+      for (const mesh of this.near.children) {
+        const bounds = mesh.boundingSphere;
+        mesh.visible = !budget || bounds.center.distanceToSquared(camera.position) <= (this.range.y + bounds.radius + 5)**2;
+      }
+    }
     const distant = distanceSq >= Math.max(0,this.range.x - this.radius)**2;
     this.far.visible = distant && !useProxy;
-    if (this.proxy) this.proxy.visible = distant && useProxy;
+    if (this.proxy) this.proxy.visible = distant && (!budget || !this.combinedCrowns);
   }
 }

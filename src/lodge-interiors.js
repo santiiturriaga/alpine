@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { heightAt } from './terrain.js';
 import { MOUNTAIN } from './worlddata.js';
 import { buildingData } from '../data/osm-whistler.js';
-import { box, beam, part, mergedMesh, mergeParts } from './scenery.js';
+import { box, beam, part, cacheStaticTransforms, mergedMesh, mergeParts } from './scenery.js';
 import { makeCanvas, canvasTexture, lerp, mulberry32 } from './util.js';
 import { surfaceMaterial } from './materials.js';
 import { makePeak2PeakBadge } from './lift-stations.js';
@@ -260,6 +260,8 @@ function buildRoom(scene, grid, room, shell = true) {
   rooms.push(room);
   const group = new THREE.Group(); group.name = `${room.name} · walkable interior`;
   group.position.set(room.x, room.y, room.z); group.rotation.y = room.yaw; scene.add(group);
+  const details = new THREE.Group();
+  group.add(details);
   const hw = room.w / 2, hd = room.d / 2, walls = [], frame = [], panes = [];
   const doorL = room.doorX - room.doorWidth / 2, doorR = room.doorX + room.doorWidth / 2;
   const wall = (x, z, w, d, h = room.h, y = h / 2) => {
@@ -317,7 +319,7 @@ function buildRoom(scene, grid, room, shell = true) {
   }
   // Keep the walk surface and threshold datum as the base for the stone and runner.
   walls.push(box(room.w, .21, room.d, '#8f785b', [0, -.105, 0]));
-  addStoneFloor(group, { w: room.w, d: room.d });
+  addStoneFloor(details, { w: room.w, d: room.d });
   if (shell) {
     const low = Math.min(...[-hw, -hw / 2, 0, hw / 2, hw].flatMap(x => [-hd, -hd / 2, 0, hd / 2, hd].map(z => {
       const p = world(room, x, z); return heightAt(p.x, p.z);
@@ -338,7 +340,7 @@ function buildRoom(scene, grid, room, shell = true) {
   mesh(group, [...[doorL, doorR].map(x => box(.12, doorHead, .27, '#60442f', [x, doorHead/2, hd])),
     box(room.doorWidth+.15,.095,.22,'#60442f',[room.doorX,doorHead,hd])]);
   const runnerLength = room.kind === 'dining' ? 2.25 : room.kind === 'cafe' ? Math.min(6.4, room.d * .32) : 1.0;
-  addWoolCarpet(group, {
+  addWoolCarpet(details, {
     w: room.doorWidth - .28, d: runnerLength, x: room.doorX, z: hd - .12 - runnerLength / 2,
     palette: room.kind === 'outfitter' || room.kind === 'barber' ? ['#303e3e','#425551','#979481'] : lodgeRunner,
     name: 'Woven entrance runner',
@@ -356,9 +358,11 @@ function buildRoom(scene, grid, room, shell = true) {
     mesh(group,glass,new THREE.MeshStandardMaterial({vertexColors:true,transparent:true,opacity:.24,depthWrite:false,roughness:.30}));
   }
   if (room.rampLength) ramp(room, group);
-  furnish(room, group, grid);
+  furnish(room, details, grid);
   room.group = group;
+  room.details = details;
   room.entry = { ...world(room, room.doorX, hd + .7), y: room.y, heading: room.yaw + Math.PI };
+  cacheStaticTransforms(group);
   return room;
 }
 
@@ -423,6 +427,12 @@ export function buildLodgeInteriors(scene, grid) {
   }
   return {
     rooms,
+    updateDetail(camera, reduced) {
+      for (const room of rooms) {
+        room.details.visible = !reduced || !camera || (room.x - camera.position.x) ** 2 +
+          (room.z - camera.position.z) ** 2 < 250 ** 2;
+      }
+    },
     stairTreadAt(x,z) {
       const p=transform(LODGE_FRAME,x,z), tread=terraceStairHeight(p.x,p.z,true);
       return tread===null ? null : base+tread;

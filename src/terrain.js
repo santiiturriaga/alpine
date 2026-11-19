@@ -10,7 +10,7 @@ import { regionBounds, blackTuskBounds } from '../data/geography.js';
 import { surfaceMaterial } from './materials.js';
 import { climateUniforms } from './climate-state.js';
 import { coniferGeometry, coniferMaterial } from './conifers.js';
-import { ForestCell, makeForestCrowns, preloadForestCrowns, shareForestInstances } from './forest-lod.js';
+import { ForestCell, batchBudgetForestCrowns, makeForestCrowns, preloadForestCrowns, shareForestInstances } from './forest-lod.js';
 import { createSkiSnowSurface, SKI_SNOW_FOOTPRINT } from './ski-snow-surface.js';
 import { prepareValleyLakes } from './valley-scenery.js';
 import { createStationGrading } from './station-sites.js';
@@ -20,8 +20,11 @@ import { compactDevice } from './device-budget.js';
 import { terrainHorizon } from './terrain-horizon.js';
 import { LODGE_FRAME, LODGE_ANNEX } from './roundhouse-site.js';
 import { triangleHeight, worldIndex, boxBlurGrid } from './terrain-grid.js';
+import { coarseTerrainTopology, createTerrainTileDetail } from './terrain-tile-detail.js';
 import { startSnowGeneration } from './terrain-snow-worker-client.js';
+import { loadWhistlerSnowPack, unpackWhistlerSnowPack, whistlerSnowPackCacheMode } from './whistler-snow-pack.js';
 import { cacheStaticTransforms } from './scenery.js';
+import { createBackcountry, createSurveyTerrain, insideTerrain } from './backcountry.js';
 
 export const terrain = {
   heightAt,
@@ -31,6 +34,7 @@ export const terrain = {
   cell: 0,
   mask: null,
   maskN: 0,
+  regionalBounds: regionBounds,
   get minX() { return WORLD.minX; },
   get maxX() { return WORLD.maxX; },
   get minZ() { return WORLD.minZ; },
@@ -39,8 +43,9 @@ export const terrain = {
 
 let heights, landCover, n, cell, mask, maskN, snowField;
 let gradedHeights, gradeStation;
+let backcountry, tuskGround, regionCover;
 
-async function loadGrid(file, bounds) {
+export async function loadGrid(file, bounds) {
   const response = await fetch(new URL(`../data/${file}`, import.meta.url));
   if (!response.ok) throw new Error(`Could not load ${file} (${response.status})`);
   const view = new DataView(await response.arrayBuffer());
@@ -58,6 +63,7 @@ async function loadGrid(file, bounds) {
 
 export function landCoverAt(x, z) {
   if (!landCover) return 0;
+  if (!insideTerrain(WORLD, x, z)) return regionCover?.(x, z) ?? 0;
   const [gx, gz] = worldIndex(x, z, WORLD);
   return landCover[Math.round(gz) * n + Math.round(gx)];
 }
@@ -73,6 +79,15 @@ export function treeCoverAt(x, z) {
 
 // Use the same linear interpolation as the shader's surface sampler.
 export function surfaceAt(x, z, out = {}) {
+  if (!insideTerrain(WORLD, x, z)) {
+    const alpine = smoothstep(-145, 115, heightAt(x, z) - climateUniforms.snowline.value);
+    const cover = smoothstep(.25, .79, Math.max(climateUniforms.snowpack.value, alpine));
+    out.id = cover < .28 ? 'ground' : 'powder';
+    out.grip = cover < .28 ? 1 : .76;
+    out.drag = cover < .28 ? 3 : 1.45;
+    out.powder = cover < .28 ? 0 : .84 * cover;
+    return compressSnow(x, z, out);
+  }
   if (!snowField) {
     out.id = 'packed'; out.grip = 1; out.drag = 1; out.powder = .12;
     return out;
@@ -102,33 +117,56 @@ export function surfaceAt(x, z, out = {}) {
   return compressSnow(x, z, out);
 }
 
-function makePatches(n, attributes, material, skipCell = () => false, patch = 64) {
+function makePatches(n, attributes, material, patch = 64, detail = null) {
   const terrain = new THREE.Group();
+  const nativeIndices = new Map();
   for (let z0 = 0; z0 < n - 1; z0 += patch) {
     for (let x0 = 0; x0 < n - 1; x0 += patch) {
       const w = Math.min(patch, n - 1 - x0) + 1;
       const h = Math.min(patch, n - 1 - z0) + 1;
-      const indices = [];
-      for (let z = 0; z < h - 1; z++) {
-        for (let x = 0; x < w - 1; x++) {
-          if (skipCell(x0 + x, z0 + z)) continue;
+      const key = `${w}:${h}`;
+      if (!nativeIndices.has(key)) {
+        const indices = new Uint16Array((w - 1) * (h - 1) * 6);
+        let offset = 0;
+        for (let z = 0; z < h - 1; z++) for (let x = 0; x < w - 1; x++) {
           const a = z * w + x;
-          indices.push(a, a + w, a + 1, a + 1, a + w, a + w + 1);
+          indices.set([a, a + w, a + 1, a + 1, a + w, a + w + 1], offset);
+          offset += 6;
         }
+        nativeIndices.set(key, indices);
       }
-      if (!indices.length) continue;
-      const geometry = new THREE.BufferGeometry();
-      for (const [name, array, stride] of attributes) {
-        const vertex = new Float32Array(w * h * stride);
-        for (let z = 0; z < h; z++) {
-          const first = ((z0 + z) * n + x0) * stride;
-          vertex.set(array.subarray(first, first + w * stride), z * w * stride);
+      const buildGeometry = ({ indices, points }) => {
+        const geometry = new THREE.BufferGeometry();
+        for (const [name, array, stride] of attributes) {
+          const vertex = new Float32Array((points?.length ?? w * h) * stride);
+          if (points) {
+            for (let i = 0; i < points.length; i++) {
+              const u = x0 + points[i] % w, v = z0 + Math.floor(points[i] / w);
+              const src = (v * n + u) * stride;
+              for (let channel = 0; channel < stride; channel++) vertex[i * stride + channel] = array[src + channel];
+            }
+          } else {
+            for (let z = 0; z < h; z++) {
+              const first = ((z0 + z) * n + x0) * stride;
+              vertex.set(array.subarray(first, first + w * stride), z * w * stride);
+            }
+          }
+          geometry.setAttribute(name, new THREE.BufferAttribute(vertex, stride));
         }
-        geometry.setAttribute(name, new THREE.BufferAttribute(vertex, stride));
+        geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+        if (!geometry.hasAttribute('normal')) geometry.computeVertexNormals();
+        return geometry;
+      };
+      const full = () => buildGeometry({ indices: nativeIndices.get(key) });
+      if (detail && w > 2 && h > 2) {
+        const position = attributes[0][1];
+        const first = (z0 * n + x0) * 3, last = ((z0 + h - 1) * n + x0 + w - 1) * 3;
+        detail.add(terrain, material, {
+          minX: position[first], maxX: position[last], minZ: position[first + 2], maxZ: position[last + 2],
+        }, full, () => buildGeometry(coarseTerrainTopology(w, h)));
+        continue;
       }
-      geometry.setIndex(new THREE.BufferAttribute(new Uint16Array(indices), 1));
-      if (!geometry.hasAttribute('normal')) geometry.computeVertexNormals();
-      const mesh = new THREE.Mesh(geometry, material);
+      const mesh = new THREE.Mesh(full(), material);
       mesh.receiveShadow = true;
       terrain.add(mesh);
     }
@@ -318,6 +356,8 @@ function drawOldTracks(origin, span, seed, count, maxLength) {
   const resolution = compactDevice ? 1024 : 2048;
   const { canvas, ctx } = makeCanvas(resolution, resolution);
   const map = new THREE.CanvasTexture(canvas);
+  // These three grayscale masks are sampled only in the red channel.
+  map.format = THREE.RedFormat;
   map.generateMipmaps = true;
   map.minFilter = THREE.LinearMipmapLinearFilter;
   const scale = resolution / span;
@@ -380,7 +420,9 @@ function villageFootpaths() {
       }
     }
   }
-  const map=new THREE.CanvasTexture(canvas);map.anisotropy=8;
+  const map=new THREE.CanvasTexture(canvas);
+  map.format=THREE.RedFormat;
+  map.anisotropy=8;
   return { map,origin,span };
 }
 
@@ -389,6 +431,7 @@ function buildTuskPatch(patch, regionHeight) {
   const n=bounds.grid;
   const dx=(bounds.maxX-bounds.minX)/(n-1), dz=(bounds.maxZ-bounds.minZ)/(n-1);
   const points=new Float32Array(n*n*3), colors=new Float32Array(points.length);
+  const values = new Float32Array(n * n);
   const ice=new THREE.Color(0xe3edf3), stone=new THREE.Color(0x535860), color=new THREE.Color();
   for(let j=0;j<n;j++) {
     const z=bounds.minZ+j*dz;
@@ -400,6 +443,7 @@ function buildTuskPatch(patch, regionHeight) {
         (patch.heights[zp*n+i]-patch.heights[zm*n+i])/(dz*2));
       const rock=smoothstep(.42,1.15,grade*(.87+noise.fbm(x*.018,z*.025,3)*.6));
       const y=lerp(regionHeight(x,z),patch.heights[k],blend);
+      values[k] = y;
       color.copy(ice).lerp(stone,rock);
       points.set([x,y,z],k*3);
       colors.set([color.r,color.g,color.b],k*3);
@@ -436,87 +480,93 @@ function buildTuskPatch(patch, regionHeight) {
   const tusk=new THREE.Mesh(geo,surfaceMaterial('mountain',{vertexColors:true,side:THREE.DoubleSide}));
   tusk.name='The Black Tusk volcanic neck';
   peak.add(tusk);
+  const summitRay = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, -1, 0));
+  function sample(px, pz, out) {
+    const [gx, gz] = worldIndex(px, pz, bounds);
+    const y = triangleHeight(values, n, gx, gz);
+    if (Math.abs(px - x) < 116 && Math.abs(pz - z) < 124) {
+      summitRay.ray.origin.set(px, elevation + 20, pz);
+      const summit = summitRay.intersectObject(tusk)[0];
+      if (summit && summit.point.y > y) {
+        out?.copy(summit.face.normal);
+        return summit.point.y;
+      }
+    }
+    if (out) {
+      const ix = Math.min(n - 2, Math.floor(gx)), iz = Math.min(n - 2, Math.floor(gz));
+      const a = iz * n + ix, b = a + 1, c = a + n, d = c + 1;
+      if (gx - ix + gz - iz <= 1) out.set((values[a] - values[b]) / dx, 1, (values[a] - values[c]) / dz);
+      else out.set((values[c] - values[d]) / dx, 1, (values[b] - values[d]) / dz);
+      out.normalize();
+    }
+    return y;
+  }
+  tuskGround = {
+    bounds, cols: n, rows: n,
+    xAt: i => bounds.minX + i * dx,
+    zAt: j => bounds.minZ + j * dz,
+    sample,
+    normalAt(x, z, out) {
+      sample(x, z, out);
+      return out;
+    },
+  };
   return peak;
 }
 
-export function buildCoastMountains({ heights, cover }, tusk) {
+function buildCoastMountains({ heights, cover }, tusk, local) {
   const bounds = regionBounds;
   const n = bounds.grid, step = (bounds.maxX - bounds.minX) / (n - 1);
-  const positions = new Float32Array(n ** 2 * 3);
-  const colors = new Float32Array(positions.length);
-  const normals = new Float32Array(positions.length);
   const northSnow = new THREE.Color(0xe0e7ec), stone = new THREE.Color(0x60636a);
   const forest = new THREE.Color(0x23342e), open = new THREE.Color(0xa4b0b1);
   const water = new THREE.Color(0x3b6570), ice = new THREE.Color(0xe0ebef), color = new THREE.Color();
-  const rendered = heights.slice();
   const at = (x, z) => triangleHeight(heights, n, ...worldIndex(x, z, bounds));
-  for (let j = 0; j < n; j++) {
-    const z = bounds.minZ + j * step;
-    for (let i = 0; i < n; i++) {
-      const x = bounds.minX + i * step;
-      const edgeX = clamp(x, WORLD.minX, WORLD.maxX);
-      const edgeZ = clamp(z, WORLD.minZ, WORLD.maxZ);
-      const edge = Math.hypot(x - edgeX, z - edgeZ);
-      if (edge < 240) {
-        // Relieve the overlap under the detailed grid, including LiDAR transitions.
-        rendered[j * n + i] += (heightAt(edgeX, edgeZ) - at(edgeX, edgeZ) - 18)
-          * (1 - smoothstep(0, 240, edge));
-      }
-    }
-  }
-
-  for (let j = 0; j < n; j++) {
-    const z = bounds.minZ + j * step;
-    for (let i = 0; i < n; i++) {
-      const x = bounds.minX + i * step;
-      const k = j * n + i;
-      const h = rendered[k];
-      const dx = rendered[j * n + Math.max(i - 1, 0)] - rendered[j * n + Math.min(i + 1, n - 1)];
-      const dz = rendered[Math.max(j - 1, 0) * n + i] - rendered[Math.min(j + 1, n - 1) * n + i];
-      const inv = 1 / Math.hypot(dx, 2 * step, dz);
-      const slope = 1 - 2 * step * inv;
-      positions.set([x, h, z], k * 3);
-      normals.set([dx * inv, 2 * step * inv, dz * inv], k * 3);
-      color.copy(open).lerp(northSnow, smoothstep(940, 1700, h));
-      color.lerp(stone, smoothstep(0.13, 0.51, slope) * 0.83);
-      if (cover[k] === 10) color.lerp(forest, 0.87);
-      if (cover[k] === 70) color.lerp(ice, 0.85);
-      if (cover[k] === 80) color.copy(water);
-      colors.set([color.r, color.g, color.b], k * 3);
-    }
-  }
-  const surrounding = makePatches(n, [
-    ['position', positions, 3], ['color', colors, 3], ['normal', normals, 3],
-  ], surfaceMaterial('mountain', { vertexColors: true, roughness: 0.98 }), (i, j) => {
-    const x = bounds.minX + (i + 0.5) * step, z = bounds.minZ + (j + 0.5) * step;
-    if (x > blackTuskBounds.minX && x < blackTuskBounds.maxX &&
-        z > blackTuskBounds.minZ && z < blackTuskBounds.maxZ) return true;
-    return x > WORLD.minX + 140 && x < WORLD.maxX - 140
-      && z > WORLD.minZ + 140 && z < WORLD.maxZ - 140;
+  regionCover = (x, z) => {
+    if (!insideTerrain(bounds, x, z)) return 0;
+    const [u, v] = worldIndex(x, z, bounds);
+    return cover[Math.round(v) * n + Math.round(u)];
+  };
+  const colorAt = (x, h, z, up) => {
+    color.copy(open).lerp(northSnow, smoothstep(940, 1700, h));
+    color.lerp(stone, smoothstep(.13, .51, 1 - up) * .83);
+    const kind = regionCover(x, z);
+    if (kind === 10) color.lerp(forest, .87);
+    if (kind === 70) color.lerp(ice, .85);
+    if (kind === 80) color.copy(water);
+    return color;
+  };
+  const material = surfaceMaterial('mountain', { vertexColors: true, roughness: .98 });
+  const peak = buildTuskPatch(tusk, at);
+  const survey = createSurveyTerrain({
+    regional: { bounds, cols: n, rows: n, xAt: i => bounds.minX + i * step,
+      zAt: j => bounds.minZ + j * step, sample: at },
+    insets: [local, tuskGround], material, colorAt, name: 'Coast Mountains · Copernicus DEM',
   });
-  surrounding.name = 'Coast Mountains Â· Copernicus DEM';
-  for (const mesh of surrounding.children) mesh.receiveShadow = false;
-  surrounding.add(buildTuskPatch(tusk, at));
+  backcountry = createBackcountry({ survey, material, colorAt, seed: 2728,
+    compact: compactDevice, viewDistance: 39000 });
+  const surrounding = survey.group;
+  surrounding.add(peak);
   const random = mulberry32(2728);
   const groves = [];
   for (let j = 1; j < n - 1; j += 2) {
     const z = bounds.minZ + j * step;
     for (let i = 1; i < n - 1; i += 2) {
       const x = bounds.minX + i * step;
-      if (Math.hypot(x, z - 2700) > 15500 || cover[j * n + i] !== 10 || rendered[j * n + i] > 1920) continue;
+      const elevation = heights[j * n + i];
+      if (Math.hypot(x, z - 2700) > 15500 || cover[j * n + i] !== 10 || elevation > 1920) continue;
       if (x > WORLD.minX - 75 && x < WORLD.maxX + 75 && z > WORLD.minZ - 75 && z < WORLD.maxZ + 75) continue;
       // The west-side subalpine stands are the foreground of the valley
       // panorama. Keep their mapped forest mask, but resolve individual
       // crowns rather than leaving widely spaced trees over bare terrain.
       const westSubalpine = (x < WORLD.minX || z < WORLD.minZ) && z < -1700
         && Math.hypot(x + 4300, z + 3400) < 3200
-        && rendered[j * n + i] > 1250 && rendered[j * n + i] < 1920;
+        && elevation > 1250;
       for (let t = 0; t < (westSubalpine ? 90 : 18); t++) {
         const tx = x + (random() - .5) * step * 1.7, tz = z + (random() - .5) * step * 1.7;
         const [u, v] = worldIndex(tx, tz, bounds);
         if (cover[Math.round(v) * n + Math.round(u)] !== 10) continue;
         if (tx > WORLD.minX && tx < WORLD.maxX && tz > WORLD.minZ && tz < WORLD.maxZ) continue;
-        const altitude=triangleHeight(rendered,n,u,v);
+        const altitude = heightAt(tx, tz);
         const size=altitude>1690?15+random()*15:24+random()**.65*25;
         groves.push([tx, altitude, tz, size, random() * 6.28]);
       }
@@ -556,11 +606,13 @@ export function buildCoastMountains({ heights, cover }, tusk) {
     const radius = near.boundingSphere.radius + near.boundingSphere.center.length();
     surrounding.add(new ForestCell('regional',center,radius,near,far,proxy));
   }
+  batchBudgetForestCrowns(surrounding, 'regional', 2400);
   cacheStaticTransforms(surrounding);
+  surrounding.add(backcountry.group, backcountry.horizon);
   return surrounding;
 }
 
-function buildMask(res = 1024) {
+export function buildMask(res = 1024) {
   const { canvas, ctx } = makeCanvas(res, res);
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, res, res);
@@ -623,7 +675,7 @@ function sampleMask(x, z) {
   return lerp(lerp(a, b, tx), lerp(c, d, tx), tz);
 }
 
-export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Promise.resolve()) {
+export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Promise.resolve(), { quality = 'BALANCED' } = {}) {
   initWorldData();
   onProgress(0.08, 'Sounding the snowpack…');
   await yieldFrame();
@@ -633,10 +685,15 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     loadGrid('resort.bin', WORLD), loadGrid('ranges.bin', regionBounds), loadGrid('black-tusk.bin', blackTuskBounds),
     preloadForestCrowns(),
   ]);
+  const packCache = whistlerSnowPackCacheMode(new URL('../data/resort.bin', import.meta.url).href);
+  const packDownload = packCache ? new AbortController() : null;
+  let pack = null;
+  if (packDownload) loadWhistlerSnowPack(packDownload.signal, packCache).then(result => { pack = result; });
   n = N;
   heights = local.heights;
   landCover = local.cover;
   prepareValleyLakes(heights, landCover, WORLD);
+  const snowInputs = { heights, cover: landCover, bounds: WORLD, runs: RUNS };
   cell = WORLD.sizeX / (N - 1);
   const dz = WORLD.sizeZ / (N - 1);
   const stationGrading = createStationGrading((x, z) => originalDetailVertex(...worldIndex(x, z, WORLD)));
@@ -652,13 +709,15 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
 
   onProgress(0.2, 'Tracing mapped ski runs…');
   await yieldFrame();
-  const m = buildMask(1536);
-  mask = m.mask;
-  maskN = m.res;
-  // The worker runs the expensive noise fields while this thread shades the
-  // base mesh. The document's own Canvas mask drives both paths unchanged.
-  const snowGeneration = startSnowGeneration(
-    { heights, cover: landCover, mask, bounds: WORLD, runs: RUNS }, yieldFrame);
+  // The download must finish while the required terrain is being prepared. A
+  // slower transfer never holds up the generator or the remaining startup work.
+  packDownload?.abort();
+  maskN = 1536;
+  mask = buildMask(maskN).mask;
+  const inputs = { ...snowInputs, mask };
+  const precomputed = pack && await unpackWhistlerSnowPack(pack, inputs);
+  pack = null;
+  const snowGeneration = precomputed ?? startSnowGeneration(inputs, yieldFrame);
 
   // Build mesh.
   const vcount = N * N;
@@ -762,14 +821,21 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
   const horizon = terrainHorizon(gradedHeights, N, N, WORLD);
   const snowMaps = { pisteMap, tracks, roomCutout, annexCutout, roomYaw, mountainShade, groomingMap, horizon };
   const mat = surfaceMaterial('snow', { vertexColors: true }, snowMaps);
+  const baseDetail = createTerrainTileDetail(quality);
   const mesh = makePatches(N, [
     ['position', positions, 3], ['normal', normals, 3], ['color', colors, 3],
-  ], mat, undefined, terrainTile);
+  ], mat, terrainTile, baseDetail);
   detailTiles = new Map();
   const detail = makeTerrainDetail(mesh, mat);
+  const nearDetail = ({ x, z }) =>
+    x >= WORLD.minX - 100 && x <= WORLD.maxX + 100 && z >= WORLD.minZ - 100 && z <= WORLD.maxZ + 100;
   // Sample the rendered triangles' attributes, including their smooth detailed
   // normals. Recessed snow uses the same material and joins this surface exactly.
   const sampleSurface = (x, z, color, normal) => {
+    if (!insideTerrain(WORLD, x, z)) {
+      color.setRGB(.831, .890, .956);
+      return heightAt(x, z, normal);
+    }
     const gx = clamp((x - WORLD.minX) / WORLD.sizeX, 0, 1) * (N - 1);
     const gz = clamp((z - WORLD.minZ) / WORLD.sizeZ, 0, 1) * (N - 1);
     const tileCount = (N - 1) / terrainTile;
@@ -841,12 +907,29 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     },
   });
   detail.terrain.add(skiSnow.group);
-  terrain.ranges = buildCoastMountains(region, tusk);
+  const localInset = {
+    bounds: WORLD, cols: N, rows: N,
+    xAt: i => WORLD.minX + i * cell,
+    zAt: j => WORLD.minZ + j * dz,
+    sample: (x, z) => triangleHeight(gradedHeights, N, ...worldIndex(x, z, WORLD)),
+    normalAt(x, z, out) { sampleSurface(x, z, col, out); return out; },
+  };
+  terrain.ranges = buildCoastMountains(region, tusk, localInset);
 
   terrain.mesh = detail.terrain;
-  terrain.updateDetail = detail.updateDetail;
-  terrain.streamDetail = detail.streamDetail;
-  terrain.updateSkiSnow = skiSnow.update;
+  terrain.setQuality = baseDetail.setQuality;
+  terrain.updateDetail = (...centers) => {
+    baseDetail.update(...centers);
+    detail.updateDetail(...centers.filter(nearDetail));
+    backcountry.stream(...centers);
+  };
+  terrain.streamDetail = (...centers) => {
+    baseDetail.update(...centers);
+    detail.streamDetail(...centers.filter(nearDetail));
+    backcountry.stream(...centers);
+  };
+  terrain.updateSkiSnow = (player, visible) => skiSnow.update(player,
+    visible && insideTerrain(WORLD, player.pos.x, player.pos.z));
   terrain.skiSnowDepthAt = skiSnow.depthAt;
   terrain.sampleSnowSurface = sampleSurface;
   terrain.snowMaterial = mat;
@@ -874,8 +957,12 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
 
 /* â”€â”€ sampling API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
-export function heightAt(x, z) {
+export function heightAt(x, z, normal) {
   if (!heights) return 0;
+  if (backcountry && !insideTerrain(WORLD, x, z)) {
+    if (insideTerrain(blackTuskBounds, x, z)) return tuskGround.sample(x, z, normal);
+    return backcountry.sample(x, z, normal);
+  }
   const [gx, gz] = worldIndex(x, z, WORLD);
   const tileCount = (n - 1) / terrainTile;
   const ix = Math.min(tileCount - 1, Math.floor(gx / terrainTile));
@@ -901,11 +988,16 @@ export function heightAt(x, z) {
 // Root trees against both surfaces when the detailed tile is streamed in.
 // The lower portion of each trunk is buried on the higher of the two terrains.
 export function treeAnchorHeightAt(x, z) {
+  if (!insideTerrain(WORLD, x, z)) return heightAt(x, z);
   const [gx, gz] = worldIndex(x, z, WORLD);
   return Math.max(heightAt(x, z), triangleHeight(gradedHeights, n, gx, gz));
 }
 
 export function normalAt(x, z, out = new THREE.Vector3()) {
+  if (backcountry && !insideTerrain(WORLD, x, z)) {
+    heightAt(x, z, out);
+    return out;
+  }
   const e = 2.5;
   const hL = heightAt(x - e, z), hR = heightAt(x + e, z);
   const hD = heightAt(x, z - e), hU = heightAt(x, z + e);
@@ -921,7 +1013,7 @@ export function slopeAt(x, z) {
 const _tmpN = new THREE.Vector3();
 
 export function pisteAt(x, z) {
-  if (!mask) return 0;
+  if (!mask || !insideTerrain(WORLD, x, z)) return 0;
   return sampleMask(x, z);
 }
 

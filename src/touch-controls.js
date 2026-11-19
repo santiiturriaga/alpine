@@ -1,59 +1,80 @@
-export function installTouchButtons({ keys, queueJump, cycleCamera, openMountain, pause }) {
-  const hud = document.getElementById('hud');
-  const surface = document.createElement('div');
-  surface.className = 'mapped-touch';
-  surface.setAttribute('role', 'group');
-  surface.setAttribute('aria-label', 'Ski touch controls');
+export function installTouchButtons({ keys, queueJump, clearJump, releaseKey, cycleCamera, openMountain, pause }) {
+  const surface = document.getElementById('touch-controls');
+  const pressed = new Map();
+  const pulseTimers = new Map();
+  const actions = { cycleCamera, openMountain, pause };
 
-  const prompt = document.getElementById('board-lift');
-  const tap = document.createElement('span');
-  tap.className = 'touch-tap-label';
-  tap.setAttribute('aria-hidden', 'true');
-  tap.textContent = 'Tap';
-  prompt.prepend(tap);
-  prompt.setAttribute('aria-labelledby', 'prompt-title');
-
-  for (const [group, buttons] of [
-    ['move', [['Left', 'KeyA'], ['Right', 'KeyD'], ['Go', 'KeyW'], ['Brake', 'KeyS'], ['Jump', 'Space']]],
-    ['actions', [['View', cycleCamera], ['Mountain', openMountain], ['Pause', pause]]],
-  ]) {
-    const cluster = document.createElement('div');
-    cluster.className = `mapped-touch-${group}`;
-    for (const [name, action] of buttons) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = name;
-      button.dataset.control = name.toLowerCase();
-      if (typeof action === 'function') button.addEventListener('click', action);
-      else {
-        const held = new Set();
-        const update = () => { keys[action] = held.size > 0; };
-        button.addEventListener('pointerdown', (event) => {
-          if (event.button !== 0) return;
-          event.preventDefault();
-          button.setPointerCapture(event.pointerId);
-          held.add(event.pointerId);
-          update();
-          if (action === 'Space') queueJump();
-        });
-        const release = (event) => { if (held.delete(event.pointerId)) update(); };
-        button.addEventListener('pointerup', release);
-        button.addEventListener('pointercancel', release);
-        button.addEventListener('lostpointercapture', release);
-        button.addEventListener('click', (event) => {
-          if (event.detail) return;
-          if (action === 'Space') queueJump();
-          else {
-            const pulse = Symbol();
-            held.add(pulse);
-            update();
-            setTimeout(() => { held.delete(pulse); update(); }, 160);
-          }
-        });
-      }
-      cluster.append(button);
-    }
-    surface.append(cluster);
+  function sync(button) {
+    const held = [...pressed.values()].includes(button);
+    const code = button.dataset.skiKey;
+    keys[code] = held;
+    button.toggleAttribute('data-held', held);
+    if (!held) releaseKey(code);
   }
-  hud.append(surface);
+
+  function press(button, token) {
+    const alreadyHeld = button.hasAttribute('data-held');
+    pressed.set(token, button);
+    sync(button);
+    if (!alreadyHeld && button.dataset.skiKey === 'Space') queueJump();
+  }
+
+  function release(token) {
+    const button = pressed.get(token);
+    if (!button) return;
+    pressed.delete(token);
+    sync(button);
+  }
+
+  function releaseAll() {
+    if (pressed.size) clearJump();
+    for (const timer of pulseTimers.values()) clearTimeout(timer);
+    pulseTimers.clear();
+    for (const token of pressed.keys()) release(token);
+  }
+
+  for (const button of surface.querySelectorAll('[data-ski-key]')) {
+    button.addEventListener('pointerdown', event => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      if (event.isTrusted) button.setPointerCapture(event.pointerId);
+      press(button, event.pointerId);
+    });
+    button.addEventListener('click', event => {
+      if (event.detail || event.pointerType) return;
+      // Native keyboard and accessibility activations have no held pointer.
+      const token = button.dataset.skiKey;
+      clearTimeout(pulseTimers.get(token));
+      press(button, token);
+      pulseTimers.set(token, setTimeout(() => {
+        pulseTimers.delete(token);
+        release(token);
+      }, 160));
+    });
+  }
+
+  for (const button of surface.querySelectorAll('[data-ski-action]')) {
+    button.addEventListener('click', actions[button.dataset.skiAction]);
+  }
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+    window.addEventListener(type, event => release(event.pointerId), true);
+  }
+  for (const type of ['blur', 'resize', 'orientationchange', 'pagehide']) {
+    window.addEventListener(type, releaseAll);
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) releaseAll();
+  });
+
+  // Keep iOS long presses on the live game surface from opening system menus.
+  const coarsePointer = matchMedia('(pointer: coarse)');
+  for (const id of ['hud', 'webgl', 'gear-mode']) {
+    const element = document.getElementById(id);
+    for (const type of ['contextmenu', 'selectstart', 'dragstart']) {
+      element.addEventListener(type, event => {
+        if (coarsePointer.matches || event.pointerType === 'touch') event.preventDefault();
+      });
+    }
+  }
+  return { releaseAll };
 }

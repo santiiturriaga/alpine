@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { guestVisibility } from './guest-visibility.js';
 import { climateUniforms } from './climate-state.js';
 import { pointInPolygon, runStyle } from './mapped-resort-ground.js';
 import { part, box, mergeParts } from './scenery.js';
@@ -402,6 +403,7 @@ function buildTrafficModel(parent, maximum) {
 }
 
 export function buildMappedResortPeople(scene, { config, world, liftSystem }) {
+  const view = guestVisibility();
   const { ground } = world;
   const group = new THREE.Group();
   group.name = `${config.name} · Skiers and snowboarders`;
@@ -893,11 +895,13 @@ export function buildMappedResortPeople(scene, { config, world, liftSystem }) {
     clock = time;
     if (dt > 0) for (const p of people) updatePerson(p, dt, player);
     model.begin();
+    view.prepare(camera);
     stats.visible = 0;
     for (const p of people) {
       if (!visiting(p)) continue;
       const d2 = camera ? (p.x - camera.position.x) ** 2 + (p.y - camera.position.y) ** 2 + (p.z - camera.position.z) ** 2 : 0;
       if (d2 > 295 ** 2 || stats.visible >= 72) continue;
+      if (camera && !view.contains(p.x, p.y, p.z, false)) continue;
       model.draw(p, clock, ground, d2 < 64 ** 2);
       stats.visible++;
     }

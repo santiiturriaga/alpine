@@ -2,11 +2,13 @@ import * as THREE from 'three';
 import { canvasTexture, clamp, damp, makeCanvas, mulberry32 } from './util.js';
 import { baseThickness, isSkiStyle, skiDeck } from './skier-equipment.js';
 import { buildSnowShoe } from './snow-shoes.js';
+import { batchRigidParts } from './skier-hardware.js';
 
 export { skiProfile } from './skier-equipment.js';
 
 const down = new THREE.Vector3(0, -1, 0);
 const up = new THREE.Vector3(0, 1, 0);
+let sharedBindings;
 
 function loft(a, b, c, d, t) {
   const value = b + .5 * t * ((c - a) + t * (2 * a - 5 * b + 4 * c - d + t * (3 * (b - c) + d - a)));
@@ -216,16 +218,71 @@ function haircutMesh(style) {
 
 // A sewn garment rounds the changing joint angle. Two capped cylinders
 // leave a wedge of daylight through the joint as soon as it bends.
+const foldTables = new Map();
+
+// Garment topology never changes. Accumulate the same area-weighted face
+// normals directly in the live attribute instead of reading each triangle
+// through BufferAttribute accessors four times per skier animation frame.
+function garmentNormals(positions, indices, normals) {
+  normals.fill(0);
+  for (let i = 0; i < indices.length; i += 3) {
+    const a = indices[i] * 3, b = indices[i+1] * 3, c = indices[i+2] * 3;
+    const cx = positions[c] - positions[b], cy = positions[c+1] - positions[b+1], cz = positions[c+2] - positions[b+2];
+    const ax = positions[a] - positions[b], ay = positions[a+1] - positions[b+1], az = positions[a+2] - positions[b+2];
+    const x = cy*az - cz*ay, y = cz*ax - cx*az, z = cx*ay - cy*ax;
+    normals[a] += x; normals[a+1] += y; normals[a+2] += z;
+    normals[b] += x; normals[b+1] += y; normals[b+2] += z;
+    normals[c] += x; normals[c+1] += y; normals[c+2] += z;
+  }
+  for (let i = 0; i < normals.length; i += 3) {
+    const x = normals[i], y = normals[i+1], z = normals[i+2];
+    const scale = 1 / (Math.sqrt(x*x + y*y + z*z) || 1);
+    normals[i] = x*scale; normals[i+1] = y*scale; normals[i+2] = z*scale;
+  }
+}
+
+function garmentFolds(rows, angles, profile, side, sleeve) {
+  const key = `${rows}/${angles.length}/${side}/${sleeve}/${JSON.stringify(profile)}`;
+  if (foldTables.has(key)) return foldTables.get(key);
+  const columns = angles.length;
+  const folds = new Float64Array((rows + 1) * columns * 3), rings = [];
+  for (let row = 0; row <= rows; row++) {
+    const s = row / rows;
+    let k = 0;
+    while (k < profile.length-2 && profile[k+1][0] < s) k++;
+    const a = profile[k], b = profile[k+1], t = (s-a[0]) / (b[0]-a[0]);
+    const loose = Math.sin(Math.PI*s) ** 1.6;
+    rings.push([THREE.MathUtils.lerp(a[1], b[1], t), THREE.MathUtils.lerp(a[2], b[2], t), loose]);
+    const knee = Math.exp(-(((s-.48)/.18)**2));
+    const hem = Math.exp(-(((s-.91)/.12)**2));
+    for (let i = 0; i < columns; i++) {
+      const [angle, sin, cos] = angles[i], at = (row * columns + i) * 3;
+      const base = .0049 * Math.sin(s * 74 + sin * 2.2 + side) * knee;
+      folds[at] = base * .4 + .0037 * Math.sin(s * 98 - cos * 2.4 + side * 1.2) * hem
+        + .0019 * Math.sin(s * 45 + angle * 4 + side) * loose;
+      folds[at+1] = base * .6 * (1.1 - cos * .65);
+      const panel = sleeve ? .74 + .26 * THREE.MathUtils.smoothstep(s, .21 + sin*.02, .245 + sin*.02)
+        : cos > .39 && s > .36 && s < .68 ? .925 : 1;
+      folds[at+2] = panel * (Math.abs(cos) < .025 ? .84 : 1);
+    }
+  }
+  const table = { folds, rings };
+  foldTables.set(key, table);
+  return table;
+}
+
 function jointGarment(parent, material, options = {}) {
   const rows = 28, sides = 36, stride = sides + 1;
   const positions = new Float32Array(((rows + 1) * stride + 2) * 3);
   const colors = new Float32Array(positions.length), uvs = [], indices = [];
   const angles = Array.from({ length: stride }, (_, i) => {
     const a = i / sides * Math.PI * 2;
-    return [a, Math.sin(a), Math.cos(a)];
+    return [a, Math.sin(a), Math.cos(a), .6 * Math.cos(a) - .36 * Math.sin(a*3)];
   });
   const profile = options.profile || [[0,.064,.067],[.09,.096,.097],[.19,.102,.107],[.35,.096,.098],
     [.47,.091,.091],[.57,.088,.094],[.7,.080,.081],[.86,.079,.077],[1,.081,.078]];
+  const bias = options.side ?? 1;
+  const { folds, rings } = garmentFolds(rows, angles, profile, bias, !!options.sleeve);
   for (let j = 0; j <= rows; j++) for (let i = 0; i <= sides; i++) {
     uvs.push(i / sides, j / rows);
     if (j === rows || i === sides) continue;
@@ -239,7 +296,9 @@ function jointGarment(parent, material, options = {}) {
   uvs.push(.5, 0, .5, 1);
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
-  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
+  const normal = new THREE.BufferAttribute(new Float32Array(positions.length), 3).setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute('normal', normal);
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geometry.setIndex(indices);
   const mesh = put(parent, geometry, material);
@@ -282,46 +341,31 @@ function jointGarment(parent, material, options = {}) {
           positions[offset + 2] = center.z;
           colors[offset] = colors[offset + 1] = colors[offset + 2] = .97;
         }
-        let k = 0;
-        while (k < profile.length - 2 && profile[k + 1][0] < s) k++;
-        const a = profile[k], b = profile[k + 1], t = (s - a[0]) / (b[0] - a[0]);
-        const width = THREE.MathUtils.lerp(a[1], b[1], t), depth = THREE.MathUtils.lerp(a[2], b[2], t);
-        const kneeFold = Math.exp(-(((s - .48) / .18) ** 2));
-        const hemFold = Math.exp(-(((s - .91) / .12) ** 2));
-        const bias = options.side ?? 1;
-        const looseCloth = Math.sin(Math.PI * s) ** 1.6;
+        const [width, depth, looseCloth] = rings[j];
         const flutter = wind * (options.sleeve ? .013 : .010) * looseCloth * Math.sin(windPhase + s * 14 + bias * 1.9);
         center.addScaledVector(right, flutter * bias * .85);
         for (let i = 0; i <= sides; i++) {
-          const [angle, sin, cos] = angles[i];
-          const compressed = .4 + compression * .6 * (1.1 - cos * .65);
-          const crease = .0049 * Math.sin(s * 74 + sin * 2.2 + bias) * kneeFold * compressed
-            + .0037 * Math.sin(s * 98 - cos * 2.4 + bias * 1.2) * hemFold
-            + .0019 * Math.sin(s * 45 + angle * 4 + bias) * looseCloth
-            + flutter * (.6 * cos - .36 * Math.sin(angle * 3));
-          const x = sin * (width + crease), z = cos * (depth + crease);
           const offset = (j * stride + i) * 3;
+          const [, sin, cos, windShape] = angles[i];
+          const crease = folds[offset] + compression * folds[offset+1] + flutter * windShape;
+          const x = sin * (width + crease), z = cos * (depth + crease);
           positions[offset] = center.x + right.x * x + front.x * z;
           positions[offset + 1] = center.y + right.y * x + front.y * z;
           positions[offset + 2] = center.z + right.z * x + front.z * z;
-          const panel = options.sleeve
-            ? .74 + .26 * THREE.MathUtils.smoothstep(s, .21 + sin * .02, .245 + sin * .02)
-            : cos > .39 && s > .36 && s < .68 ? .925 : 1;
-          const stitch = Math.abs(cos) < .025 ? .84 : 1;
-          const shade = (.97 + crease * 4.5) * panel * stitch;
+          const shade = (.97 + crease * 4.5) * folds[offset+2];
           colors[offset] = colors[offset + 1] = colors[offset + 2] = shade;
         }
       }
       geometry.attributes.position.needsUpdate = true;
       geometry.attributes.color.needsUpdate = true;
-      geometry.computeVertexNormals();
-      const normal = geometry.attributes.normal;
+      garmentNormals(positions, geometry.index.array, normal.array);
       for (let j = 0; j <= rows; j++) {
         const a = j * stride, b = a + sides;
         seam.fromBufferAttribute(normal, a).add(opposite.fromBufferAttribute(normal, b)).normalize();
         normal.setXYZ(a, seam.x, seam.y, seam.z);
         normal.setXYZ(b, seam.x, seam.y, seam.z);
       }
+      normal.needsUpdate = true;
     },
   };
 }
@@ -667,6 +711,15 @@ export function createSkier({
     const deck = put(equipment, activeDeck.geometry, activeDeck.materials);
     deck.name = 'Ski topsheet, beveled sidewalls, steel edges, and running base';
     decks.push(deck);
+    if (sharedBindings) {
+      equipment.add(sharedBindings.clone(true));
+      return;
+    }
+    // The left, right and carried skis all mount the same binding hardware.
+    const bindings = new THREE.Group();
+    bindings.name = 'Bindings';
+    equipment.add(bindings);
+    equipment = bindings;
     rounded(equipment, steel, .079, .018, .29, 0, .016, -.035, .0035);
     put(equipment, shell([[.016,.044,.039,0],[.023,.051,.046,0],[.057,.05,.044,-.005],
       [.074,.036,.034,-.006],[.077,.029,.028,-.008]], .0015, 26), black, 0, 0, -.24);
@@ -691,6 +744,12 @@ export function createSkier({
     rounded(equipment, steel, .042, .011, .022, 0, .091, -.261, .002);
     for (const z of [-.27, -.282, -.294]) rounded(equipment, black, .046, .003, .004, 0, .085, z, .001);
     rounded(equipment, steel, .028, .016, .003, 0, .049, -.286, .0012);
+    // Include the recessed screw slots in the joint's material batches.
+    for (const part of [...bindings.children]) {
+      for (const detail of [...part.children]) bindings.attach(detail);
+    }
+    batchRigidParts(bindings);
+    sharedBindings = bindings.clone(true);
   }
   for (const side of [-1, 1]) {
     const ski = new THREE.Group();
@@ -982,7 +1041,7 @@ export function createSkier({
       }
       elbow.updateMatrix();
       sleeveEnd.set(0, -.257, .003).applyMatrix4(elbow.matrix);
-      sleeve.update(sleeveStart, elbow.position, sleeveEnd, windPhase, wind);
+      if (body.visible) sleeve.update(sleeveStart, elbow.position, sleeveEnd, windPhase, wind);
       pole.visible = !mount && !display;
       if (mount || display) continue;
       // Keep the shaft trailing independently of forearm flex, and let the pole
@@ -1063,7 +1122,7 @@ export function createSkier({
       cuff.rotation.x = clamp(Math.atan2(bend.z, bend.y) * .53, -.06, .34);
       cuff.updateMatrix();
       ankle.set(0, .087, .011).applyMatrix4(cuff.matrix).applyMatrix4(ski.matrix);
-      trousers.update(hip, knee, ankle, windPhase, wind);
+      if (trousers.mesh.visible) trousers.update(hip, knee, ankle, windPhase, wind);
     }
   }
 
@@ -1166,5 +1225,9 @@ export function createSkier({
     }
   }
   setAppearance({ sticker: 'none' });
+  for (const joint of [torso, skiHead, ...Object.values(helmetDecals), ...Object.values(bagDecals)]) batchRigidParts(joint);
+  for (const { skiBoot, cuff } of legs) { batchRigidParts(skiBoot); batchRigidParts(cuff); }
+  for (const { elbow, pole } of arms) { batchRigidParts(elbow); batchRigidParts(pole); }
+  for (const { hand, pole } of helmetHands) { batchRigidParts(hand); batchRigidParts(pole); }
   return { group, torso, animate, contactPoints, skiAxes, skiRights, skiSink, skiPlanted, showHelmetGear, setAppearance, setSkiSnow };
 }

@@ -230,6 +230,7 @@ function batchBoxes(group, spatial) {
   }
   function flush() {
     const geometry = new THREE.BoxGeometry();
+    const batches = [];
     for (const [material, cells] of entries) for (const matrices of cells.values()) {
       const mesh = new THREE.InstancedMesh(geometry, material, matrices.length);
       matrices.forEach((matrix, i) => mesh.setMatrixAt(i, matrix));
@@ -237,7 +238,9 @@ function batchBoxes(group, spatial) {
       mesh.computeBoundingSphere();
       mesh.castShadow = mesh.receiveShadow = true;
       group.add(mesh);
+      batches.push(mesh);
     }
+    return batches;
   }
   return { add, flush };
 }
@@ -294,11 +297,12 @@ function facadeSign(group, x, y, z, yaw, width, profile, dark, palette) {
   group.add(sign);
 }
 
-export function buildMappedLodges(scene, config, ground, env) {
+export function buildMappedLodges(scene, config, ground, env, initialQuality = 'BALANCED') {
   const group = new THREE.Group();
   group.name = `${config.name} · lodges and base landmarks`;
   const spatial = (config.buildings?.length ?? 0) > 160;
   const boxes = batchBoxes(group, spatial);
+  const facadeBoxes = spatial ? batchBoxes(group, true) : boxes;
   const surfaces = spatial ? batchSurfaces(group) : null;
   const add = boxes.add;
   const palette = new Map();
@@ -331,6 +335,7 @@ export function buildMappedLodges(scene, config, ground, env) {
     const precise = profiles[building.id] || Object.values(profiles).find(p =>
       p.title === building.name?.toUpperCase()) || (/ski (and|&) ride school|ski.+snowboard school/i.test(building.name) ? profiles.school : null);
     const profile = precise || standardProfile;
+    const addFacade = precise ? add : facadeBoxes.add;
     if (!palette.has(profile)) palette.set(profile,{
       trim: textureSurface(profile.trim, 'wood', { side: THREE.DoubleSide }),
       walls: textureSurface(profile.walls, 'wood', { side: THREE.DoubleSide }),
@@ -390,7 +395,7 @@ export function buildMappedLodges(scene, config, ground, env) {
       env.addBox(x, z, hw, .29, -yaw, 'building', { minY: Math.min(localGround - 1, cy - 5), maxY: eave + .6 });
       const local = (u, height, depth) => [x + Math.cos(yaw) * u + nx * depth, height,
         z - Math.sin(yaw) * u + nz * depth];
-      const piece = (mat, u, y, depth, w, h, d, lean = 0) => add(mat, ...local(u, y, depth), w, h, d, yaw, lean);
+      const piece = (mat, u, y, depth, w, h, d, lean = 0) => addFacade(mat, ...local(u, y, depth), w, h, d, yaw, lean);
       if (length > 2.2) {
         piece(trim, 0, eave - .15, .025, length, .31, .19);
         for (const u of [-hw + .13, hw - .13]) piece(trim, u, (eave + rockTop) * .5, .085, .21, eave - rockTop, .22);
@@ -405,7 +410,7 @@ export function buildMappedLodges(scene, config, ground, env) {
           const door = yard && !floor && j === Math.floor(bays / 2);
           const u = -hw + width * (j + .5);
           const [wx, wy, wz] = local(u, door ? Math.max(base, localGround) + 1.23 : y, .05);
-          windowBays(add, trim, glasses, { x: wx, y: wy, z: wz, width: door ? Math.min(2.2, width * .65) : width * .70,
+          windowBays(addFacade, trim, glasses, { x: wx, y: wy, z: wz, width: door ? Math.min(2.2, width * .65) : width * .70,
             height: door ? 2.35 : floor ? 1.70 : 1.32, yaw, seed: rand() });
           if (floor && profile.ticket) piece(iron, u, y + 1.15, .12, .16, .27, .28);
         }
@@ -500,8 +505,30 @@ export function buildMappedLodges(scene, config, ground, env) {
   if (clock) buildClock(group, clock.point, ground, env, add, snow, stone, orange, iron);
   surfaces?.flush();
   boxes.flush();
+  const facadeMeshes = spatial ? facadeBoxes.flush() : [];
+  let budget = initialQuality === 'BUDGET', lastX = Infinity, lastZ = Infinity;
+  function setQuality(name) {
+    if (budget === (name === 'BUDGET')) return;
+    budget = name === 'BUDGET';
+    lastX = lastZ = Infinity;
+  }
+  function update(camera) {
+    const { x, z } = camera.position;
+    if (Number.isFinite(lastX) && (!budget || (lastX - x) ** 2 + (lastZ - z) ** 2 < 32 ** 2)) return;
+    lastX = x;
+    lastZ = z;
+    for (const mesh of facadeMeshes) {
+      const { center, radius } = mesh.boundingSphere;
+      const range = radius + (mesh.visible ? 630 : 565);
+      const visible = !budget || (center.x - x) ** 2 + (center.z - z) ** 2 < range ** 2;
+      if (mesh.visible && !visible) mesh.dispose();
+      mesh.visible = visible;
+    }
+  }
   scene.add(group);
   cacheStaticTransforms(group);
+  group.setQuality = setQuality;
+  group.updateDetail = update;
   return group;
 }
 

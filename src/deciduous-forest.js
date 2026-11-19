@@ -6,6 +6,7 @@ import { attachChaseFoliage } from './chase-foliage.js';
 
 const TAU=Math.PI*2, variants=3, geometryCache=new Map();
 const profiles={
+  BUDGET:{start:14,end:30,budget:19,far:1900},
   LOW:{start:17,end:35,budget:28,far:2100},
   BALANCED:{start:23,end:51,budget:72,far:2900},
   HIGH:{start:29,end:65,budget:112,far:3600},
@@ -441,7 +442,7 @@ export function buildDeciduousForest(group,patches,region='') {
       for(const weight of changed)weight.needsUpdate=true;
       for(const {wood,leaves} of nearBuckets.values()){
         wood.visible=wood.count>0;leaves.visible=wood.visible&&leafVisible;
-        wood.castShadow=leaves.castShadow=!compactDevice&&quality!=='LOW';
+        wood.castShadow=leaves.castShadow=!compactDevice&&quality!=='LOW'&&quality!=='BUDGET';
         if(wood.count){wood.instanceMatrix.needsUpdate=true;wood.computeBoundingSphere();leaves.computeBoundingSphere();}
       }
       selected=next;group.userData.deciduous.nearBudget=budget;group.userData.deciduous.nearTrees=next.length;

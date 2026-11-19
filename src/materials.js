@@ -5,9 +5,45 @@ import { bindSnowTraffic, snowTrafficGLSL } from './snow-traffic.js';
 import { bindSnowCrystals } from './snow-crystals.js';
 import { bindTerrainHorizon } from './terrain-horizon.js';
 
+const terrainSurfaces = new Set();
+let budgetSampling = false, noiseVolume;
+
+// One shared 256 KiB lattice. Hardware interpolates the eight adjacent values
+// per sample; the shader still controls each layer's scale and pixel footprint.
+function terrainNoiseVolume() {
+  if (noiseVolume) return noiseVolume;
+  const size = 64, values = new Uint8Array(size ** 3);
+  let seed = 49547;
+  for (let i = 0; i < values.length; i++) {
+    seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+    values[i] = seed >>> 24;
+  }
+  noiseVolume = new THREE.Data3DTexture(values, size, size, size);
+  noiseVolume.name = 'Snow and rock noise lattice';
+  noiseVolume.format = THREE.RedFormat;
+  noiseVolume.minFilter = noiseVolume.magFilter = THREE.LinearFilter;
+  noiseVolume.wrapR = noiseVolume.wrapT = noiseVolume.wrapS = THREE.RepeatWrapping;
+  noiseVolume.needsUpdate = true;
+  return noiseVolume;
+}
+
+export function setTerrainSamplingBudget(enabled) {
+  if (enabled === budgetSampling) return;
+  budgetSampling = enabled;
+  for (const material of terrainSurfaces) material.needsUpdate = true;
+}
+
 const noise = /* glsl */ `
   varying vec3 surfacePoint;
 
+  #ifdef TERRAIN_NOISE_VOLUME
+  uniform highp sampler3D terrainNoise;
+  float surfaceNoise(vec3 p) {
+    vec3 f = fract(p);
+    vec3 t = f*f*(3.0 - 2.0*f);
+    return texture(terrainNoise, (floor(p) + t + .5) / 64.0).r;
+  }
+  #else
   float surfaceHash(vec3 p) {
     p = fract(p * 0.1031);
     p += dot(p, p.yzx + 31.32);
@@ -23,9 +59,11 @@ const noise = /* glsl */ `
       mix(mix(surfaceHash(i+vec3(0,0,1)),surfaceHash(i+vec3(1,0,1)),t.x),
           mix(surfaceHash(i+vec3(0,1,1)),surfaceHash(i+vec3(1,1,1)),t.x),t.y),t.z);
   }
+  #endif
 
   float filteredSurfaceNoise(vec3 p) {
     float coverage = 1.0 - smoothstep(.37,1.12,max(length(dFdx(p)),length(dFdy(p))));
+    if (coverage == 0.) return .5;
     return mix(.5,surfaceNoise(p),coverage);
   }
 
@@ -303,8 +341,17 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
   const surface = surfaces[kind];
   const skiSnow = kind === 'snow' && snowMaps?.skiSnow;
   const material = new THREE.MeshStandardMaterial({ roughness: .9, ...options });
-  material.customProgramCacheKey = () => `${kind}${skiSnow ? `-ski-snow-${skiSnow.mode}` : ''}`;
+  const terrain = kind === 'snow' || kind === 'mountain';
+  if (terrain) {
+    terrainSurfaces.add(material);
+    material.addEventListener('dispose', () => terrainSurfaces.delete(material));
+  }
+  material.customProgramCacheKey = () => `${kind}${skiSnow ? `-ski-snow-${skiSnow.mode}` : ''}${terrain && budgetSampling ? '-volume' : ''}`;
   material.onBeforeCompile = (shader) => {
+    if (terrain && budgetSampling) {
+      shader.fragmentShader = '#define TERRAIN_NOISE_VOLUME\n' + shader.fragmentShader;
+      shader.uniforms.terrainNoise = { value: terrainNoiseVolume() };
+    }
     shader.uniforms.climateSnowpack = climateUniforms.snowpack;
     shader.uniforms.climateSnowline = climateUniforms.snowline;
     shader.uniforms.climateAutumn = climateUniforms.autumn;

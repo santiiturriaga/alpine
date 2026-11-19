@@ -15,7 +15,7 @@ import { surfaceMaterial } from './materials.js';
 import { coniferDepthMaterial, coniferGeometry, coniferMaterial } from './conifers.js';
 import { climateUniforms } from './climate-state.js';
 import { buildNeedleShoots } from './needle-shoots.js';
-import { ForestCell, forestDetailTiers, forestQuality, makeForestCrowns, shareForestInstances } from './forest-lod.js';
+import { ForestCell, batchBudgetForestCrowns, forestDetailTiers, forestQuality, makeForestCrowns, shareForestInstances } from './forest-lod.js';
 import { part, box, beam, cacheStaticTransforms, mergeParts, mergedMesh } from './scenery.js';
 import { buildResortPeople } from './resort-people.js';
 import { buildRoundhouseArrival } from './roundhouse.js';
@@ -162,7 +162,7 @@ export function pointInBox(px, pz, box, padX = 0, padZ = 0) {
    FOREST
    ═══════════════════════════════════════════════════════════════ */
 
-function buildForest(scene, grid, rand) {
+function buildForest(scene, grid, rand, detail) {
   const group = new THREE.Group();
   group.name = 'Forest · WorldCover tree mask';
   scene.add(group);
@@ -199,6 +199,7 @@ function buildForest(scene, grid, rand) {
       reserve(cut,Math.min(ax,bx)-r,Math.max(ax,bx)+r,Math.min(az,bz)-r,Math.max(az,bz)+r);
     }
   let count = 0;
+  const patchSize = detail.budget ? 210 : 420;
   const species = ['fir', 'spruce', 'hemlock'];
   const variants = [...species, ...species];
   const needleMaterial = coniferMaterial(-1, 'mapped');
@@ -242,7 +243,7 @@ function buildForest(scene, grid, rand) {
     const yaw = source() * Math.PI * 2;
     const stretch = .96 + source() * .29;
     const kind = family + (Math.sin(x * .051 + z * .023 + family * 2) > .1 ? species.length : 0);
-    const cell = `${Math.floor(x / 420)},${Math.floor(z / 420)},${kind}`;
+    const cell = `${Math.floor(x / patchSize)},${Math.floor(z / patchSize)},${kind}`;
     if (!buckets.has(cell)) buckets.set(cell, { kind, trees: [] });
     const tree = { x, y: treeAnchorHeightAt(x,z), z, apex, yaw, stretch, kind };
     buckets.get(cell).trees.push(tree);
@@ -300,7 +301,7 @@ function buildForest(scene, grid, rand) {
   }
 
   const patchSizes = variants.map(() => []), stands = new Map();
-  for (const [key,{ kind, trees }] of buckets) {
+  for (const { kind, trees } of buckets.values()) {
     const mesh = new THREE.InstancedMesh(distantTemplates[kind], needleMaterial, trees.length);
     mesh.customDepthMaterial = shadowMaterial;
     for (const [i, tree] of trees.entries()) {
@@ -310,7 +311,7 @@ function buildForest(scene, grid, rand) {
     }
     mesh.computeBoundingSphere();
     mesh.instanceMatrix.needsUpdate = true;
-    const cellKey = key.slice(0,key.lastIndexOf(','));
+    const cellKey = `${Math.floor(trees[0].x / 420)},${Math.floor(trees[0].z / 420)}`;
     if (!stands.has(cellKey)) stands.set(cellKey,{near:new THREE.Group(),trees:[]});
     const cell = stands.get(cellKey);
     cell.near.add(mesh);
@@ -338,8 +339,9 @@ function buildForest(scene, grid, rand) {
     const radius = far.boundingSphere.radius + far.boundingSphere.center.distanceTo(center);
     group.add(new ForestCell('mapped',center,radius,near,far,proxy));
   }
+  batchBudgetForestCrowns(group, 'mapped', 1680);
 
-  // A detail query can touch at most nine 420 m patches. The actual
+  // A detail query can touch at most nine patches. The actual
   // population bounds each instance buffer even when the whole query faces us.
   const capacities = patchSizes.map((sizes) => sizes.sort((a,b) => b-a)
     .slice(0,9).reduce((sum,n) => sum+n,0));
@@ -440,12 +442,12 @@ function buildForest(scene, grid, rand) {
    ROCK & SNOW CAPS
    ═══════════════════════════════════════════════════════════════ */
 
-function buildRocks(scene, grid, rand) {
+function buildRocks(scene, grid, rand, detail) {
   const group = new THREE.Group();
   group.name = 'rocks · fractured Coast Range granite';
   scene.add(group);
 
-  function fracturedRock(seed, fragment=false) {
+  function fracturedRock(seed, fragment, reduced) {
     const rng=mulberry32(seed), positions=[], normals=[], capPositions=[], snowDepths=[];
     const vec=(x,y,z)=>new THREE.Vector3(x,y,z);
     // Intersect geological joint planes, rather than displacing a sphere.
@@ -556,6 +558,12 @@ function buildRocks(scene, grid, rand) {
           const faceStart=positions.length;
           for(let i=0;i<vertices.length;i++) {
             const a=center,b=vertices[i],c=vertices[(i+1)%vertices.length];
+            // Keep the weathered rim and all fracture planes. At reduced detail
+            // remove the small triangles that only sculpt the face interior.
+            if (reduced) {
+              triangle(positions,a,b,c);
+              continue;
+            }
             const steps=Math.max(2,Math.ceil(Math.max(a.distanceTo(b),a.distanceTo(c))/(fragment ? .30 : .15)));
             const stonePoint=(u,v)=>{
               const q=a.clone().multiplyScalar(1-u-v).addScaledVector(b,u).addScaledVector(c,v);
@@ -599,8 +607,12 @@ function buildRocks(scene, grid, rand) {
     return {rock,cap};
   }
   const shapeCount=5;
-  const shapes=[...Array.from({length:shapeCount},(_,i)=>fracturedRock(1783+i*7919)),
-    ...Array.from({length:shapeCount},(_,i)=>fracturedRock(3313+i*9677,true))];
+  const makeShapes = reduced => [
+    ...Array.from({length:shapeCount},(_,i)=>fracturedRock(1783+i*7919,false,reduced)),
+    ...Array.from({length:shapeCount},(_,i)=>fracturedRock(3313+i*9677,true,reduced)),
+  ];
+  const initialBudget = detail.budget;
+  const shapes = makeShapes(initialBudget);
   const cells=new Map(), outcrops=[];
   const addStone=(x,z,kind,stone)=>{
     const key=`${Math.floor(x/460)},${Math.floor(z/460)}`;
@@ -663,8 +675,16 @@ function buildRocks(scene, grid, rand) {
       .replace('#include <color_fragment>','#include <color_fragment>\nif(rockSnowCoverage<.08)discard;');
   };
   capMaterial.customProgramCacheKey=()=> 'seasonal-fracture-ledges-v2';
-  batchFracturedRocks(scene,group,cells,shapes,stoneMaterial,capMaterial);
-  return group;
+  const replaceRocks = batchFracturedRocks(scene,group,cells,shapes,stoneMaterial,capMaterial,detail);
+  let alternate;
+  return () => {
+    if (detail.budget === initialBudget) {
+      replaceRocks(shapes);
+    } else {
+      alternate ??= makeShapes(detail.budget).map(({ rock, cap }) => { cap.dispose(); return { rock }; });
+      replaceRocks(alternate);
+    }
+  };
 }
 
 function indexFracturedRock(positions, normals) {
@@ -696,7 +716,7 @@ function indexFracturedRock(positions, normals) {
   return geometry;
 }
 
-function batchFracturedRocks(scene, group, cells, shapes, stoneMaterial, capMaterial) {
+function batchFracturedRocks(scene, group, cells, shapes, stoneMaterial, capMaterial, detail) {
   const rockCounts = shapes.map(() => 0);
   const capCounts = shapes.map(() => 0);
   const stoneBox = new THREE.Box3();
@@ -705,7 +725,9 @@ function batchFracturedRocks(scene, group, cells, shapes, stoneMaterial, capMate
     const bounds = new THREE.Box3();
     for (const stone of stones) {
       const shape = shapes[stone.kind];
-      stone.rockBounds = shape.rock.boundingSphere.clone().applyMatrix4(stone.matrix);
+      const rockBounds = shape.rock.boundingSphere.clone();
+      rockBounds.radius += .14; // Allow for detailed face relief after a quality change.
+      stone.rockBounds = rockBounds.applyMatrix4(stone.matrix);
       bounds.union(stone.rockBounds.getBoundingBox(stoneBox));
       rockCounts[stone.kind]++;
       if (stone.cap) {
@@ -748,12 +770,13 @@ function batchFracturedRocks(scene, group, cells, shapes, stoneMaterial, capMate
   const pools = [...rockPools, ...capPools, ...shadowPools];
   const sun = scene.getObjectByName('sun');
   const viewProjection = new THREE.Matrix4();
+  const lastViewProjection = new THREE.Matrix4();
   const view = new THREE.Frustum();
   const prior = scene.onBeforeRender;
   scene.onBeforeRender = function (renderer, activeScene, camera, target) {
     prior.call(this, renderer, activeScene, camera, target);
     if (!group.visible) return;
-    view.setFromProjectionMatrix(viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     const shadowMap = renderer.shadowMap;
     let shadowView;
     if (sun?.castShadow && sun.visible && sun.layers.test(camera.layers) && shadowMap.enabled &&
@@ -762,6 +785,9 @@ function batchFracturedRocks(scene, group, cells, shapes, stoneMaterial, capMate
       sun.shadow.updateMatrices(sun);
       shadowView = sun.shadow.getFrustum();
     }
+    if (detail.budget && !shadowView && viewProjection.equals(lastViewProjection)) return;
+    lastViewProjection.copy(viewProjection);
+    view.setFromProjectionMatrix(viewProjection);
     for (const mesh of pools) mesh.count = 0;
     for (const { bounds, stones } of regions) {
       const cameraRegion = view.intersectsBox(bounds);
@@ -773,7 +799,8 @@ function batchFracturedRocks(scene, group, cells, shapes, stoneMaterial, capMate
           rock.setMatrixAt(rock.count, matrix);
           rock.setColorAt(rock.count++, color);
         }
-        if (shadowRegion && shadowView.intersectsSphere(rockBounds)) {
+        if (shadowRegion && (!detail.budget || rockBounds.distanceToPoint(camera.position) < 90)
+            && shadowView.intersectsSphere(rockBounds)) {
           const shadow = shadowPools[kind];
           shadow.setMatrixAt(shadow.count++, matrix);
         }
@@ -796,6 +823,9 @@ function batchFracturedRocks(scene, group, cells, shapes, stoneMaterial, capMate
       }
     }
   };
+  return nextShapes => nextShapes.forEach(({ rock }, kind) => {
+    rockPools[kind].geometry = shadowPools[kind].geometry = rock;
+  });
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1062,7 +1092,7 @@ function towerShaftGeometry() {
   ]);
 }
 
-function towerHeadGeometry() {
+function towerHeadGeometry(distant = false) {
   const parts = [
     box(4.2, .16, .28, '#65737a', [0, -.14, 0]),
     box(4.16, .345, .16, '#88949a', [0, -.36, 0]),
@@ -1071,6 +1101,10 @@ function towerHeadGeometry() {
   for (const x of [-1.65, 1.65]) {
     parts.push(box(.17, .24, 1.8, '#9da8ad', [x, -.32, 0]));
     parts.push(box(.55, .045, .94, '#909da1', [x, -.83, 0]));
+    if (distant) {
+      parts.push(box(.19, .21, 1.60, '#293137', [x, -.13, 0]));
+      continue;
+    }
     for (let i = -3; i <= 3; i++) {
       parts.push(part(new THREE.CylinderGeometry(.125, .125, .08, 12), '#293137',
         [x, -.12, i * .24], [0, 0, Math.PI / 2]));
@@ -1092,6 +1126,7 @@ function towerHeadGeometry() {
     parts.push(box(1.72,.042,.042,'#b4c1c1',[0,.30,z]));
     for(const x of [-.78,0,.78])parts.push(box(.035,.88,.035,'#aab7b9',[x,-.13,z]));
   }
+  if (distant) return mergeParts(parts, true);
   for(let i=0;i<7;i++)parts.push(box(.43,.025,.027,'#c0c7c4',[0,-.62+i*.145,-.73]));
   for(const x of [-.24,.24])parts.push(box(.026,1.18,.028,'#80969e',[x,-.11,-.73]));
   return mergeParts(parts);
@@ -1124,17 +1159,21 @@ function chairTowerHeadGeometry() {
   return mergeParts(parts);
 }
 
-function chairSheaveGeometry() {
+function chairSheaveGeometry(distant = false) {
+  const parts = [
+    box(.29,.18,.30,'#66777d',[0,-.37,0]),
+    box(.27,.12,.76,'#778b92',[0,-.26,0]),
+  ];
+  if (distant) {
+    for (const z of [-.28, 0, .28]) parts.push(box(.17,.25,.25,'#283238',[0,-.142,z]));
+    return mergeParts(parts, true);
+  }
   // The rope sits in the groove, with steel flanges outside the rope width.
   const wheel = new THREE.LatheGeometry([
     [0,-.085], [.122,-.085], [.147,-.064], [.147,-.046], [.105,0],
     [.147,.046], [.147,.064], [.122,.085], [0,.085],
   ].map(([r, x]) => new THREE.Vector2(r, x)), 10).rotateZ(Math.PI / 2);
   const axle = new THREE.CylinderGeometry(.044, .044, .234, 8).rotateZ(Math.PI / 2);
-  const parts = [
-    box(.29,.18,.30,'#66777d',[0,-.37,0]),
-    box(.27,.12,.76,'#778b92',[0,-.26,0]),
-  ];
   for (const z of [-.28, 0, .28]) {
     parts.push(part(wheel, '#283238', [0, -.142, z]));
     parts.push(part(axle, '#a4b0b2', [0, -.142, z]));
@@ -1225,7 +1264,9 @@ function surfaceLift(def, group, grid, material) {
   carriers.boundingSphere.radius += 5;
   tow.add(carriers);
   const dummy = new THREE.Object3D();
-  return { def, samplers: [sampler], surfaceUpdate(clock) {
+  return { def, samplers: [sampler], surfaceUpdate(clock, eye) {
+    carriers.visible = !eye || carriers.boundingSphere.distanceToPoint(eye) < 380;
+    if (!carriers.visible) return;
     for (let i = 0; i < carriers.count; i++) {
       const side = i % 2 ? -1 : 1, progress = (Math.floor(i / 2) / (carriers.count / 2) + clock * def.speed / sampler.total) % 1;
       sampler.at(side > 0 ? progress : 1 - progress, p, t);
@@ -1277,7 +1318,7 @@ function terminalTurnPath({ start, end, inward, outward, axis, across, radius },
   return { curve, center };
 }
 
-function buildLifts(scene, grid) {
+function buildLifts(scene, grid, detail) {
   const group = new THREE.Group();
   group.name = 'Lift network';
   scene.add(group);
@@ -1293,6 +1334,7 @@ function buildLifts(scene, grid) {
   const tangent = new THREE.Vector3();
   const view = new THREE.Frustum(), projection = new THREE.Matrix4();
   const carrierBounds = new THREE.Sphere(position);
+  const towerBatches = [];
   let occupied = null;
 
   function liftCircuit(samplers, speed, { slowSpeed, turnDepth, approach, cabin }) {
@@ -1385,12 +1427,18 @@ function buildLifts(scene, grid) {
         return [sampler,buildCablePath(supports,offset-.5),buildCablePath(supports,offset+.5)];
       })
       : samplers;
-    for (const sampler of cablePaths) {
+    const ropes = cablePaths.map(sampler => {
       const curve = new THREE.CatmullRomCurve3(sampler.points);
       const steps = Math.ceil(sampler.total / (isP2P ? 9 : 6));
-      const cable = new THREE.Mesh(new THREE.TubeGeometry(curve, steps, isP2P ? 0.052 : 0.037, 5, false), cableMat);
+      const radius = isP2P ? 0.052 : 0.037;
+      const build = reduced => new THREE.TubeGeometry(curve, reduced ? Math.ceil(steps / 2) : steps, radius, reduced ? 3 : 5, false);
+      const rope = { full: null, reduced: null };
+      const key = detail.budget ? 'reduced' : 'full';
+      rope[key] = build(detail.budget);
+      const cable = new THREE.Mesh(rope[key], cableMat);
       group.add(cable);
-    }
+      return { cable, rope, build };
+    });
 
     for (let i = 1; i < supports.length - 1; i++) {
       const support = supports[i];
@@ -1419,17 +1467,20 @@ function buildLifts(scene, grid) {
       approach: chair ? 18 : 24,
       cabin: !chair,
     });
-    const wheels = [];
+    const terminals = [];
     for (const section of [circulation.sections[1], circulation.sections[3]]) {
+      const start = group.children.length;
+      let wheel;
       if (chair) {
         const ropeWrap = fixedChair ? section : terminalTurnPath(section.endpoints, .84);
         const rope = new THREE.Mesh(new THREE.TubeGeometry(ropeWrap.curve, 64, .044, 8), cableMat);
         rope.name = def.name + ' · bullwheel rope wrap'; group.add(rope);
-        wheels.push(buildChairTurnaround(group, def, section, ropeWrap.center, fixedChair));
+        wheel = buildChairTurnaround(group, def, section, ropeWrap.center, fixedChair);
       } else {
         const rail = new THREE.Mesh(new THREE.TubeGeometry(section.curve, 48, .085, 6, false), cableMat);
         rail.name = def.name + ' · station turnaround drive rail'; group.add(rail);
       }
+      terminals.push({ position: section.endpoints.start, objects: group.children.slice(start), wheel });
     }
     const shell=geometry.userData.carrierShell;
     const doorOpen=shell?new THREE.InstancedBufferAttribute(new Float32Array(perSide*2),1).setUsage(THREE.DynamicDrawUsage):null;
@@ -1461,21 +1512,18 @@ function buildLifts(scene, grid) {
       }
     }
 
-    let distantCarriers = null;
-    if (compactDevice) {
-      const distantKey = chair ? chairKey : cabinColor;
-      if (!distantGeometries.has(distantKey)) {
-        distantGeometries.set(distantKey, chair ? distantChairGeometry(def.seats || 4, modernChair)
-          : distantCabinGeometry(cabinColor, isP2P));
-      }
-      distantCarriers = new THREE.InstancedMesh(distantGeometries.get(distantKey), carrierMat, perSide * 2);
-      distantCarriers.name = def.name + ' · distant carriers';
-      distantCarriers.userData.gondolaCarrier = !!shell;
-      distantCarriers.boundingSphere = carriers.boundingSphere;
-      distantCarriers.count = 0;
-      distantCarriers.visible = false;
-      group.add(distantCarriers);
+    const distantKey = chair ? chairKey : cabinColor;
+    if (!distantGeometries.has(distantKey)) {
+      distantGeometries.set(distantKey, chair ? distantChairGeometry(def.seats || 4, modernChair)
+        : distantCabinGeometry(cabinColor, isP2P));
     }
+    const distantCarriers = new THREE.InstancedMesh(distantGeometries.get(distantKey), carrierMat, perSide * 2);
+    distantCarriers.name = def.name + ' · distant carriers';
+    distantCarriers.userData.gondolaCarrier = !!shell;
+    distantCarriers.boundingSphere = carriers.boundingSphere;
+    distantCarriers.count = 0;
+    distantCarriers.visible = false;
+    group.add(distantCarriers);
 
     const passenger=shell?new THREE.Group():new THREE.Mesh(geometry,material);
     const setPassengerDoors=shell?addGondolaShell(passenger,shell):null;
@@ -1483,18 +1531,33 @@ function buildLifts(scene, grid) {
     passenger.visible = false;
     passenger.castShadow = true;
     group.add(passenger);
-    lifts.push({ def, samplers, supports, perSide, carriers, layers, distantCarriers,
-      passenger, circulation, wheels, doorOpen, setPassengerDoors });
+    // Bound each full-detail carrier around its rope attachment. Include the
+    // shader's plug-and-slide motion so open doors stay inside the envelope.
+    let fleetRadius = 0;
+    for (const mesh of [carriers, ...layers]) {
+      const shape = mesh.geometry;
+      if (!shape.boundingSphere) shape.computeBoundingSphere();
+      const { center, radius } = shape.boundingSphere;
+      const motion = shape.getAttribute('doorMotion');
+      let travel = 0;
+      if (motion) for (let i = 0; i < motion.count; i++) {
+        travel = Math.max(travel, Math.hypot(motion.getX(i), motion.getY(i)));
+      }
+      fleetRadius = Math.max(fleetRadius, center.length() + radius + travel);
+    }
+    lifts.push({ def, samplers, supports, perSide, carriers, layers, distantCarriers, fleetRadius,
+      passenger, circulation, terminals, doorOpen, setPassengerDoors,
+      setRopeQuality(reduced) {
+        const key = reduced ? 'reduced' : 'full';
+        for (const { cable, rope, build } of ropes) cable.geometry = rope[key] ??= build(reduced);
+      },
+    });
   }
 
   const regular = towers.filter((t) => !t.isP2P);
   const valley = towers.filter((t) => t.isP2P);
   const chairs = towers.filter(t => t.chair);
   const gondolas = towers.filter(t => !t.chair);
-  const shafts = new THREE.InstancedMesh(towerShaftGeometry(), carrierMat, regular.length);
-  const lattices = new THREE.InstancedMesh(latticeGeometry(), carrierMat, valley.length);
-  shafts.name = 'Lift tower shafts';
-  lattices.name = 'PEAK 2 PEAK lattice towers';
   const setTower = (mesh, t, i, y, sx, sy) => {
     dummy.position.set(t.x, y, t.z);
     dummy.rotation.set(0, t.angle, 0);
@@ -1502,19 +1565,13 @@ function buildLifts(scene, grid) {
     dummy.updateMatrix();
     mesh.setMatrixAt(i, dummy.matrix);
   };
-  regular.forEach((t, i) => setTower(shafts, t, i, t.base, 1, t.y - t.base));
-  valley.forEach((t, i) => setTower(lattices, t, i, t.base, 1, (t.y - t.base) / 45));
-  for (const mesh of [shafts, lattices]) {
-    mesh.castShadow = true;
-    group.add(mesh);
-  }
 
-  function addTowerBatches(geometry, material, family, name, fill, stride = 1) {
+  function addTowerBatches(geometry, material, family, name, fill, stride = 1, distantGeometry) {
     // Split off-screen sections without turning each support into its own draw.
-    const patchSize = 1200;
+    const patchSize = distantGeometry ? 480 : 1000;
     const batches = new Map();
     for (const tower of family) {
-      const key = compactDevice ? `${Math.floor(tower.x / patchSize)},${Math.floor(tower.z / patchSize)}` : '';
+      const key = `${Math.floor(tower.x / patchSize)},${Math.floor(tower.z / patchSize)}`;
       if (!batches.has(key)) batches.set(key, []);
       batches.get(key).push(tower);
     }
@@ -1525,11 +1582,26 @@ function buildLifts(scene, grid) {
       towers.forEach((tower, i) => fill(mesh, tower, i * stride));
       mesh.computeBoundingSphere();
       group.add(mesh);
+      let distant;
+      if (distantGeometry) {
+        distant = new THREE.InstancedMesh(distantGeometry, material, 0);
+        distant.count = mesh.count;
+        distant.instanceMatrix = mesh.instanceMatrix;
+        distant.boundingSphere = mesh.boundingSphere;
+        distant.name = name + ' · distant';
+        distant.visible = false;
+        group.add(distant);
+      }
+      towerBatches.push({ mesh, distant });
     }
   }
 
+  addTowerBatches(towerShaftGeometry(), carrierMat, regular, 'Lift tower shafts',
+    (mesh, t, i) => setTower(mesh, t, i, t.base, 1, t.y - t.base));
+  addTowerBatches(latticeGeometry(), carrierMat, valley, 'PEAK 2 PEAK lattice towers',
+    (mesh, t, i) => setTower(mesh, t, i, t.base, 1, (t.y - t.base) / 45));
   const placeTowerHead = (mesh, tower, index) => setTower(mesh, tower, index, tower.y, tower.lateral / 1.65, 1);
-  addTowerBatches(towerHeadGeometry(), carrierMat, gondolas, 'Gondola tower heads', placeTowerHead);
+  addTowerBatches(towerHeadGeometry(), carrierMat, gondolas, 'Gondola tower heads', placeTowerHead, 1, towerHeadGeometry(true));
   addTowerBatches(chairTowerHeadGeometry(), chairMat, chairs, 'Chairlift tower crossarms', placeTowerHead);
   const bankAxis = new THREE.Vector3(), bankUp = new THREE.Vector3(), bankBasis = new THREE.Matrix4();
   addTowerBatches(chairSheaveGeometry(), chairMat, chairs, 'Chairlift sheave groups', (mesh, tower, bankIndex) => {
@@ -1554,7 +1626,7 @@ function buildLifts(scene, grid) {
         mesh.setMatrixAt(bankIndex++, dummy.matrix);
       }
     }
-  }, 4);
+  }, 4, chairSheaveGeometry(true));
 
   function setPassenger(lift, direction, t, doorOpening) {
     if (occupied && (!lift || occupied.lift !== lift)) occupied.lift.passenger.visible = false;
@@ -1573,30 +1645,46 @@ function buildLifts(scene, grid) {
   }
 
   function update(clock, camera) {
-    const useLod = compactDevice && !!camera;
+    const useLod = (compactDevice || detail.budget) && !!camera;
     let focalPixels = 0;
-    if (useLod) {
+    if (camera) {
       camera.updateMatrixWorld();
       view.setFromProjectionMatrix(projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
-      focalPixels = camera.projectionMatrix.elements[5] * window.innerHeight * .5;
+      if (useLod) focalPixels = camera.projectionMatrix.elements[5] * window.innerHeight * .5;
+    }
+    for (const { mesh, distant } of towerBatches) {
+      const distance = detail.budget && camera ? mesh.boundingSphere.distanceToPoint(camera.position) : 0;
+      mesh.castShadow = distance < 200;
+      mesh.visible = !distant || distance < 155;
+      if (distant) distant.visible = !mesh.visible;
     }
     const state={};
     for (const lift of lifts) {
-      if (!lift.def.aerial) { lift.surfaceUpdate?.(clock); continue; }
-      const { samplers, carriers, layers, distantCarriers, perSide, circulation, wheels, doorOpen } = lift;
-      for (const wheel of wheels) wheel(clock);
+      const eye = detail.budget ? camera?.position : null;
+      if (!lift.def.aerial) { lift.surfaceUpdate?.(clock, eye); continue; }
+      const { samplers, carriers, layers, distantCarriers, perSide, circulation, terminals, doorOpen, fleetRadius } = lift;
+      for (const { position, objects, wheel } of terminals) {
+        const close = !eye || position.distanceToSquared(eye) < 275 ** 2;
+        for (const object of objects) object.visible = close;
+        if (close) wheel?.(clock);
+      }
       const count = perSide * 2, headway = circulation.duration / count;
       const own = occupied?.lift === lift;
       const size = lift.def.type === 'p2p' ? 4.2 : lift.def.type === 'chair' ? 2.75 : 3.3;
-      const detailedRangeSquared = Math.max(30, size * focalPixels / 12) ** 2;
-      carrierBounds.radius = size + .8;
+      const detailedRangeSquared = Math.max(34, size * focalPixels / (detail.budget ? 21 : 12)) ** 2;
+      carrierBounds.radius = useLod ? size + .8 : fleetRadius;
       let nearCount = 0, farCount = 0;
-      for (let i = 0; i < count; i++) {
+      // Occupied cabins and the tower meshes keep their independent shadow
+      // visibility. A regular fleet can be compacted against the color view.
+      const clipFleet = camera && !carriers.castShadow && layers.every(layer => !layer.castShadow);
+      const fleetVisible = !clipFleet || view.intersectsSphere(carriers.boundingSphere);
+      for (let i = 0; fleetVisible && i < count; i++) {
         circulation.at(clock + i * headway, position, tangent, state);
         const sameRope = own && state.direction === occupied.direction
           && Math.abs(state.t - occupied.t) * samplers[occupied.direction].total < 8;
         const intersectsRider = own && position.distanceToSquared(lift.passenger.position) < 2.8 ** 2;
-        if (useLod && (sameRope || intersectsRider || !view.intersectsSphere(carrierBounds))) continue;
+        if (useLod && (sameRope || intersectsRider)) continue;
+        if (clipFleet && !view.intersectsSphere(carrierBounds)) continue;
         dummy.position.copy(position);
         dummy.rotation.set(0, Math.atan2(tangent.x, tangent.z), 0);
         dummy.scale.setScalar(sameRope || intersectsRider ? 0 : 1);
@@ -1616,19 +1704,32 @@ function buildLifts(scene, grid) {
         layer.visible = carriers.visible;
       }
       if (nearCount) {
+        carriers.instanceMatrix.clearUpdateRanges();
+        carriers.instanceMatrix.addUpdateRange(0, nearCount * 16);
         carriers.instanceMatrix.needsUpdate = true;
-        if (doorOpen) doorOpen.needsUpdate = true;
+        if (doorOpen) {
+          doorOpen.clearUpdateRanges();
+          doorOpen.addUpdateRange(0, nearCount);
+          doorOpen.needsUpdate = true;
+        }
       }
-      if (distantCarriers) {
-        distantCarriers.count = farCount;
-        distantCarriers.visible = farCount > 0;
-        if (farCount) distantCarriers.instanceMatrix.needsUpdate = true;
+      distantCarriers.count = farCount;
+      distantCarriers.visible = farCount > 0;
+      if (farCount) {
+        distantCarriers.instanceMatrix.clearUpdateRanges();
+        distantCarriers.instanceMatrix.addUpdateRange(0, farCount * 16);
+        distantCarriers.instanceMatrix.needsUpdate = true;
       }
     }
   }
 
   update(0);
-  return { lifts, update, setPassenger };
+  return {
+    lifts, update, setPassenger,
+    setQuality() {
+      for (const lift of lifts) lift.setRopeQuality?.(detail.budget);
+    },
+  };
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1940,8 +2041,9 @@ function roofHalf(points, sign) {
   return side;
 }
 
-function buildVillage(scene, grid, district = null) {
+function buildVillage(scene, grid, district = null, detail = null) {
   const data = new Map();
+  const patchSize = detail?.budget ? 700 : 350;
   const palette = [0x776659, 0x7c7771, 0x616b69, 0x887766, 0x777d72, 0x644f44];
   const frame = new THREE.Color(0x282c2b), glass = new THREE.Color(0x587582);
   const snow = new THREE.Color(0xe7eef1), stone = new THREE.Color(0x787f83);
@@ -1987,7 +2089,7 @@ function buildVillage(scene, grid, district = null) {
     const top = upperGround + Math.max(.82, floors * storyHeight);
     const pitch=measured ? Math.max(.12,measured.ridge-measured.eave) : Math.min(lot.id === '146630821' ? 2.25 : 4.6,width*.52);
     const section = { originX: x, originZ: z, width, cos, sin, pitch };
-    const key = `${Math.floor(x / 350)},${Math.floor(z / 350)}`;
+    const key = `${Math.floor(x / patchSize)},${Math.floor(z / patchSize)}`;
     if (!data.has(key)) data.set(key, { walls: bucket(), foundations: bucket(), roof: bucket(), windows: {...bucket(),pane:[]} });
     const mesh = data.get(key);
     const trim = new THREE.Color(palette[Number(lot.id) % palette.length]);
@@ -2062,7 +2164,7 @@ function buildVillage(scene, grid, district = null) {
     windows: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .42, metalness: .1, side: THREE.DoubleSide }),
   };
   const village = new THREE.Group();
-  village.name = 'Village · mapped building footprints';
+  village.name = district ? 'Distant village buildings' : 'Village · mapped building footprints';
   for (const parts of data.values()) {
     for (const [name, part] of Object.entries(parts)) {
       if (!part.xyz.length) continue;
@@ -2087,30 +2189,28 @@ function buildVillage(scene, grid, district = null) {
 
 // At summit distance the surveyed building envelopes occupy only a few pixels.
 // Construct their architectural details and walk surfaces on approach, before entry.
-function resortDistrict(scene, grid, ids, x, z, build) {
-  if (!compactDevice) return build(scene, { grid });
-  const outline = buildVillage(scene, null, ids);
-  let district;
-  function near(px, pz) {
-    if (!district && (px - x) ** 2 + (pz - z) ** 2 < 1200 ** 2) {
-      district = build(scene, { grid });
-      outline.removeFromParent();
-      const materials = new Set();
-      for (const mesh of outline.children) {
-        mesh.geometry.dispose();
-        materials.add(mesh.material);
-      }
-      for (const material of materials) material.dispose();
-      outline.clear();
-    }
-    return district;
-  }
+function resortDistrict(scene, grid, ids, x, z, build, detail) {
+  const load = () => build(scene, { grid });
+  let district = compactDevice || detail.budget ? null : load();
+  let outline = district ? null : buildVillage(scene, null, ids);
+  const distanceSquared = (px, pz) => (px - x) ** 2 + (pz - z) ** 2;
   return {
+    get group() { return district?.group; },
     update(dt, time, camera) {
-      if (camera) near(camera.position.x, camera.position.z)?.update(dt, time, camera);
+      const distance = camera ? distanceSquared(camera.position.x, camera.position.z) : 0;
+      const near = (!detail.budget && (!!district || !compactDevice)) ||
+        distance < (district?.group.visible ? 1450 : 1200) ** 2;
+      if (near) district ??= load();
+      else outline ??= buildVillage(scene, null, ids);
+      if (outline) outline.visible = !near;
+      if (district) district.group.visible = near;
+      if (near) district.update(dt, time, camera);
     },
     walkSurfaceAt(px, pz, y) {
-      return near(px, pz)?.walkSurfaceAt?.(px, pz, y);
+      // Direct arrivals and lift exits may ask for the floor before the next
+      // render updates the district.
+      if (!district && distanceSquared(px, pz) < 1200 ** 2) district = load();
+      return district?.walkSurfaceAt?.(px, pz, y);
     },
   };
 }
@@ -2307,17 +2407,18 @@ const cameraObstacles = new Set([
   'plaza-building-wall', 'plaza-railing', 'plaza-planter', 'plaza-canopy', 'tree', 'fallen log', 'ice-wall', 'patrol-pad',
 ]);
 
-export async function buildEnvironment(scene, { onProgress = () => {} } = {}) {
+export async function buildEnvironment(scene, { onProgress = () => {}, quality } = {}) {
   const rand = mulberry32(9102026);
   const grid = new ColliderGrid();
+  const detail = { budget: quality === 'BUDGET' };
 
   onProgress(0.03, 'Growing the old-growth forest…');
   await frame();
-  const forest = buildForest(scene, grid, rand);
+  const forest = buildForest(scene, grid, rand, detail);
 
   onProgress(0.24, 'Scattering alpine rock…');
   await frame();
-  buildRocks(scene, grid, rand);
+  const updateRockQuality = buildRocks(scene, grid, rand, detail);
   const alpineCliffs = buildAlpineCliffs(scene, grid, heightAt);
   const glacierCave = buildGlacierCave(scene, grid, heightAt);
 
@@ -2326,9 +2427,13 @@ export async function buildEnvironment(scene, { onProgress = () => {} } = {}) {
   const markers = new THREE.Group();
   markers.name = 'markers';
   scene.add(markers);
-  buildVillage(scene, grid);
+  const village = buildVillage(scene, grid, null, detail);
+  const villageWindows = village.children.filter(mesh => mesh.name === 'Mapped village windows');
+  for (const mesh of villageWindows) mesh.geometry.computeBoundingSphere();
   const skiersPlaza = buildSkiersPlaza(scene, { grid });
-  const lifts = buildLifts(scene, grid);
+  let distantSkiersPlaza;
+  if (detail.budget) distantSkiersPlaza = buildVillage(scene, null, SKIERS_PLAZA_BUILDING_IDS);
+  const lifts = buildLifts(scene, grid, detail);
 
   onProgress(0.52, 'Building the lodges…');
   await frame();
@@ -2339,15 +2444,18 @@ export async function buildEnvironment(scene, { onProgress = () => {} } = {}) {
   const updateSummitSigns = buildSummitLandmarks(scene);
   roundhouseArrival.update(0);
   updateSummitSigns(0);
-  const fairmont = resortDistrict(scene, grid, FAIRMONT_REPLACED_IDS, 523, -434, buildFairmont);
-  const creeksideVillage = resortDistrict(scene, grid, CREEKSIDE_BUILDING_IDS, -2549, 2071, buildCreeksideVillage);
+  const fairmont = resortDistrict(scene, grid, FAIRMONT_REPLACED_IDS, 523, -434, buildFairmont, detail);
+  const creeksideVillage = resortDistrict(scene, grid, CREEKSIDE_BUILDING_IDS, -2549, 2071, buildCreeksideVillage, detail);
   const interiors = buildLodgeInteriors(scene, grid);
 
   onProgress(0.65, 'Hanging the trail signs…');
   await frame();
+  const terminalLods = [];
   for (const def of LIFTS.filter((lift) => lift.aerial)) {
-    buildTerminal(scene, grid, markers, def, 0);
-    buildTerminal(scene, grid, markers, def, def.points.length - 1);
+    for (const index of [0, def.points.length - 1]) {
+      const terminal = buildTerminal(scene, grid, markers, def, index);
+      if (terminal?.userData.terminalDetail) terminalLods.push(terminal.userData.terminalDetail);
+    }
   }
 
   const stationOperations = buildStationOperations(scene, grid);
@@ -2392,6 +2500,14 @@ export async function buildEnvironment(scene, { onProgress = () => {} } = {}) {
     },
     raisedPadAt: roundhouseArrival.raisedPadAt,
     interiorAt(x, z, y) { return glacierCave.interiorAt(x,z,y) ?? interiors.interiorAt(x,z,y); },
+    get budget() { return detail.budget; },
+    setQuality(name) {
+      const budget = name === 'BUDGET';
+      if (detail.budget === budget) return;
+      detail.budget = budget;
+      updateRockQuality();
+      lifts.setQuality();
+    },
     lodgeEntrances: interiors.rooms.map(({ id, name, entry }) => ({ id, name, ...entry })),
     queryColliders(x, z, r = 3) { return grid.query(x, z, r); },
     clipCameraArm: cameraClipper(grid.query.bind(grid), cameraObstacles),
@@ -2401,7 +2517,16 @@ export async function buildEnvironment(scene, { onProgress = () => {} } = {}) {
       glacierCave.update(time,camera);
       fairmont.update(dt,time,camera);
       creeksideVillage.update(dt,time,camera);
-      skiersPlaza.update(dt,time,camera);
+      const nearPlaza = !detail.budget || !camera || (camera.position.x + 46) ** 2 +
+        (camera.position.z + 60) ** 2 < (skiersPlaza.group.visible ? 1200 : 1050) ** 2;
+      if (!nearPlaza) distantSkiersPlaza ??= buildVillage(scene, null, SKIERS_PLAZA_BUILDING_IDS);
+      if (distantSkiersPlaza) distantSkiersPlaza.visible = !nearPlaza;
+      skiersPlaza.group.visible = nearPlaza;
+      if (nearPlaza) skiersPlaza.update(dt,time,camera);
+      for (const mesh of villageWindows) mesh.visible = !detail.budget || !camera ||
+        mesh.geometry.boundingSphere.distanceToPoint(camera.position) < 1000;
+      interiors.updateDetail(camera, detail.budget);
+      for (const update of terminalLods) update(detail.budget ? camera?.position : null);
       people.update(dt,time,camera);
       if (!camera || Math.hypot(camera.position.x-488,camera.position.z-4844)<1050) roundhouseArrival.update(time);
       if (!camera || camera.position.z>4400 && camera.position.z<6250) updateSummitSigns(time);

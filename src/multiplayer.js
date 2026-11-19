@@ -30,7 +30,9 @@ const lerp = THREE.MathUtils.lerp;
 
 function validPose(s) {
   return Array.isArray(s) && s.length === 17 &&
-    s.slice(0,3).every(v => bounded(v,80000)) && s.slice(3,7).every(v => bounded(v,1.01)) &&
+    Number.isFinite(s[0]) && bounded(s[1],80000) && Number.isFinite(s[2]) &&
+    Number.isSafeInteger(Math.round(s[0] * 100)) && Number.isSafeInteger(Math.round(s[2] * 100)) &&
+    s.slice(3,7).every(v => bounded(v,1.01)) &&
     bounded(s[7],110) && bounded(s[8],1.01) && bounded(s[9],1.01) &&
     Number.isInteger(s[10]) && bounded(s[10],31) && bounded(s[11],7) &&
     s.slice(12,15).every(v => Number.isInteger(v) && v >= 0 && v <= 100000000) &&

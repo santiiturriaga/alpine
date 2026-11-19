@@ -122,6 +122,8 @@ export function createSky(scene) {
       uSunStrength: { value: 1 },
       uGolden: { value: 0 },
       uWhiteout: { value: 0 },
+      uCloudField: { value: null },
+      uBakedClouds: { value: false },
     },
     vertexShader: /* glsl */`
       varying vec3 vDir;
@@ -150,6 +152,8 @@ export function createSky(scene) {
       uniform float uSunStrength;
       uniform float uGolden;
       uniform float uWhiteout;
+      uniform sampler2D uCloudField;
+      uniform bool uBakedClouds;
 
       float skyHash(vec2 p) {
         p = fract(p * vec2(.1031, .1030));
@@ -163,6 +167,7 @@ export function createSky(scene) {
           mix(skyHash(b+vec2(0,1)),skyHash(b+vec2(1,1)),f.x),f.y);
       }
       float cloudNoise(vec2 p) {
+        if (uBakedClouds) return texture2D(uCloudField, p / 32.0 + .5).r;
         mat2 rotation=mat2(.81,.586,-.586,.81);
         float sum=.54*skyNoise(p);
         p=rotation*p*2.06+vec2(4.1,-1.7);
@@ -173,6 +178,10 @@ export function createSky(scene) {
         return sum+.051*skyNoise(p)+.025*skyNoise(rotation*p*2.11);
       }
       float cloudDensity(vec2 p) {
+        if (uBakedClouds) {
+          float field = texture2D(uCloudField, p / 32.0 + .5).g * 1.25 - .125;
+          return smoothstep(mix(.67,.24,uCloud), mix(.84,.49,uCloud), field);
+        }
         float large=skyNoise(p*.36+13.1);
         vec2 curl=vec2(skyNoise(p*.69+7.0),skyNoise(p*.62-4.0));
         return smoothstep(mix(.67,.24,uCloud),mix(.84,.49,uCloud), cloudNoise(p + (curl-.5)*.98) + (large-.5)*.23);
@@ -232,10 +241,27 @@ export function createSky(scene) {
   const sky = new THREE.Mesh(skyGeo, skyMat);
   sky.name = 'sky';
   sky.frustumCulled = false;
+  // The dome is at the far depth. Draw it after opaque terrain so only visible
+  // sky pixels pay for cloud shading, including when standing inside a lodge.
+  sky.renderOrder = 10000;
   scene.add(sky);
 
+  let budget = false, cloudLoad;
   return {
     sky,
+    setQuality(name) {
+      budget = name === 'BUDGET';
+      skyMat.uniforms.uBakedClouds.value = budget && !!skyMat.uniforms.uCloudField.value;
+      if (!budget || cloudLoad) return;
+      cloudLoad = new THREE.TextureLoader().loadAsync(new URL('../assets/weather/cloud-field.png', import.meta.url).href)
+        .then(texture => {
+          texture.flipY = false;
+          texture.wrapS = texture.wrapT = THREE.MirroredRepeatWrapping;
+          texture.needsUpdate = true;
+          skyMat.uniforms.uCloudField.value = texture;
+          skyMat.uniforms.uBakedClouds.value = budget;
+        }).catch(() => { cloudLoad = null; });
+    },
     setClimate(palette) {
       for (const [uniform,key] of [['uZenith','zenith'],['uMid','mid'],['uHorizon','horizon'],
         ['uSunColor','sunColor'],['uCloudShade','cloudShade'],['uCloudLight','cloudLight']]) {

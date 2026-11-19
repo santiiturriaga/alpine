@@ -8,9 +8,11 @@ import { createMultiplayer } from './multiplayer.js';
 import { createTravelTracker } from './skier-profile.js';
 import { createSnowTraffic } from './snow-traffic.js';
 import {
-  graphicsProfiles, graphicsIndex, bindGraphics, bindRealism, createRenderer, resizeViewport,
+  graphicsProfiles, bindRealism, createRenderer, resizeViewport, renderMountainFrame,
   applyShadowResolution, sunShadowRefreshDue, updateSunShadow,
 } from './graphics.js';
+import { createPerformanceCalibration } from './performance-calibration.js';
+import { compactDevice } from './device-budget.js';
 import * as THREE from 'three';
 import { AudioEngine } from './audio.js';
 import { createClimate, bindConditionsClock, CLIMATE_PRESETS } from './climate.js';
@@ -215,9 +217,14 @@ export async function startMappedResort(mountain) {
   const config = await response.json();
   applyInternationalLandmarkSites(config);
   const query = new URLSearchParams(location.search);
-  const runs = prepareRuns(config.runs);
   const host = $('webgl');
-  const renderer = createRenderer();
+  const performanceCalibration = createPerformanceCalibration({ query, resort: mountain.id,
+    profiles: graphicsProfiles, viewport: host, compact: compactDevice });
+  let qualityIndex = performanceCalibration.quality;
+  const initialQuality = graphicsProfiles[qualityIndex].name;
+  setForestQuality(initialQuality);
+  const runs = prepareRuns(config.runs);
+  const renderer = createRenderer({ antialias: performanceCalibration.antialias });
   const canvas = renderer.domElement;
   host.append(canvas);
   const scene = new THREE.Scene();
@@ -233,11 +240,11 @@ export async function startMappedResort(mountain) {
   const camera = new THREE.PerspectiveCamera(58, 1, .23, config.viewDistance ?? 19000);
   ui.setLoading(.34, 'Building the mountain and forest…');
   await paint();
-  const world = await buildMappedResortWorld(scene, config, new URL('./', dataUrl));
+  const world = await buildMappedResortWorld(scene, config, new URL('./', dataUrl), { quality: initialQuality });
   const { ground: baseGround, env } = world;
   ui.setLoading(.72, 'Stringing the lifts…');
   await paint();
-  const liftSystem = await buildMappedResortLifts(scene, config, baseGround, env);
+  const liftSystem = await buildMappedResortLifts(scene, config, baseGround, env, { quality: initialQuality });
   registerLiftColliders(env, liftSystem);
   const forestLines = buildForestLines(world.root, baseGround, env, runs);
   env.forestLines = forestLines;
@@ -300,14 +307,15 @@ export async function startMappedResort(mountain) {
   };
   restoreCrystals();
   const keys = Object.create(null);
+  let touchControls;
   const heldAtTakeoff = new Set();
   const input = {};
   const lastShadowAnchor = new THREE.Vector3(Infinity, Infinity, Infinity);
   const menuCenter = new THREE.Vector3();
   let playing = false;
   let panelReturn = null;
-  let qualityIndex = graphicsIndex(query, 'BALANCED');
   let lastFrame = performance.now();
+  let benchmarkReady = false;
   let present = 0, simTime = 0, lastHud = -Infinity, lastShadow = -Infinity;
   let selectedLift = null, stationLabel = '', stationPose = null;
   let ollie = false, signs = true, drag = null;
@@ -437,7 +445,8 @@ export async function startMappedResort(mountain) {
 
   function resize() {
     const quality = graphicsProfiles[qualityIndex];
-    resizeViewport({ host, renderer, camera, quality, storm, tuckWind });
+    resizeViewport({ host, renderer, camera, quality, storm, tuckWind, resolution: performanceCalibration.resolution });
+    performanceCalibration.viewportChanged();
   }
 
   function applyQuality() {
@@ -445,10 +454,13 @@ export async function startMappedResort(mountain) {
     applyShadowResolution(renderer, lighting.sun, quality.shadow);
     setForestQuality(quality.name);
     world.setQuality?.(quality.name);
+    liftSystem.setQuality?.(quality.name);
+    sky.setQuality?.(quality.name);
     resize();
   }
 
   function clearInput() {
+    touchControls?.releaseAll();
     for (const code of Object.keys(keys)) keys[code] = false;
     heldAtTakeoff.clear();
     ollie = false;
@@ -586,7 +598,7 @@ export async function startMappedResort(mountain) {
     if (climate.state.season === 'summer') player.setFootMode(true);
     ui.cinematic(false);
     const touch = matchMedia('(pointer:coarse)').matches;
-    ui.toast(stationLabel, touch ? 'Hold Go to ski · Mountain for trail starts' : 'W to ski · G to choose a trail', 'blue', 'lift');
+    ui.toast(stationLabel, touch ? 'Hold ↑ to ski · Tap the mountain for trail starts' : 'W to ski · G to choose a trail', 'blue', 'lift');
     syncHud();
   }
 
@@ -699,9 +711,9 @@ export async function startMappedResort(mountain) {
   function updateShadow() {
     if (!lighting.sun.castShadow) return;
     const anchor = playing ? player.pos : menuCenter;
-    const { shadowInterval } = graphicsProfiles[qualityIndex];
+    const { name, shadowInterval } = graphicsProfiles[qualityIndex];
     if (!renderer.shadowMap.needsUpdate &&
-        !sunShadowRefreshDue(present - lastShadow, anchor.distanceToSquared(lastShadowAnchor), shadowInterval)) return;
+        !sunShadowRefreshDue(present - lastShadow, anchor.distanceToSquared(lastShadowAnchor), shadowInterval, name === 'BUDGET')) return;
     lastShadow = present;
     lastShadowAnchor.copy(anchor);
     updateSunShadow(renderer, lighting.sun, SUN_DIR, anchor);
@@ -710,13 +722,16 @@ export async function startMappedResort(mountain) {
   function draw(now) {
     if (rendererUnavailable) return;
     const raw = Math.max(0, (now - lastFrame) / 1000);
-    if (document.hidden) return;
+    if (document.hidden) { performanceCalibration.interrupt(); return; }
     if (ui.isOpen('map') || document.getElementById('destination-selector')?.open || document.getElementById('sled-game')?.open) {
+      performanceCalibration.interrupt();
       if(playing)multiplayer.update(0,trickScore,outfitter.broadcastOutfit ?? outfitter.state.outfit,expeditions.active?.model,false);
       lastFrame = now;
       return;
     }
     const frozen = paused();
+    const eligible = benchmarkReady && !frozen;
+    if (!performanceCalibration.shouldRender(now, { eligible, context: playing ? 'game' : 'menu' })) return;
     if (frozen && wasPaused && raw < .055) return;
     wasPaused = frozen;
     lastFrame = now;
@@ -752,6 +767,7 @@ export async function startMappedResort(mountain) {
     const movingOnMountain = playing && !frozen && !ride && !vehicle;
     travelTracker.update(dt, player, { active: movingOnMountain, nearest: movingOnMountain ? ui.findNearest(player, false, simTime) : null });
     if (playing && !frozen) snowTraffic.update(dt, player, people.people, conditionsNow, movingOnMountain);
+    ground.streamBackcountry?.(playing ? player.pos : camera.position, camera.position);
     world.update(dt, camera);
     people.update(frozen ? 0 : dt, simTime, camera, playing && !ride ? player : null);
     forestLines.update();
@@ -775,7 +791,8 @@ export async function startMappedResort(mountain) {
     });
     updateChaseFoliage(camera, playing && !ride && !vehicle ? player : null);
     collectibles.prepareRender(camera);
-    renderer.render(scene, camera);
+    renderMountainFrame(renderer, scene, camera);
+    performanceCalibration.didRender(now);
   }
 
   player.onEvent = (event) => {
@@ -816,9 +833,10 @@ export async function startMappedResort(mountain) {
     'pause-nearby-map': () => { ui.toggleNearbyMap(); syncHud(); },
     'pause-markers': () => { signs = !signs; env.setSignsVisible?.(signs); ui.setMarkers(signs); },
   };
-  bindGraphics($('pause-quality'), qualityIndex, next => {
-    qualityIndex = next;
-    applyQuality();
+  performanceCalibration.bind({
+    apply(next) { qualityIndex = next; applyQuality(); },
+    resize,
+    renderer,
   });
   bindRealism($('pause-realism'), query);
   for (const [id, action] of Object.entries(bindings)) $(id)?.addEventListener('click', action);
@@ -848,6 +866,7 @@ export async function startMappedResort(mountain) {
 
   window.addEventListener('keydown', (event) => {
     const { code } = event;
+    if ((code === 'Enter' || code === 'Space') && event.target.closest?.('.touch-controls button')) return;
     if (outfitter.dialog.open || mountainPanel.open || event.ctrlKey || event.metaKey || event.altKey) return;
     const shown = modal();
     if (shown === 'map' || shown === 'guide') {
@@ -914,7 +933,8 @@ export async function startMappedResort(mountain) {
   for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) {
     canvas.addEventListener(event, () => { drag = null; });
   }
-  installTouchButtons({ keys, queueJump, cycleCamera, openMountain, pause: () => showModal('pause') });
+  touchControls = installTouchButtons({ keys, queueJump, cycleCamera, openMountain, pause: () => showModal('pause'),
+    clearJump: () => { ollie = false; }, releaseKey: code => heldAtTakeoff.delete(code) });
 
   applyQuality();
   new ResizeObserver(resize).observe(host);
@@ -936,12 +956,14 @@ export async function startMappedResort(mountain) {
   draw(performance.now());
   await ui.finishLoading();
   ui.showStart(!playing);
+  benchmarkReady = true;
   renderer.setAnimationLoop(draw);
 
   window.__mappedResort = {
     mountain, config, world, ground, env, lifts, liftSystem, player, camera, scene, renderer, climate, audio, ui, tracks, collectibles, people, multiplayer, expeditions, snowTraffic,
     travel,
     boardLift: interact,
+    get performance() { return performanceCalibration.result; },
     get state() {
       return { playing, paused: paused(), pos: player.pos.toArray(), speed: player.speedKmh, riding: !!liftSystem.active,
         coins: collectibles.coinCount, crystals: collectibles.crystalCount };

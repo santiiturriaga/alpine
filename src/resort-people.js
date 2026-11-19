@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { guestVisibility } from './guest-visibility.js';
 import { MOUNTAIN } from './worlddata.js';
 import { heightAt, normalAt } from './terrain.js';
 import { mulberry32, clamp, makeCanvas, canvasTexture } from './util.js';
@@ -143,6 +144,7 @@ export function buildResortPeople(scene,{grid,interiors,lifts,queueSlots=[],soci
   const random=mulberry32(20261117),group=new THREE.Group();
   group.name='Resort guests · friends, lessons and lift queues';scene.add(group);
   const batches=buildBatches(group),people=[],parties=[];
+  const view = guestVisibility(), active = [], draws = Object.values(batches);
   let density=1,listener=null,chatter=true,nextConversation=3,conversation=null;
   let lastSpeech=-100,utterance=null,snapshot={};
   const clear=(x,z,pad=.85)=>guestClear(x,z,pad,grid.query(x,z,pad+1));
@@ -329,12 +331,15 @@ export function buildResortPeople(scene,{grid,interiors,lifts,queueSlots=[],soci
       sim.advance(time, density);
       const indoor = camera && interiors?.interiorAt?.(camera.position.x, camera.position.z, camera.position.y);
       const radius = indoor ? 80 : 365;
-      for (const b of Object.values(batches)) b.n = 0;
-      const active = [];
+      for (const b of draws) b.n = 0;
+      active.length = 0;
+      view.prepare(camera);
       for (const p of people) {
         if (p.seed > density) continue;
         const d2 = camera ? (p.x - camera.position.x) ** 2 + (p.z - camera.position.z) ** 2 + (p.y !== undefined ? (p.y - camera.position.y) ** 2 : 0) : 0;
         if (d2 > radius * radius) continue;
+        const y = p.y ?? p.ground;
+        if (camera && Number.isFinite(y) && !view.contains(p.x, y, p.z, d2 < 90**2)) continue;
         p.viewDistance = d2;
         active.push(p);
       }
@@ -357,20 +362,25 @@ export function buildResortPeople(scene,{grid,interiors,lifts,queueSlots=[],soci
         resting += Number(!!pose.rest);
         recovering += Number(pose.recovery > 0);
       }
-      for (const b of Object.values(batches)) {
+      for (const b of draws) {
         b.mesh.count = b.n;
         b.mesh.visible = b.n > 0;
         if (b.n) {
+          b.mesh.instanceMatrix.clearUpdateRanges();
+          b.mesh.instanceMatrix.addUpdateRange(0, b.n * 16);
           b.mesh.instanceMatrix.needsUpdate = true;
+          b.mesh.instanceColor.clearUpdateRanges();
+          b.mesh.instanceColor.addUpdateRange(0, b.n * 3);
           b.mesh.instanceColor.needsUpdate = true;
         }
       }
       updateConversation(time,camera);
-      const simulation = sim.debug();
       snapshot={total:people.length,visible,detailed,moving,resting,recovering,parties:parties.length,routes:sim.routes.length,
-        snowboarders:people.filter(p=>p.board).length,queues:simulation.states.queue ?? 0,density,clock:time,
-        conversation:conversation?TOPICS[conversation.party.topic][Math.max(0,conversation.line)]:null, simulation};
+        density,clock:time,conversation:conversation?TOPICS[conversation.party.topic][Math.max(0,conversation.line)]:null};
     },
-    debug(){return {...snapshot};},
+    debug(){
+      const simulation = sim.debug();
+      return {...snapshot, simulation, snowboarders:people.filter(p=>p.board).length, queues:simulation.states.queue ?? 0};
+    },
   };
 }

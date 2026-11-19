@@ -37,9 +37,12 @@ function getNeedleAtlas() {
     const y1 = Math.min(ATLAS_SIZE - 1, Math.ceil(Math.max(ay, by) + radius + 1));
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
       const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / ll));
-      const distance = Math.hypot(x - ax - dx * t, y - ay - dy * t);
-      const alpha = Math.max(0, Math.min(1, radius * (1 - t * .63)
-        + (target === pixels ? .7 : .43) - distance)) * opacity;
+      const ox = x - ax - dx * t, oy = y - ay - dy * t;
+      const extent = radius * (1 - t * .63) + (target === pixels ? .7 : .43);
+      // Reject pixels outside the stroke before calculating exact coverage.
+      const padded = extent + 1e-7;
+      if (ox * ox + oy * oy > padded * padded) continue;
+      const alpha = Math.max(0, Math.min(1, extent - Math.hypot(ox, oy))) * opacity;
       if (alpha <= 0) continue;
       const i = (y * ATLAS_SIZE + x) * 4, previous = target[i + 3] / 255;
       const combined = alpha + previous * (1 - alpha);

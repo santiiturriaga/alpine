@@ -2,7 +2,7 @@ import { addPassGate } from './pass-gates.js';
 import * as THREE from 'three';
 import { LIFTS, RUNS, FITZSIMMONS, HARMONY_EXPRESS, PEAK_EXPRESS, PEAK_TO_PEAK } from './worlddata.js';
 import { heightAt } from './terrain.js';
-import { box, beam, part, mergedMesh, mergeParts } from './scenery.js';
+import { box, beam, part, cacheStaticTransforms, mergedMesh, mergeParts } from './scenery.js';
 import { makeCanvas, canvasTexture } from './util.js';
 import { surfaceMaterial } from './materials.js';
 import { createRoofSnow, createIcicles } from './roof-weather.js';
@@ -381,7 +381,11 @@ export function buildMappedTerminal(scene, grid, def, index) {
   const creek = def.name === 'Creekside Gondola',showcase=/Showcase/.test(def.name),redTerminal=/Jersey Cream|Showcase|Big Red|Garbanzo/.test(def.name);
   const group = groupAt(scene,`${def.name} · ${base ? 'loading terminal' : 'unload terminal'}`,frame);
   group.userData.station = { id: def.id, base, datum: frame.y };
-  if(chair && (def.seats || 2) <= 3) { fixedChair(group,frame,grid,def,base); return group; }
+  if(chair && (def.seats || 2) <= 3) {
+    fixedChair(group,frame,grid,def,base);
+    cacheStaticTransforms(group);
+    return group;
+  }
   const parts=[], structure=[], glazing=[];
   const gondola=!chair, halfW=showcase?3.6:gondola ? (def.id === 'way-1525850290' && base ? 4.05 : 5.65) : 4.2, length=showcase?11:gondola ? 23 : 17.5;
   const eave=showcase?4.60:gondola ? 5.6 : 4.25, rise=showcase?1.35:gondola ? 2.2 : 1.7;
@@ -504,6 +508,44 @@ export function buildMappedTerminal(scene, grid, def, index) {
   }
   addParts(group,structure,{roughness:.68,metalness:.26});addParts(group,parts,{roughness:.49,metalness:.16});
   addParts(group,glazing,{roughness:.26,metalness:.22});
+  if (!creek) {
+    let distant;
+    group.userData.terminalDetail = eye => {
+      // Keep the roof profile and open cable bays when the detail is subpixel.
+      const near = !eye || group.position.distanceToSquared(eye) < (group.visible ? 570 : 500) ** 2;
+      if (!near && !distant) {
+        const parts = [];
+        const snow = '#e1e9eb';
+        for (let i = 0; i < 8; i++) {
+          const a = -Math.PI / 2 + i * Math.PI / 8, b = a + Math.PI / 8;
+          const x0 = Math.sin(a) * halfW, x1 = Math.sin(b) * halfW;
+          const y0 = eave + Math.cos(a) * rise, y1 = eave + Math.cos(b) * rise;
+          const angle = Math.atan2(y1 - y0, x1 - x0);
+          parts.push(box(Math.hypot(x1 - x0, y1 - y0), .18, length,
+            i === 0 || i === 7 ? trim : snow, [(x0 + x1) / 2, (y0 + y1) / 2, 1], [0, 0, angle]));
+        }
+        for (const side of [-1, 1]) {
+          const x = side * (halfW - .85);
+          parts.push(box(.26, .64, length, trim, [side * halfW, eave - .34, 1]));
+          for (const z of [-length * .27, length * .26]) {
+            parts.push(box(.64, eave - .6, .73, '#7f898a', [x, (eave - .6) / 2, z]));
+          }
+        }
+        parts.push(box(2.5, 2.3, 3.2, '#6c7372', [operatorX, 1.10, -2.8]));
+        distant = mergedMesh(parts);
+        distant.position.copy(group.position);
+        distant.rotation.copy(group.rotation);
+        distant.castShadow = false;
+        distant.name = group.name + ' · distant';
+        scene.add(distant);
+        distant.updateMatrix();
+        distant.matrixAutoUpdate = false;
+      }
+      if (distant) distant.visible = !near;
+      group.visible = near;
+    };
+  }
+  cacheStaticTransforms(group);
   return group;
 }
 

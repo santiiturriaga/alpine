@@ -6,21 +6,63 @@ import { watchRenderer } from './renderer-recovery.js';
 // All resorts keep the same shadow shader when changing detail. Resizing its
 // depth target costs one allocation; toggling shadows recompiles visible materials.
 export const graphicsProfiles = [
+  { name: 'BUDGET', pixel: 1, samples: 1, maxPixels: Infinity, shadow: 384, shadowInterval: .12 },
   { name: 'LOW', pixel: 1, samples: .86, maxPixels: 1800000, shadow: 512, shadowInterval: .05 },
   { name: 'BALANCED', pixel: 1.6, samples: 1, maxPixels: 3600000, shadow: 1024, shadowInterval: .025 },
   { name: 'HIGH', pixel: 2.2, samples: 1.35, maxPixels: 6000000, shadow: 2048, shadowInterval: .025 },
   { name: 'MAX', pixel: 2.5, samples: 1.55, maxPixels: 8800000, shadow: 3072, shadowInterval: .025 },
 ];
 
-const preference = 'alpine.graphics';
 const realismPreference = 'alpine.realism';
 const shadowRight = new Vector3();
 const shadowUp = new Vector3();
 const viewportSize = new Vector2();
+const appleTouch = compactDevice && (/iPhone|iPad|iPod/.test(navigator.userAgent) ||
+  (navigator.maxTouchPoints > 1 && navigator.platform === 'MacIntel'));
+const presentedSurfaces = new WeakMap();
 
-export function createRenderer({ exposure = 1, shadows = false } = {}) {
+export function renderMountainFrame(renderer, scene, camera) {
+  renderer.render(scene, camera);
+  if (!appleTouch) return;
+  const presentation = presentedSurfaces.get(renderer);
+  if (!presentation) {
+    presentedSurfaces.set(renderer, {});
+  } else if (presentation.context) {
+    // Sample before WebGL releases this frame's default framebuffer.
+    presentation.context.drawImage(renderer.domElement, 0, 0);
+    if (presentation.waitingForFrame) {
+      presentation.context.canvas.style.visibility = '';
+      renderer.domElement.style.opacity = '0';
+      presentation.waitingForFrame = false;
+    }
+  }
+}
+
+function resizePresentation(renderer) {
+  const presentation = presentedSurfaces.get(renderer);
+  if (!presentation) return;
+  const source = renderer.domElement;
+  if (!presentation.context) {
+    // Mobile WebKit can keep rendering into a resized WebGL buffer while
+    // its compositor shows an empty layer. Keep the live context and inputs.
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) return;
+    canvas.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+    canvas.setAttribute('aria-hidden', 'true');
+    source.after(canvas);
+    presentation.context = context;
+  }
+  const canvas = presentation.context.canvas;
+  canvas.style.visibility = 'hidden';
+  canvas.width = source.width;
+  canvas.height = source.height;
+  presentation.waitingForFrame = true;
+}
+
+export function createRenderer({ exposure = 1, shadows = false, antialias = !compactDevice } = {}) {
   const renderer = new WebGLRenderer({
-    antialias: !compactDevice,
+    antialias,
     powerPreference: 'high-performance',
     alpha: false,
     stencil: false,
@@ -36,18 +78,18 @@ export function createRenderer({ exposure = 1, shadows = false } = {}) {
   return renderer;
 }
 
-export function resizeViewport({ host, renderer, camera, quality, storm, tuckWind }) {
+export function resizeViewport({ host, renderer, camera, quality, storm, tuckWind, resolution = 'native' }) {
   const width = Math.max(1, host.clientWidth);
   const height = Math.max(1, host.clientHeight);
-  const ratio = Math.min(
-    quality.pixel,
-    (window.devicePixelRatio || 1) * quality.samples,
-    Math.sqrt(quality.maxPixels / (width * height)),
+  const deviceRatio = window.devicePixelRatio || 1;
+  const ratio = resolution === 'native' ? Math.max(1, deviceRatio) : Math.min(
+    quality.pixel, deviceRatio * quality.samples, Math.sqrt(quality.maxPixels / (width * height)),
   );
   renderer.getSize(viewportSize);
   if (viewportSize.x !== width || viewportSize.y !== height || renderer.getPixelRatio() !== ratio) {
     // Window resize and ResizeObserver can report the same dimensions.
     renderer.setDrawingBufferSize(width, height, ratio);
+    resizePresentation(renderer);
   }
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
@@ -79,35 +121,6 @@ export async function prepareFirstFrame(renderer, scene, camera) {
   }
 }
 
-export function graphicsIndex(query, fallback) {
-  let saved;
-  try { saved = localStorage.getItem(preference); } catch {}
-  fallback = compactDevice ? 'LOW' : fallback;
-  const name = (query.get('quality') || saved || fallback).toUpperCase();
-  const index = graphicsProfiles.findIndex(profile => profile.name === name);
-  return index < 0 ? graphicsProfiles.findIndex(profile => profile.name === fallback) : index;
-}
-export function bindGraphics(slider, index, apply) {
-  const output = document.getElementById('graphics-level');
-  function present(i) {
-    const name = graphicsProfiles[i].name;
-    slider.value = i;
-    slider.setAttribute('aria-valuetext', name);
-    output.textContent = name.charAt(0) + name.slice(1).toLowerCase();
-  }
-  present(index);
-  // While dragging, repaint only the label. Commit once on release. Keyboard
-  // changes also dispatch change through the native range input.
-  slider.addEventListener('input', () => present(slider.valueAsNumber));
-  slider.addEventListener('change', () => {
-    const next = slider.valueAsNumber;
-    if (index === next) return;
-    index = next;
-    present(next);
-    try { localStorage.setItem(preference, graphicsProfiles[next].name); } catch {}
-    apply(next);
-  });
-}
 export function applyShadowResolution(renderer, sun, resolution) {
   renderer.shadowMap.enabled = sun.castShadow = true;
   if (sun.shadow.mapSize.x !== resolution) {
@@ -136,13 +149,13 @@ export function bindRealism(button, query) {
   });
 }
 
-export function sunShadowRefreshDue(elapsed, distanceSquared, interval) {
-  if (!compactDevice) return elapsed >= interval || distanceSquared >= 4;
+export function sunShadowRefreshDue(elapsed, distanceSquared, interval, budget = false) {
+  if (!compactDevice && !budget) return elapsed >= interval || distanceSquared >= 4;
   // Recenter immediately after a jump to another view. During continuous
   // motion, cap depth passes at 20 Hz and use a slower cadence at rest.
   if (distanceSquared >= 24 ** 2) return true;
   const moving = distanceSquared >= .5 ** 2;
-  return elapsed >= Math.max(interval, moving ? .05 : .12);
+  return elapsed >= (budget ? interval * (moving ? 1 : 2) : Math.max(interval, moving ? .05 : .12));
 }
 
 export function updateSunShadow(renderer, sun, direction, anchor, radius = sun.shadow.camera.right) {

@@ -5,7 +5,6 @@ import { buildAerialLanes, buildLiftConnector, buildLiftTerminal, buildSurfaceLi
   createLiftInstances, gondolaGeometry, movingGlass, seatedRiderGeometry } from './mapped-lift-machinery.js';
 
 const TAU = Math.PI * 2;
-const carrierRange = 1450;
 const carrierRadius = 4;
 const views = ['forward','valley','chase'];
 const chairShades = ['#45616a','#6e7d78','#52707a','#71828c'];
@@ -39,7 +38,30 @@ function clockCurve(lift) {
   };
 }
 
-function mappedExit(lift, config, ground, colliders, env) {
+function indexExitRoutes(runs) {
+  const cells = new Map(), tileSize = 160, exitRange = 75;
+  const cell = x => Math.floor(x / tileSize);
+  for (const run of runs) {
+    const way = run.points.map(liftPoint);
+    for (let i = 1; i < way.length; i++) {
+      const a = way[i - 1], b = way[i], dx = b.x - a.x, dz = b.z - a.z, len2 = dx * dx + dz * dz;
+      if (!Number.isFinite(len2) || len2 < .005) continue;
+      const segment = { run, a, dx, dz, len2 };
+      const left = cell(Math.min(a.x, b.x) - exitRange), right = cell(Math.max(a.x, b.x) + exitRange);
+      const top = cell(Math.min(a.z, b.z) - exitRange), bottom = cell(Math.max(a.z, b.z) + exitRange);
+      for (let z = top; z <= bottom; z++) {
+        for (let x = left; x <= right; x++) {
+          const key = `${x}:${z}`;
+          if (!cells.has(key)) cells.set(key, []);
+          cells.get(key).push(segment);
+        }
+      }
+    }
+  }
+  return (x, z) => cells.get(`${cell(x)}:${cell(z)}`) ?? [];
+}
+
+function mappedExit(lift, config, ground, colliders, env, exitRoutes) {
   const { profile, def, surface, gauge } = lift;
   const { top } = profile;
   if (def.unload) return { ...liftPoint(def.unload), heading:def.unload.heading ?? top.heading+Math.PI,
@@ -79,17 +101,12 @@ function mappedExit(lift, config, ground, colliders, env) {
       best.pose={x,z,heading,holdAtUnload:true};
     }
   }
-  for(const run of config.runs ?? []) {
-    const way=run.points.map(liftPoint);
-    for(let i=1;i<way.length;i++) {
-      const a=way[i-1],b=way[i],dx=b.x-a.x,dz=b.z-a.z,len2=dx*dx+dz*dz;
-      if(len2<.005)continue;
-      let t=clamp(((estimate.x-a.x)*dx+(estimate.z-a.z)*dz)/len2,0,.96);
-      if(t===0)t=Math.min(.18,3/Math.sqrt(len2));
-      const preferred=(def.id===config.startLift && run.id===config.startRun) ||
-        (def.id===config.beginnerLift && run.id===config.beginnerRun);
-      consider(a.x+dx*t,a.z+dz*t,Math.atan2(dx,dz),preferred?40:run.connector?9:16);
-    }
+  for(const { run, a, dx, dz, len2 } of exitRoutes(estimate.x, estimate.z)) {
+    let t=clamp(((estimate.x-a.x)*dx+(estimate.z-a.z)*dz)/len2,0,.96);
+    if(t===0)t=Math.min(.18,3/Math.sqrt(len2));
+    const preferred=(def.id===config.startLift && run.id===config.startRun) ||
+      (def.id===config.beginnerLift && run.id===config.beginnerRun);
+    consider(a.x+dx*t,a.z+dz*t,Math.atan2(dx,dz),preferred?40:run.connector?9:16);
   }
   for(const radius of surface?[4,7,10]:[5.9,9.0,14,21]) for(let i=0;i<16;i++) {
     const heading=top.heading+TAU*i/16;
@@ -208,7 +225,7 @@ function setInstanceCount(mesh, count) {
   mesh.instanceMatrix.needsUpdate = true;
 }
 
-function makeFleet(group, first, second, connector, guestGeometry, distantDetail) {
+function makeFleet(group, first, second, connector, guestGeometry, distantDetail, geometryCache) {
   const sections=fleetSections(first,second,connector);
   let duration=0;
   for(const section of sections) {
@@ -219,7 +236,11 @@ function makeFleet(group, first, second, connector, guestGeometry, distantDetail
   const throughput=first.def.chairsPerHour??((first.def.ridersPerHour??(first.detachable?2400:1400))/first.seats);
   const interval=3600/Math.max(1,throughput);
   const n=clamp(Math.round(duration/interval),3,265);
-  const geometry=first.gondola?gondolaGeometry(first,distantDetail):chairGeometry(first);
+  const key=first.gondola?`gondola:${first.paint}`:`chair:${first.paint}:${first.seats}:${first.vintage}:${first.detachable}`;
+  if (!geometryCache.has(key)) {
+    geometryCache.set(key,first.gondola?gondolaGeometry(first,distantDetail):chairGeometry(first));
+  }
+  const geometry=geometryCache.get(key);
   const prefix=second?`${first.def.name} / ${second.def.name}`:first.def.name;
   const body=createLiftInstances(group,geometry.body,n,`${prefix} · carriers`);
   const far=geometry.far?createLiftInstances(group,geometry.far,n,`${prefix} · distant carriers`):null;
@@ -245,9 +266,9 @@ function turnClass(lift, distance) {
  * accepts a lift/id for direct resort starts. update()/exit() return a completed
  * ride once, after placing the player on its downhill exit and clearing active.
  */
-export async function buildMappedResortLifts(scene, config, ground, env) {
+export async function buildMappedResortLifts(scene, config, ground, env, { quality = 'BALANCED' } = {}) {
   const group=new THREE.Group();group.name=`${config.name??'Mapped resort'} · Lift operations`;scene.add(group);
-  const colliders=[], fleets=[], byId=new Map();
+  const colliders=[], fleets=[], terminals=[], byId=new Map();
   const definitions=(config.lifts??[]).filter(def=>def.points?.length>1 && def.points.some(point=>{
     const a=liftPoint(point),b=liftPoint(def.points[0]);
     return Math.hypot(a.x-b.x,a.z-b.z)>.015;
@@ -275,13 +296,19 @@ export async function buildMappedResortLifts(scene, config, ground, env) {
   const matrix=new THREE.Matrix4(), carriage=new THREE.Matrix4(), local=new THREE.Matrix4();
   const turn=new THREE.Matrix4(), anchor=new THREE.Matrix4(), lean=new THREE.Matrix4();
   const clip=new THREE.Vector3();
-  let active=null, clock=0, ambientRiders=true;
+  let active=null, clock=0, ambientRiders=true, budget=false, carrierRange=1450;
+  function setQuality(name) {
+    budget = name === 'BUDGET';
+    carrierRange = budget ? 1150 : 1450;
+    for (const terminal of terminals) terminal.levels[1].distance = budget ? 250 : Infinity;
+  }
 
   for(const lift of lifts) {
     byId.set(lift.def.id,lift);
     const section=new THREE.Group();section.name=lift.def.name;group.add(section);lift.group=section;
   }
   const paired=new Set();
+  const carrierGeometry=new Map();
   for(const lift of lifts) {
     await yieldAfterBatch();
     if(lift.surface) {
@@ -295,17 +322,19 @@ export async function buildMappedResortLifts(scene, config, ground, env) {
       Math.cos(candidate.profile.top.heading-top.heading)<-.45);
     for(const branch of other?[lift,other]:[lift]) {
       buildAerialLanes(branch.group,branch,ground,colliders,!!other,distantDetail);
-      buildLiftTerminal(branch.group,branch,false,ground,colliders);
+      terminals.push(buildLiftTerminal(branch.group,branch,false,ground,colliders));
       if (branch.def.topArchitecture !== 'aiguille-du-midi') {
-        buildLiftTerminal(branch.group,branch,true,ground,colliders,!!other);
+        terminals.push(buildLiftTerminal(branch.group,branch,true,ground,colliders,!!other));
       }
     }
     const connector=other?buildLiftConnector(group,lift,other,ground,colliders):null;
     if(other)paired.add(other);
-    fleets.push(makeFleet(group,lift,other,connector,guestGeometry,distantDetail));
+    fleets.push(makeFleet(group,lift,other,connector,guestGeometry,distantDetail,carrierGeometry));
   }
+  setQuality(quality);
+  const exitRoutes = indexExitRoutes(config.runs ?? []);
   for(const lift of lifts) {
-    lift.exitPose=mappedExit(lift,config,ground,colliders,env);
+    lift.exitPose=mappedExit(lift,config,ground,colliders,env,exitRoutes);
     await yieldAfterBatch();
   }
 
@@ -348,6 +377,7 @@ export async function buildMappedResortLifts(scene, config, ground, env) {
     for(const fleet of fleets) {
       let nearCount=0,farCount=0;
       const { riderCounts } = fleet;
+      const detailDistanceSq = budget ? (fleet.first.gondola ? 145 : 100) ** 2 : fleet.detailDistanceSquared;
       riderCounts.fill(0);
       const activeFleet=active?.lift.fleet===fleet;
       if(!camera||activeFleet||
@@ -360,7 +390,7 @@ export async function buildMappedResortLifts(scene, config, ground, env) {
           if(camera&&!passenger&&(distance>carrierRange**2||!frustum.intersectsSphere(carrierSphere)))continue;
           const heading=Math.atan2(carrierTangent.x,carrierTangent.z);
           carriage.makeRotationY(heading).setPosition(carrierPosition);
-          if(fleet.far&&distance>fleet.detailDistanceSquared&&!passenger) {
+          if(fleet.far&&distance>detailDistanceSq&&!passenger) {
             fleet.far.setMatrixAt(farCount++,carriage);
             continue;
           }
@@ -524,8 +554,8 @@ export async function buildMappedResortLifts(scene, config, ground, env) {
     return finished;
   }
 
-  animateFleets(null);
-  return { group,lifts,colliders,nearby,board,exit,update,sampleCarrier,
+  if (!budget) animateFleets(null);
+  return { group,lifts,colliders,nearby,board,exit,update,sampleCarrier,setQuality,
     setAmbientRiders(enabled) { ambientRiders=!!enabled; },
     changeView() {
       if(!active)return null;

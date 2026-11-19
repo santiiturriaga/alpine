@@ -17,6 +17,7 @@ for (const difficulty of ['green', 'blue', 'black', 'double', 'unrated']) {
 }
 const INK = '#203741';
 const GOLD = '#df8209';
+const MIN_ZOOM = .0625;
 const MAX_ZOOM = 14;
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -124,7 +125,7 @@ export function mappedAtlasSettings({ mountain, config, runs, ground, lifts }) {
   const { href, summerHref } = mountain.atlas ?? {};
   const summerLifts = config.summerLifts ?? (config.id === 'crystal-mountain' ? ['mt-rainier-gondola']
     : config.id === 'snoqualmie' ? ['silver-fir-express', 'pacific-crest'] : []);
-  return { name: mountain.label, bounds: ground.bounds, heightAt: ground.heightAt,
+  return { name: mountain.label, bounds: ground.bounds, heightAt: ground.heightAt, regionalBounds: ground.regionalBounds,
     pisteColors: config.difficultyColors?.intermediate === 'red',
     terrainOnly: config.terrainOnly,
     landmarks, views, runs, lifts: mappedLifts, roads: config.roads ?? [], buildings: config.buildings ?? [],
@@ -152,6 +153,7 @@ export class ResortMap {
   configure(settings, route) {
     this.settings = settings;
     this.route = route;
+    this.relief = null;
     this.winterLines = lineFeatures(settings.runs, settings.lifts, settings.pisteColors);
     this.summerLines = settings.summerRoutes?.length ? lineFeatures(settings.summerRoutes, settings.summerLifts) : null;
     this.features = new Map([...this.winterLines, ...this.summerLines ?? []].map(feature => [feature.id, feature]));
@@ -185,6 +187,7 @@ export class ResortMap {
     }
     const views = summer ? [...sections].map(([name, points]) => ({ id: name, name, bounds: extent(points, 210) })) : settings.views ?? [];
     this.views = new Map([this.overview, ...views].map(view => [view.id, view]));
+    if (settings.regionalBounds) this.views.set('regional', { id: 'regional', name: 'Regional terrain', bounds: settings.regionalBounds });
     this.viewSelect.replaceChildren(...[...this.views.values()].map(view => new Option(view.name, view.id)));
     this.addOptions('Lifts', this.lines.filter(feature => feature.kind === 'lift'));
     this.addOptions('Trails', this.lines.filter(feature => feature.kind === 'run' && feature.named));
@@ -192,6 +195,7 @@ export class ResortMap {
     if (settings.terrainOnly) $('map-title').textContent = 'Mountain map';
     const legend = this.screen.querySelector('.trail-key');
     legend.classList.toggle('terrain-map', !!settings.terrainOnly);
+    legend.classList.toggle('regional-map', !!settings.regionalBounds);
     const grades = legend.querySelectorAll('.trail-key-grade:not(.trail-key-red)');
     const usePisteColors = settings.pisteColors && !summer;
     ['Easiest', 'Intermediate', 'Most difficult'].forEach((label, i) => {
@@ -370,6 +374,8 @@ export class ResortMap {
     this.player = player;
     $('map-locate').disabled = !player;
     if (this.settings && !this.relief) this.relief = createMapRelief(this.settings);
+    const transform = player && this.transform();
+    if (transform && !isIn(player.pos, this.settings.bounds) && !isIn(player.pos, transform.visible)) this.locate();
     this.scheduleDraw();
   }
 
@@ -403,7 +409,7 @@ export class ResortMap {
         this.viewSelect.value = this.view.id;
       }
       const t = this.transform();
-      if (t) this.zoom = clamp(Math.min(t.width / (maxX - minX + 440), t.height / (maxZ - minZ + 440)) / t.fit, 1, MAX_ZOOM);
+      if (t) this.zoom = clamp(Math.min(t.width / (maxX - minX + 440), t.height / (maxZ - minZ + 440)) / t.fit, 1, t.maxZoom);
       this.center = center;
     }
     this.scheduleDraw();
@@ -443,11 +449,13 @@ export class ResortMap {
   locate() {
     if (!this.player) return;
     const { x, z } = this.player.pos;
+    const oldScale = this.transform()?.scale;
     if (!isIn(this.player.pos, this.view.bounds)) {
       this.view = this.overview;
       this.viewSelect.value = this.view.id;
     }
-    this.zoom = Math.max(this.zoom, 3.7);
+    const t = this.transform();
+    if (t) this.zoom = Math.min(t.maxZoom, Math.max((oldScale ?? t.scale) / t.fit, 3.7 * t.overviewFit / t.fit));
     this.center = { x, z };
     this.scheduleDraw();
   }
@@ -463,19 +471,16 @@ export class ResortMap {
 
   transform() {
     const { clientWidth: width, clientHeight: height } = this.viewport;
-    if (!this.center || !width || !height) return null;
-    const { minX, maxX, minZ, maxZ } = this.view.bounds;
-    const fit = Math.min((width - 28) / (maxX - minX), (height - 28) / (maxZ - minZ));
+    if (!this.center || width <= 28 || height <= 28) return null;
+    const fitBounds = ({ minX, maxX, minZ, maxZ }) => Math.min((width - 28) / (maxX - minX), (height - 28) / (maxZ - minZ));
+    const overviewFit = fitBounds(this.overview.bounds);
+    const fit = fitBounds(this.view.bounds);
     const scale = fit * this.zoom;
     const x = width / 2 - this.center.x * scale, z = height / 2 - this.center.z * scale;
-    return { width, height, scale, x, z, fit,
+    const minZoom = Math.min(1, MIN_ZOOM * overviewFit / fit);
+    const maxZoom = Math.max(MAX_ZOOM, MAX_ZOOM * overviewFit / fit);
+    return { width, height, scale, x, z, fit, overviewFit, minZoom, maxZoom,
       visible: { minX: -x / scale, maxX: (width - x) / scale, minZ: -z / scale, maxZ: (height - z) / scale } };
-  }
-
-  clampCenter() {
-    const { minX, maxX, minZ, maxZ } = this.settings.bounds;
-    this.center.x = clamp(this.center.x, minX, maxX);
-    this.center.z = clamp(this.center.z, minZ, maxZ);
   }
 
   zoomAt(value, x, z) {
@@ -484,10 +489,9 @@ export class ResortMap {
     x ??= t.width / 2;
     z ??= t.height / 2;
     const mapX = (x - t.x) / t.scale, mapZ = (z - t.z) / t.scale;
-    this.zoom = clamp(value, 1, MAX_ZOOM);
+    this.zoom = clamp(value, t.minZoom, t.maxZoom);
     this.center.x = mapX - (x - t.width / 2) / (t.fit * this.zoom);
     this.center.z = mapZ - (z - t.height / 2) / (t.fit * this.zoom);
-    this.clampCenter();
     this.scheduleDraw();
   }
 
@@ -496,7 +500,6 @@ export class ResortMap {
     if (!t) return;
     this.center.x -= dx / t.scale;
     this.center.z -= dz / t.scale;
-    this.clampCenter();
     this.scheduleDraw();
   }
 
@@ -505,20 +508,22 @@ export class ResortMap {
     this.framePending = true;
     requestAnimationFrame(() => {
       this.framePending = false;
-      this.draw();
+      if (!this.screen.classList.contains('hidden')) this.draw();
     });
   }
 
   drawBase(t, dpr) {
     this.base ??= document.createElement('canvas');
     const values = [t.width, t.height, t.scale, t.x, t.z, dpr, this.player?.pos.x, this.player?.pos.z];
-    if (values.every((value, i) => value === this.baseValues?.[i])) return;
+    if (!this.reliefPending && values.every((value, i) => value === this.baseValues?.[i])) return;
     this.baseValues = values;
-    this.base.width = this.canvas.width;
-    this.base.height = this.canvas.height;
+    if (this.base.width !== this.canvas.width || this.base.height !== this.canvas.height) {
+      this.base.width = this.canvas.width;
+      this.base.height = this.canvas.height;
+    }
     const ctx = this.base.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    drawMapRelief(ctx, this.relief, t);
+    this.reliefPending = drawMapRelief(ctx, this.relief, t, dpr);
     ctx.save();
     ctx.translate(t.x, t.z);
     ctx.scale(t.scale, t.scale);
@@ -573,8 +578,9 @@ export class ResortMap {
     this.drawPosition(ctx, t);
     this.drawScale(ctx, t);
     $('map-zoom-value').textContent = `${Math.round(this.zoom * 100)}%`;
-    $('map-zoom-out').disabled = this.zoom <= 1;
-    $('map-zoom-in').disabled = this.zoom >= MAX_ZOOM;
+    $('map-zoom-out').disabled = this.zoom <= t.minZoom;
+    $('map-zoom-in').disabled = this.zoom >= t.maxZoom;
+    if (this.reliefPending) this.scheduleDraw();
   }
 
   paintLabels(ctx, t) {

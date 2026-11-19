@@ -8,6 +8,9 @@ import { terrainHorizon, bindTerrainHorizon } from './terrain-horizon.js';
 import { nightRunsFor } from './slope-fixtures.js';
 import { internationalLandmarkSite } from './international-landmark-sites.js';
 import { summitTerrainMaterial } from './international-landmark-materials.js';
+import { createMappedTerrainDetail } from './mapped-terrain-detail.js';
+import { createBackcountry, createSurveyTerrain, insideTerrain } from './backcountry.js';
+import { compactDevice } from './device-budget.js';
 import { clamp, lerp, smoothstep } from './util.js';
 
 const TILE = 48;
@@ -61,7 +64,7 @@ export function rasterGrid(values, { cols, rows }, bounds) {
     const b = index + 1, c = index + cols;
     const wa = first ? 1 - tx - tz : tx + tz - 1;
     const wb = first ? tx : 1 - tz, wc = first ? tz : 1 - tx;
-    if (exact) {
+    if (normal && exact) {
       if (first) normal.set((values[a] - values[b]) / dx, 1, (values[a] - values[c]) / dz);
       else normal.set((values[c] - values[a]) / dx, 1, (values[b] - values[a]) / dz);
       normal.normalize();
@@ -278,14 +281,41 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
   const material = new THREE.MeshStandardMaterial({ roughness: .91, metalness: 0 });
   const summerTrails = !regional && !!field.summerTexture;
   const forest = regional ? field.survey?.region : field.survey?.local;
-  material.customProgramCacheKey = () => `mapped-resort-snow-${regional}-${summerTrails}-${!!nightLight}-${!!forest}`;
+  const regionalForest = field.survey?.region;
+  const regionalColor = /* glsl */ `
+    vec3 surveyColor(vec3 p, float up, float mountainside, float flutes, float cliffBed, float cliff, float weather) {
+      float surveySnow = max(weather, snowpack);
+      ${regionalForest ? `
+        vec4 surveyedStand = texture2D(regionalStand, (p.xz-regionalStandBounds.xy)/regionalStandBounds.zw) * 2.55;
+        float forests = surveyedStand.r;
+        surveySnow = max(surveyedStand.b, max(snowpack, weather * smoothstep(.0,.60,snowpack)));
+      ` : 'float forests = (1.-smoothstep(1330.,1860.+(mountainside-.5)*320.,p.y)) * smoothstep(.56,.87,up);'}
+      float canopy = resortNoise(p * vec3(.055,.041,.055));
+      vec3 spruce = mix(vec3(.018,.027,.029),vec3(.112,.160,.163),canopy*.7+mountainside*.3);
+      vec3 alpine = mix(vec3(.49,.58,.66),vec3(.85,.91,.95),.55*flutes+.45*mountainside);
+      vec3 stone = vec3(.11,.134,.15) * (.54+.70*cliffBed);
+      ${regionalForest ? `
+        vec3 grove = mix(vec3(.105,.184,.075),vec3(.33,.197,.064),standAutumn);
+        vec3 bareGrove = mix(vec3(.077,.073,.071),vec3(.35,.365,.372),mountainside);
+        grove = mix(grove, bareGrove, smoothstep(.24,.83,snowpack));
+        spruce = mix(spruce,grove*(.84+.23*canopy),surveyedStand.g);
+        stone = mix(stone,vec3(.16,.21,.095)*(.73+.45*cliffBed),surveyedStand.a*(1.-cliff));
+      ` : ''}
+      return mix(mix(stone,alpine,(1.-cliff)*surveySnow),spruce,forests*.96);
+    }
+  `;
+  material.customProgramCacheKey = () => `mapped-resort-snow-${regional}-${summerTrails}-${!!nightLight}-${!!forest}-${!!regionalForest}`;
   material.onBeforeCompile = (shader) => {
     shader.uniforms.resortField = { value: field.texture };
-    if (forest) {
+    if (forest && !regional) {
       shader.uniforms.standMap = { value: forest.texture };
       shader.uniforms.standBounds = { value: forest.limits };
-      shader.uniforms.standAutumn = climateUniforms.autumn;
     }
+    if (regionalForest) {
+      shader.uniforms.regionalStand = { value: regionalForest.texture };
+      shader.uniforms.regionalStandBounds = { value: regionalForest.limits };
+    }
+    if (forest || regionalForest) shader.uniforms.standAutumn = climateUniforms.autumn;
     if (summerTrails) shader.uniforms.summerField = { value: field.summerTexture };
     shader.uniforms.snowpack = climateUniforms.snowpack;
     shader.uniforms.realism = climateUniforms.realism;
@@ -303,12 +333,15 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
       ${materialSource}
       uniform sampler2D resortField;
-      ${forest ? 'uniform sampler2D standMap; uniform vec4 standBounds; uniform float standAutumn;' : ''}
+      ${forest && !regional ? 'uniform sampler2D standMap; uniform vec4 standBounds;' : ''}
+      ${regionalForest ? 'uniform sampler2D regionalStand; uniform vec4 regionalStandBounds;' : ''}
+      ${forest || regionalForest ? 'uniform float standAutumn;' : ''}
       ${summerTrails ? 'uniform sampler2D summerField;' : ''}
       uniform vec4 resortLimits;
       uniform float snowpack;
       uniform float snowline;
       uniform float realism;
+      ${regionalColor}
       ${nightLight ? 'uniform sampler2D pisteFloodlight; uniform vec4 pisteFloodlightLimits; uniform float pisteFloodlightStrength;' : ''}
       ${regional ? '' : snowTrafficGLSL}
     `).replace('#include <color_fragment>', `#include <color_fragment>
@@ -323,11 +356,11 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
       float flutes = resortNoise(p * vec3(.11,.027,.088) + mountainside*.44);
       float cliffBed = resortNoise(p * vec3(.085,.335,.086));
       float steep = smoothstep(.20,.57,1. - up);
-      float cliff = smoothstep(.35,.76,steep + (mountainside-.44)*.39 + (flutes-.48)*.43)
-        * (1. - groom * .94) * (.63+.37*cliffBed);
+      float naturalCliff = smoothstep(.35,.76,steep + (mountainside-.44)*.39 + (flutes-.48)*.43) * (.63+.37*cliffBed);
+      float cliff = naturalCliff * (1. - groom * .94);
       float weather = smoothstep(snowline-165.,snowline+280.,p.y);
       float snow = max(weather, snowpack);
-      ${forest ? `
+      ${forest && !regional ? `
         vec4 stand = texture2D(standMap, (p.xz-standBounds.xy)/standBounds.zw) * 2.55;
         // Keep observed permanent snow through summer. Seasonal snow retreats to those cells.
         snow = max(stand.b, max(snowpack, weather * smoothstep(.0,.60,snowpack)));
@@ -337,15 +370,15 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
         grove = mix(grove, bareGrove, smoothstep(.24,.83,snowpack));
       ` : ''}
       ${regional ? `
-        float forests = ${forest ? 'stand.r' : '(1.-smoothstep(1330.,1860.+(mountainside-.5)*320.,p.y)) * smoothstep(.56,.87,up)'};
-        float canopy = resortNoise(p * vec3(.055,.041,.055));
-        vec3 spruce = mix(vec3(.018,.027,.029),vec3(.112,.160,.163),canopy*.7+mountainside*.3);
-        ${forest ? 'spruce = mix(spruce,grove*(.84+.23*canopy),stand.g);' : ''}
-        vec3 alpine = mix(vec3(.49,.58,.66),vec3(.85,.91,.95),.55*flutes+.45*mountainside);
-        vec3 stone = vec3(.11,.134,.15) * (.54+.70*cliffBed);
-        ${forest ? 'stone = mix(stone,vec3(.16,.21,.095)*(.73+.45*mountainside),stand.a*(1.-cliff));' : ''}
-        diffuseColor.rgb *= mix(mix(stone,alpine,(1.-cliff)*snow),spruce,forests*.96);
+        diffuseColor.rgb *= surveyColor(p,up,mountainside,flutes,cliffBed,naturalCliff,weather);
       ` : `
+        // Match the survey shading at the join and bring in marked terrain smoothly.
+        vec2 edge = min(p.xz-resortLimits.xy, resortLimits.xy+resortLimits.zw-p.xz);
+        float edgeDistance = min(edge.x,edge.y);
+        ${summerTrails ? 'float path = texture2D(summerField,(p.xz-resortLimits.xy)/resortLimits.zw).r;' : ''}
+        float marks = max(max(groom,ice),road);
+        ${summerTrails ? 'marks = max(marks, smoothstep(.07,.61,path));' : ''}
+        float localWeight = max(smoothstep(0.,190.,edgeDistance),smoothstep(0.,35.,edgeDistance)*marks);
         float nearDetail = 1. - smoothstep(28.,140.,eye);
         float traffic = trackPressure(p.xz) * (1.0-ice);
         float drift = resortNoise(p * vec3(.45,.14,.72)+flutes*.55);
@@ -383,16 +416,19 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
         ` : ''}
         ${summerTrails ? `
           float bare = 1.-snow;
-          float path = texture2D(summerField,(p.xz-resortLimits.xy)/resortLimits.zw).r;
           vec3 dirt = mix(vec3(.16,.094,.053),vec3(.30,.211,.115),.56*drift+.44*shallow);
           granite = mix(granite,dirt,smoothstep(.07,.61,path)*bare*.94);
         ` : ''}
-        diffuseColor.rgb *= mix(granite,snowColor,(1.-cliff)*snow);
+        vec3 surfaceColor = mix(granite,snowColor,(1.-cliff)*snow);
+        if (localWeight < 1.) {
+          surfaceColor = mix(surveyColor(p,up,mountainside,flutes,cliffBed,naturalCliff,weather),surfaceColor,localWeight);
+        }
+        diffuseColor.rgb *= surfaceColor;
         float resortRelief = nearDetail * (.021 * drift + .008 * shallow + .0014 * grains * coverage
-          + .0018 * ripple * tracks) * (1. - ice*.77);
+          + .0018 * ripple * tracks) * (1. - ice*.77) * localWeight;
       `}
     `).replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-      roughnessFactor *= 1. - ice*(.47+.20*realism);
+      roughnessFactor *= 1. - ice*(.47+.20*realism)${regional ? '' : '*localWeight'};
     `).replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
       ${regional ? '' : `
         vec3 dx = dFdx(vViewPosition), dz = dFdy(vViewPosition);
@@ -409,23 +445,23 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
         #include <lights_fragment_end>
         vec2 horizonLight = vec2(1.);
         if (realism > .5) {
-          horizonLight = terrainLight((p.xz-resortLimits.xy)/resortLimits.zw);
+          horizonLight = mix(vec2(1.), terrainLight((p.xz-resortLimits.xy)/resortLimits.zw), localWeight);
           reflectedLight.directDiffuse *= mix(.08, 1., horizonLight.x);
           reflectedLight.directSpecular *= horizonLight.x;
           reflectedLight.indirectDiffuse *= horizonLight.y;
         }`);
       shader.fragmentShader = shader.fragmentShader.replace('#include <opaque_fragment>', /* glsl */ `
         float flash = snowCrystalFlash(p, vNormal, eye, (1.0-cliff)*snow*(1.0-underTrees*.56)*(1.0-ice*.72));
-        outgoingLight += vec3(.73,.88,1.0) * flash * mix(1.35,2.3,realism) * horizonLight.x;
+        outgoingLight += vec3(.73,.88,1.0) * flash * mix(1.35,2.3,realism) * horizonLight.x * localWeight;
         if (realism > .5) {
-          outgoingLight = shadeWinterSurface(outgoingLight, normal, vViewPosition,
-            (1.-cliff)*snow*(1.-road)*(1.-underTrees*.65), ice, (1.-groom)*(1.-traffic));
+          outgoingLight = mix(outgoingLight, shadeWinterSurface(outgoingLight, normal, vViewPosition,
+            (1.-cliff)*snow*(1.-road)*(1.-underTrees*.65), ice, (1.-groom)*(1.-traffic)), localWeight);
         }
         ${nightLight ? `
           if (pisteFloodlightStrength > .006) {
             vec2 pools = texture2D(pisteFloodlight,(p.xz-pisteFloodlightLimits.xy)/pisteFloodlightLimits.zw).rg;
             vec3 irradiance = pools.r*vec3(1.0,.70,.35) + pools.g*vec3(.77,.89,1.0);
-            outgoingLight += diffuseColor.rgb * irradiance * pisteFloodlightStrength * 1.25;
+            outgoingLight += diffuseColor.rgb * irradiance * pisteFloodlightStrength * 1.25 * localWeight;
           }
         ` : ''}
         #include <opaque_fragment>
@@ -435,100 +471,60 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
   return material;
 }
 
-function meshTerrain(group, grid, mat, hole = null) {
-  const { cols, rows, xAt, zAt, values, normals } = grid;
-  for (let j = 0; j < rows - 1; j += TILE) for (let i = 0; i < cols - 1; i += TILE) {
-    const w = Math.min(cols - i, TILE + 1), h = Math.min(rows - j, TILE + 1);
-    const positions = new Float32Array(w * h * 3);
-    const shading = new Float32Array(w * h * 3);
-    const indices = new Uint16Array((w - 1) * (h - 1) * 6);
-    let used = 0;
-    for (let v = 0; v < h; v++) for (let u = 0; u < w; u++) {
-      const src = (j + v) * cols + i + u, dst = (v * w + u) * 3;
-      const x = xAt(i + u), z = zAt(j + v);
-      const y = hole && hole.border(x, z) ? hole.sample(x, z, detailNormal) : values[src];
-      positions[dst] = x;
-      positions[dst + 1] = y;
-      positions[dst + 2] = z;
-      if (hole && hole.border(x, z)) detailNormal.toArray(shading, dst);
-      else {
-        shading[dst] = normals[src * 3];
-        shading[dst + 1] = normals[src * 3 + 1];
-        shading[dst + 2] = normals[src * 3 + 2];
-      }
-      if (u === w - 1 || v === h - 1 || hole?.inside(x, z, xAt(i + u + 1), zAt(j + v + 1))) continue;
-      const a = v * w + u, b = a + 1, c = a + w, d = c + 1;
-      indices[used++] = a;
-      indices[used++] = c;
-      indices[used++] = b;
-      indices[used++] = b;
-      indices[used++] = c;
-      indices[used++] = d;
+function meshTerrain(group, grid, mat, detail = null, patches = []) {
+  for (let j = 0; j < grid.rows - 1; j += TILE) for (let i = 0; i < grid.cols - 1; i += TILE) {
+    const w = Math.min(grid.cols - i, TILE + 1), h = Math.min(grid.rows - j, TILE + 1);
+    const overlapping = patches.filter(({ meshGrid: { bounds } }) =>
+      grid.xAt(i) <= bounds.maxX && grid.xAt(i + w - 1) >= bounds.minX &&
+      grid.zAt(j) <= bounds.maxZ && grid.zAt(j + h - 1) >= bounds.minZ);
+    if (detail && w > 2 && h > 2 && !overlapping.length) {
+      detail.add(i, j, w, h, () => terrainTileGeometry(grid, i, j, w, h), mat, group);
+      continue;
     }
-    if (!used) continue;
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('normal', new THREE.BufferAttribute(shading, 3));
-    geometry.setIndex(new THREE.BufferAttribute(indices.subarray(0, used), 1));
-    geometry.computeBoundingSphere();
+    const hole = overlapping.length ? (ax, az, bx, bz) => overlapping.some(patch => patch.inside(ax, az, bx, bz)) : null;
+    const geometry = terrainTileGeometry(grid, i, j, w, h, hole);
+    if (!geometry) continue;
     const mesh = new THREE.Mesh(geometry, mat);
-    mesh.receiveShadow = !hole || !!hole.receiveShadow;
+    mesh.receiveShadow = true;
+    mesh.matrixAutoUpdate = false;
     group.add(mesh);
   }
 }
 
-function backdropPatch(regional, main) {
-  // Insert the playable-region boundary in the regional grid. The close
-  // elevations replace the outside DEM along that line and taper into it.
-  const b = main.bounds;
-  const x = Array.from({ length: regional.cols }, (_, i) => regional.xAt(i));
-  const z = Array.from({ length: regional.rows }, (_, j) => regional.zAt(j));
-  for (const [axis, lower, upper] of [[x, b.minX, b.maxX], [z, b.minZ, b.maxZ]]) {
-    for (const coordinate of [lower, upper]) if (!axis.includes(coordinate)) axis.push(coordinate);
-    axis.sort((a, b) => a - b);
+function terrainTileGeometry(grid, i, j, w, h, hole = null) {
+  const { cols, xAt, zAt, values, normals } = grid;
+  const positions = new Float32Array(w * h * 3);
+  const shading = new Float32Array(w * h * 3);
+  const indices = new Uint16Array((w - 1) * (h - 1) * 6);
+  let used = 0;
+  for (let v = 0; v < h; v++) for (let u = 0; u < w; u++) {
+    const src = (j + v) * cols + i + u, dst = (v * w + u) * 3;
+    const x = xAt(i + u), z = zAt(j + v);
+    positions[dst] = x;
+    positions[dst + 1] = values[src];
+    positions[dst + 2] = z;
+    shading[dst] = normals[src * 3];
+    shading[dst + 1] = normals[src * 3 + 1];
+    shading[dst + 2] = normals[src * 3 + 2];
+    if (u === w - 1 || v === h - 1 || hole?.(x, z, xAt(i + u + 1), zAt(j + v + 1))) continue;
+    const a = v * w + u, b = a + 1, c = a + w, d = c + 1;
+    indices[used++] = a;
+    indices[used++] = c;
+    indices[used++] = b;
+    indices[used++] = b;
+    indices[used++] = c;
+    indices[used++] = d;
   }
-  const values = new Float32Array(x.length * z.length);
-  const normals = new Float32Array(values.length * 3);
-  const sample = (x, z) => {
-    const edgeX = clamp(x, b.minX, b.maxX), edgeZ = clamp(z, b.minZ, b.maxZ);
-    const dist = Math.hypot(x - edgeX, z - edgeZ);
-    const y = regional.sample(x, z);
-    if (dist > 185) return y;
-    return y + (main.sample(edgeX, edgeZ) - regional.sample(edgeX, edgeZ)) * (1 - smoothstep(0, 185, dist));
-  };
-  for (let j = 0; j < z.length; j++) for (let i = 0; i < x.length; i++) {
-    const ix = j * x.length + i;
-    const px = x[i], pz = z[j];
-    values[ix] = sample(px, pz);
-    const normal = detailNormal.set(sample(px - 13, pz) - sample(px + 13, pz), 26,
-      sample(px, pz - 13) - sample(px, pz + 13)).normalize();
-    normal.toArray(normals, ix * 3);
-  }
-  return { cols: x.length, rows: z.length, values, normals, xAt: i => x[i], zAt: j => z[j] };
-}
-
-function sealTerrainEdge(group, main, regional, material) {
-  const b = main.bounds;
-  const vertices = [];
-  const append = (count, getPoint) => {
-    for (let i = 1; i < count; i++) {
-      const [ax, az] = getPoint(i - 1), [bx, bz] = getPoint(i);
-      const a = main.sample(ax, az), c = main.sample(bx, bz);
-      const b = Math.min(a, regional.sample(ax, az)) - 26, d = Math.min(c, regional.sample(bx, bz)) - 26;
-      vertices.push(ax,a,az,bx,c,bz,ax,b,az, bx,c,bz,bx,d,bz,ax,b,az);
-    }
-  };
-  append(main.cols, i => [main.xAt(i), b.minZ]);
-  append(main.cols, i => [main.xAt(main.cols - 1 - i), b.maxZ]);
-  append(main.rows, i => [b.minX, main.zAt(main.rows - 1 - i)]);
-  append(main.rows, i => [b.maxX, main.zAt(i)]);
+  if (!used) return null;
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-  geometry.computeVertexNormals();
-  group.add(new THREE.Mesh(geometry, material));
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('normal', new THREE.BufferAttribute(shading, 3));
+  geometry.setIndex(new THREE.BufferAttribute(indices.subarray(0, used), 1));
+  geometry.computeBoundingSphere();
+  return geometry;
 }
 
-export async function loadMappedGround(scene, config, baseURL) {
+export async function loadMappedGround(scene, config, baseURL, { quality = 'BALANCED' } = {}) {
   const { bounds, terrain, backdrop, forest, runs, runAreas = [], roads = [], parking = [], summerRoutes = [] } = config;
   const detail = internationalLandmarkSite(config.id)?.terrain;
   const [dem, regionalDem, cover, detailDem, survey] = await Promise.all([
@@ -571,9 +567,15 @@ export async function loadMappedGround(scene, config, baseURL) {
       inside: (ax, az, bx = ax, bz = az) => ax >= minX && az >= minZ && bx <= maxX && bz <= maxZ });
   }
   const surfaceGrid = (x, z) => localPatches.find(patch => patch.inside(x, z))?.meshGrid ?? grid;
-  const heightAt = (x, z, normal, exact) => surfaceGrid(x, z).sample(x, z, normal, exact);
   const regional = rasterGrid(regionalDem, backdrop, backdrop.bounds);
-  const forestAt = forestSampler(cover, forest, forest.bounds || bounds);
+  const localForestAt = forestSampler(cover, forest, forest.bounds || bounds);
+  const regionBounds = backdrop.bounds;
+  const landscapeSample = [0, 0, 0];
+  const forestAt = (x, z) => {
+    if (insideTerrain(bounds, x, z)) return localForestAt(x, z);
+    if (!survey || !insideTerrain(regionBounds, x, z)) return 0;
+    return survey.region.sample(x, z, landscapeSample)[0] / 100;
+  };
   const surfaceRoads = config.id === 'stevens-pass'
     ? roads.filter(road => road.osmId !== STEVENS_OVERPASS_OSM) : roads;
   const field = makeSurfaceField(bounds, grid, forestAt, runs, runAreas, surfaceRoads, parking, summerRoutes);
@@ -585,15 +587,28 @@ export async function loadMappedGround(scene, config, baseURL) {
   const horizonMaterial = snowMaterial(bounds, field, true);
   const group = new THREE.Group();
   group.name = `${config.name} · mapped elevation`;
-  const horizon = backdropPatch(regional, grid);
-  const inside = (ax, az, bx, bz) => ax >= bounds.minX && bx <= bounds.maxX && az >= bounds.minZ && bz <= bounds.maxZ;
-  const border = (x, z) => inside(x, z, x, z)
-    && (x === bounds.minX || x === bounds.maxX || z === bounds.minZ || z === bounds.maxZ);
-  meshTerrain(group, horizon, horizonMaterial, { inside, border, sample: grid.sample });
-  sealTerrainEdge(group, grid, regional, horizonMaterial);
-  const terrainHole = localPatches.length ? { border: () => false,
-    inside: (ax, az, bx, bz) => localPatches.some(patch => patch.inside(ax, az, bx, bz)), receiveShadow: true } : null;
-  meshTerrain(group, grid, localMaterial, terrainHole);
+  const surveyTerrain = createSurveyTerrain({
+    regional, insets: [{ ...grid, normalAt(x, z, out) { grid.sample(x, z, out); return out; } }],
+    material: horizonMaterial, name: 'Regional elevation survey',
+  });
+  let seed = 0;
+  for (const letter of config.id) seed = Math.imul(seed, 31) + letter.charCodeAt(0);
+  const backcountry = createBackcountry({
+    survey: surveyTerrain, material: snowMaterial(bounds, { texture: field.texture }, true), seed,
+    compact: compactDevice, viewDistance: config.viewDistance ?? 19000,
+  });
+  const heightAt = (x, z, normal, exact) => insideTerrain(bounds, x, z)
+    ? surfaceGrid(x, z).sample(x, z, normal, exact) : backcountry.sample(x, z, normal);
+  function fieldAt(x, z, out = {}) {
+    if (insideTerrain(bounds, x, z)) return field.at(x, z, out);
+    out.groomed = 0;
+    out.ice = 0;
+    out.canopy = forestAt(x, z);
+    return out;
+  }
+  group.add(surveyTerrain.group, backcountry.group, backcountry.horizon);
+  const detailLOD = createMappedTerrainDetail(grid, quality);
+  meshTerrain(group, grid, localMaterial, detailLOD, localPatches);
   for (const patch of localPatches) {
     const material = patch.granite ? summitTerrainMaterial(localMaterial, patch.meshGrid.bounds) : localMaterial;
     meshTerrain(group, patch.meshGrid, material);
@@ -601,15 +616,17 @@ export async function loadMappedGround(scene, config, baseURL) {
   scene.add(group);
 
   const fieldSample = {};
-  const landscapeSample = [0, 0, 0];
   const liftBases = config.lifts.map(lift => lift.bottomElevation).filter(Number.isFinite);
   const snowColor = new THREE.Color(), packed = new THREE.Color().setRGB(.847, .908, .973);
   const powder = new THREE.Color().setRGB(.831, .890, .956), iceColor = new THREE.Color().setRGB(.591, .725, .833);
   const ground = {
-    mesh: group, bounds, snowMaterial: localMaterial,
+    mesh: group, bounds, regionalBounds: regionBounds, snowMaterial: localMaterial,
+    streamBackcountry: backcountry.stream,
+    setDetailQuality: detailLOD.setQuality,
+    updateDetail: detailLOD.update,
     snowlineOffset: survey && liftBases.length ? Math.min(...liftBases) - 630 : 0,
     forestAt, sampleStand: survey?.local.sample,
-    fieldAt(x, z, out = {}) { return field.at(x, z, out); },
+    fieldAt,
     heightAt,
     setNightLightField({ texture, limits }) {
       if (!nightLight) return null;
@@ -623,7 +640,9 @@ export async function loadMappedGround(scene, config, baseURL) {
       let cover = 1;
       if (pack <= .98) {
         const weather = smoothstep(-165, 280, heightAt(x, z) - climateUniforms.snowline.value);
-        cover = survey ? Math.max(survey.local.sample(x,z,landscapeSample)[2] / 100, pack,
+        const known = insideTerrain(bounds, x, z) ? survey?.local
+          : insideTerrain(regionBounds, x, z) ? survey?.region : null;
+        cover = known ? Math.max(known.sample(x, z, landscapeSample)[2] / 100, pack,
           weather * smoothstep(0,.60,pack)) : Math.max(pack, weather);
       }
       if (cover < .28) {
@@ -633,7 +652,7 @@ export async function loadMappedGround(scene, config, baseURL) {
         out.powder = 0;
         return out;
       }
-      const { groomed, ice, canopy } = field.at(x, z, fieldSample);
+      const { groomed, ice, canopy } = fieldAt(x, z, fieldSample);
       const powder = (1 - groomed) * (1 - ice) * (.76 + .23 * canopy);
       out.id = ice > .53 ? 'ice' : powder > .46 ? 'powder' : 'packed';
       out.grip = 1 - .61 * ice - .28 * powder;
@@ -642,11 +661,10 @@ export async function loadMappedGround(scene, config, baseURL) {
       return compressSnow(x, z, out);
     },
     sampleSnowSurface(x, z, color, normal) {
-      const { groomed, ice } = field.at(x, z, fieldSample);
+      const { groomed, ice } = fieldAt(x, z, fieldSample);
       if (color) color.copy(snowColor.copy(powder).lerp(packed, groomed).lerp(iceColor, ice * .75));
       return heightAt(x, z, normal);
     },
-    regionalHeightAt: regional.sample,
   };
   return ground;
 }
