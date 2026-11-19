@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { makeGondolaShell, addGondolaShell, gondolaDoorsAtDistance } from './gondola-shell.js';
+import { makeGondolaShell, addGondolaShell } from './gondola-shell.js';
 import { makeCanvas, canvasTexture } from './util.js';
 
 const interiorMaterials={
@@ -127,32 +127,5 @@ export class GondolaInterior {
       materials.add(mesh.material);
     });
     for (const material of materials) if (!material.userData.gondolaShared) material.dispose();
-  }
-}
-
-// Submit frames along the real boarding path while the loading screen covers
-// the canvas. Rendering to the default framebuffer warms the live color space,
-// shadow, and driver pipeline variants, and uploads the visible scenery.
-export async function prewarmGondolaInterior(renderer,scene,camera,lift,prepare) {
-  const cabin = new GondolaInterior(scene, false, true, lift.def.name);
-  const boardingCamera = camera.clone();
-  boardingCamera.near = .045;
-  boardingCamera.fov = 65;
-  boardingCamera.updateProjectionMatrix();
-  const position = new THREE.Vector3(), tangent = new THREE.Vector3();
-  const sampler = lift.samplers[0], haul = lift.circulation.sections[0];
-  try {
-    for (const time of [0, 4]) {
-      const progress = haul.distanceFractionAt(time);
-      sampler.at(progress, position, tangent);
-      cabin.update(position, Math.atan2(tangent.x, tangent.z), time, gondolaDoorsAtDistance(progress * sampler.total));
-      cabin.placeCamera(boardingCamera);
-      prepare(boardingCamera, position);
-      if (time === 0) await renderer.compileAsync(scene, boardingCamera);
-      renderer.setViewport(0, 0, 64, 64);
-      renderer.render(scene, boardingCamera);
-    }
-  } finally {
-    cabin.dispose();
   }
 }

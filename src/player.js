@@ -95,6 +95,7 @@ export class Player {
     this.snowSink = 0;
     this.landingLoad = 0;
     this.tuning={grip:1,drag:1,speed:1,pop:1};
+    this.walkFootwear = null;
     this.clearBoost();
     this.shake = 0;
     this.cameraMode = 0; // 0 chase, 1 wide, 2 helmet
@@ -285,7 +286,12 @@ export class Player {
     this.groundNormal(this.pos.x, this.pos.z, _normal);
     const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
     const incline = -(_normal.x * fx + _normal.z * fz) / Math.max(.15, _normal.y) * Math.sign(forward);
-    const pace = (input.walkRun ? 3.15 : 1.72) * clamp(1 - Math.max(0, incline) * .8, .35, 1);
+    const { x, y, z } = this.pos;
+    const footwear = this.walkFootwear && this.env?.walkSurfaceAt?.(x, z, y) == null &&
+      !this.env?.interiorAt?.(x, z, y) && this.ground.surfaceAt(x, z, this.surface).id !== 'ground'
+      ? this.walkFootwear : null;
+    const pace = (input.walkRun ? 3.15 : 1.72) * (footwear?.speed ?? 1) *
+      clamp(1 - Math.max(0, incline) * (footwear?.climbPenalty ?? .8), .35, 1);
     this.vel.x = damp(this.vel.x, fx * forward * pace, 12, dt);
     this.vel.z = damp(this.vel.z, fz * forward * pace, 12, dt);
     this.strideAmount = this.tuckAmount = 0;

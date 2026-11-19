@@ -1,3 +1,6 @@
+import { createGearPreview } from './gear-preview.js';
+import { SNOW_SHOES } from './snow-shoes.js';
+
 // A local player's inventory. Race rewards, finds and slope coins all use
 // the same currency. Purchases and the resulting equipped pair save together.
 const key='alpine.outfitter.v1';
@@ -24,6 +27,8 @@ function jacketPalette(finds) {
   return [...colors.jacket,...Object.entries(questJackets).filter(([key])=>finds.includes(key)).map(([,value])=>value)];
 }
 const stickers={none:'No decal',peak:'Peak contour',maple:'Maple leaf',snowflake:'Snow crystal'};
+const haircuts={helmet:'Keep helmet on',crop:'Short crop',part:'Side part',curls:'Curls'};
+const hairColors=[['Dark brown','#382923'],['Chestnut','#814f32'],['Sandy blond','#bda36b']];
 const defaultOutfit=Object.fromEntries(Object.entries(colors).map(([slot,palette])=>[slot,palette[0][1]]));
 const money=n=>Number.isSafeInteger(n)&&n>=0?n:0;
 function read() {
@@ -32,17 +37,27 @@ function read() {
   const outfit={...defaultOutfit};
   const finds=Array.isArray(data.finds)?[...new Set(data.finds.filter(s=>typeof s==='string'))]:[];
   for(const [slot,palette] of Object.entries(colors))if((slot==='jacket'?jacketPalette(finds):palette).some(([,hex])=>hex===data.outfit?.[slot]))outfit[slot]=data.outfit[slot];
+  const ownsSnowShoes=data.ownsSnowShoes===true;
   return {balance:money(data.balance),owned:[...owned],skis:owned.has(data.skis)?data.skis:'all-mountain',outfit,
-    sticker:Object.hasOwn(stickers,data.sticker)?data.sticker:'none',finds};
+    sticker:Object.hasOwn(stickers,data.sticker)?data.sticker:'none',finds,ownsSnowShoes,
+    footwear:ownsSnowShoes&&data.footwear==='traverse'?'traverse':'standard',
+    haircut:Object.hasOwn(haircuts,data.haircut)?data.haircut:'helmet',
+    hairColor:hairColors.some(([,color])=>color===data.hairColor)?data.hairColor:hairColors[0][1]};
 }
 const element=(tag,cls,text='')=>{const e=document.createElement(tag);if(cls)e.className=cls;e.textContent=text;return e;};
 
 export class Outfitter {
-  constructor(player,close) {
+  constructor(player,close,renderer) {
     this.player=player;this.state=read();this.dialog=document.getElementById('outfitter');
     this.dialog.querySelector('[data-shop-close]').onclick=close;
     this.dialog.addEventListener('cancel',e=>{e.preventDefault();close();});
     this.notices=this.dialog.querySelector('output');
+    this.previewCanvas=this.dialog.querySelector('[data-gear-preview]');
+    this.renderer=renderer;
+    for (const button of this.dialog.querySelectorAll('[data-turn]')) button.onclick=()=>{
+      this.angle+=Number(button.dataset.turn);
+      this.drawPreview();
+    };
     window.addEventListener('storage',e=>{if(e.key===key){this.state=read();this.equip();if(this.dialog.open)this.render();}});
     this.equip();
   }
@@ -51,7 +66,13 @@ export class Outfitter {
     this.player.tuning=SKIS[s.skis];
     const patrol=s.outfit.jacket===patrolShell;
     this.player.landingTrickMultiplier=patrol?2:1;
-    this.player.rig.setAppearance?.({...this.broadcastOutfit,apparel:s.outfit.jacket,skis:s.skis,sticker:s.sticker});
+    this.player.walkFootwear=s.footwear==='traverse'?SNOW_SHOES:null;
+    this.player.rig.setAppearance?.(this.appearance);
+    if(this.dialog.open)this.drawPreview();
+  }
+  get appearance() {
+    const { outfit,skis,sticker,footwear,haircut,hairColor }=this.state;
+    return {...this.broadcastOutfit,apparel:outfit.jacket,skis,sticker,footwear,haircut,hairColor};
   }
   get broadcastOutfit() {
     const {outfit}=this.state;
@@ -74,10 +95,66 @@ export class Outfitter {
     return true;
   }
   find(id,reward) {if(this.state.finds.includes(id))return false;this.state.finds.push(id);this.credit(reward);return true;}
-  open(){this.notices.textContent='';this.render();this.dialog.showModal();}
+  open(shop={}){
+    this.barber=shop.kind==='barber';
+    this.angle=this.barber ? .13 : -.48;
+    this.dialog.querySelector('#outfitter-name').textContent=shop.name||'Mountain outfitter';
+    this.previewCanvas.setAttribute('aria-label',this.barber?'3D preview of your skier’s haircut':'3D preview of your skier and equipped outfit');
+    this.dialog.querySelector('[data-shop-gear]').hidden=this.barber;
+    this.dialog.querySelector('[data-shop-barber]').hidden=!this.barber;
+    this.notices.textContent='';
+    this.render();
+    this.dialog.showModal();
+    this.dialog.scrollTop=0;
+    this.drawPreview();
+  }
+  drawPreview(){
+    if(!this.renderer)return;
+    this.preview ??= createGearPreview(this.renderer,this.previewCanvas);
+    this.preview(this.appearance,this.angle,this.barber);
+  }
+  renderBarber(){
+    const fields=this.dialog.querySelector('[data-shop-barber]');
+    const s=this.state;
+    const style=fields.querySelector('[data-haircut]'),color=fields.querySelector('[data-hair-color]');
+    style.replaceChildren(...Object.entries(haircuts).map(([id,label])=>new Option(label,id)));
+    color.replaceChildren(...hairColors.map(([label,hex])=>new Option(label,hex)));
+    style.value=s.haircut;
+    color.value=s.hairColor;
+    color.disabled=s.haircut==='helmet';
+    style.onchange=()=>{
+      s.haircut=style.value;
+      color.disabled=s.haircut==='helmet';
+      this.equip();this.save();
+    };
+    color.onchange=()=>{s.hairColor=color.value;this.equip();this.save();};
+  }
+  renderFootwear(){
+    const s=this.state,slot=this.dialog.querySelector('[data-footwear]');
+    const equipped=s.footwear==='traverse';
+    const button=element('button',null,equipped?'Switch to ski boots':s.ownsSnowShoes?'Equip':`Buy · ${SNOW_SHOES.price} coins`);
+    button.disabled=!s.ownsSnowShoes&&s.balance<SNOW_SHOES.price;
+    button.dataset.snowShoes='';
+    button.onclick=()=>{
+      if(!s.ownsSnowShoes){
+        if(s.balance<SNOW_SHOES.price)return;
+        s.balance-=SNOW_SHOES.price;
+        s.ownsSnowShoes=true;
+      }
+      s.footwear=equipped?'standard':'traverse';
+      this.equip();this.save();this.render();
+      this.dialog.querySelector('[data-snow-shoes]').focus({preventScroll:true});
+      this.notices.textContent=equipped?'Standard ski boots equipped.':`${SNOW_SHOES.name} equipped.`;
+    };
+    const boost=Math.round((SNOW_SHOES.speed-1)*100);
+    slot.replaceChildren(element('strong',null,SNOW_SHOES.name),element('p',null,
+      `Walk ${boost}% faster on level snow and keep more pace uphill. Switch to walking mode with B.`),button);
+  }
   render(){
     const s=this.state,dialog=this.dialog;
     dialog.querySelector('[data-balance]').textContent=`${s.balance} mountain coins`;
+    if(this.barber){this.renderBarber();return;}
+    this.renderFootwear();
     const list=dialog.querySelector('[data-skis]');list.replaceChildren();
     for(const [id,item] of Object.entries(SKIS)){
       const owned=s.owned.includes(id),active=s.skis===id,card=element('article','gear-card');

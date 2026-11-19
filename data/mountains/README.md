@@ -9,6 +9,8 @@ Whistler uses its original authored world. The other ski resorts use the shared 
 
 For a new pack, check a known lift's measured vertical rise, a downhill run, a boarding and unload position, and the agreement between the rendered snow and the ski contact surface. Preserve the source date and distinguish measurements from inferred widths, station hardware and façade details.
 
+[International landmark sources](INTERNATIONAL-LANDMARKS.md) documents the research and local terrain patches used at Galzigbahn, Mont Fort and Aiguille du Midi.
+
 ## Terrain and trail inventory
 
 | Destination | Playable elevation grid | Run paths | Lift lines |

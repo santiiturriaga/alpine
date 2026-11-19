@@ -3,7 +3,10 @@ import { bindSnowTraffic, compressSnow, snowTrafficGLSL } from './snow-traffic.j
 import { stevensHeightDetails } from './stevens-pass-terrain.js';
 import { climateUniforms } from './climate-state.js';
 import { bindSnowCrystals } from './snow-crystals.js';
+import { terrainHorizon, bindTerrainHorizon } from './terrain-horizon.js';
 import { nightRunsFor } from './slope-fixtures.js';
+import { internationalLandmarkSite } from './international-landmark-sites.js';
+import { summitTerrainMaterial } from './international-landmark-materials.js';
 import { clamp, lerp, smoothstep } from './util.js';
 
 const TILE = 48;
@@ -378,9 +381,23 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
     `);
     if (!regional) {
       bindSnowCrystals(shader);
+      bindTerrainHorizon(shader, field.horizon);
+      shader.fragmentShader = shader.fragmentShader.replace('#include <lights_fragment_end>', `
+        #include <lights_fragment_end>
+        vec2 horizonLight = vec2(1.);
+        if (realism > .5) {
+          horizonLight = terrainLight((p.xz-resortLimits.xy)/resortLimits.zw);
+          reflectedLight.directDiffuse *= mix(.08, 1., horizonLight.x);
+          reflectedLight.directSpecular *= horizonLight.x;
+          reflectedLight.indirectDiffuse *= horizonLight.y;
+        }`);
       shader.fragmentShader = shader.fragmentShader.replace('#include <opaque_fragment>', /* glsl */ `
         float flash = snowCrystalFlash(p, vNormal, eye, (1.0-cliff)*snow*(1.0-underTrees*.56)*(1.0-ice*.72));
-        outgoingLight += vec3(.73,.88,1.0) * flash * mix(1.35,2.3,realism);
+        outgoingLight += vec3(.73,.88,1.0) * flash * mix(1.35,2.3,realism) * horizonLight.x;
+        if (realism > .5) {
+          outgoingLight = shadeWinterSurface(outgoingLight, normal, vViewPosition,
+            (1.-cliff)*snow*(1.-road)*(1.-underTrees*.65), ice, (1.-groom)*(1.-traffic));
+        }
         ${nightLight ? `
           if (pisteFloodlightStrength > .006) {
             vec2 pools = texture2D(pisteFloodlight,(p.xz-pisteFloodlightLimits.xy)/pisteFloodlightLimits.zw).rg;
@@ -490,9 +507,11 @@ function sealTerrainEdge(group, main, regional, material) {
 
 export async function loadMappedGround(scene, config, baseURL) {
   const { bounds, terrain, backdrop, forest, runs, runAreas = [], roads = [], parking = [], summerRoutes = [] } = config;
-  const [dem, regionalDem, cover] = await Promise.all([
+  const detail = internationalLandmarkSite(config.id)?.terrain;
+  const [dem, regionalDem, cover, detailDem] = await Promise.all([
     loadResortRaster(baseURL, terrain, 2), loadResortRaster(baseURL, backdrop, 2),
     loadResortRaster(baseURL, forest, 1),
+    detail ? loadResortRaster(baseURL, detail, 2) : null,
   ]);
   const grid = rasterGrid(dem, terrain, bounds);
   const localPatches = config.id === 'stevens-pass' ? stevensHeightDetails().map((detail) => {
@@ -507,11 +526,32 @@ export async function loadMappedGround(scene, config, baseURL) {
     return { meshGrid: rasterGrid(values, { cols, rows }, detail),
       inside: (ax, az, bx = ax, bz = az) => ax >= minX && az >= minZ && bx <= maxX && bz <= maxZ };
   }) : [];
+  if (detailDem) {
+    const { minX, maxX, minZ, maxZ } = detail.bounds;
+    const dx = (maxX - minX) / (detail.cols - 1), dz = (maxZ - minZ) / (detail.rows - 1);
+    for (let j = 0; j < detail.rows; j++) for (let i = 0; i < detail.cols; i++) {
+      const x = minX + i * dx, z = minZ + j * dz, index = j * detail.cols + i;
+      const edge = Math.min(x - minX, maxX - x, z - minZ, maxZ - z);
+      if (detail.rockRidge) for (let k = 1; k < detail.rockRidge.length; k++) {
+        const [ax, az, ay] = detail.rockRidge[k - 1], [bx, bz, by] = detail.rockRidge[k];
+        const rx = bx - ax, rz = bz - az;
+        const t = clamp(((x - ax) * rx + (z - az) * rz) / (rx * rx + rz * rz), 0, 1);
+        const d = Math.hypot(x - lerp(ax, bx, t), z - lerp(az, bz, t));
+        if (d > 21) continue;
+        const rock = lerp(ay, by, t) - d * (.74 + d * .12) + Math.sin(x * .65) * Math.cos(z * .52) * 2;
+        detailDem[index] = Math.max(detailDem[index], rock);
+      }
+      detailDem[index] = lerp(grid.sample(x, z), detailDem[index], smoothstep(0, detail.blend, edge));
+    }
+    localPatches.push({ meshGrid: rasterGrid(detailDem, detail, detail.bounds), granite: true,
+      inside: (ax, az, bx = ax, bz = az) => ax >= minX && az >= minZ && bx <= maxX && bz <= maxZ });
+  }
   const surfaceGrid = (x, z) => localPatches.find(patch => patch.inside(x, z))?.meshGrid ?? grid;
   const heightAt = (x, z, normal, exact) => surfaceGrid(x, z).sample(x, z, normal, exact);
   const regional = rasterGrid(regionalDem, backdrop, backdrop.bounds);
   const forestAt = forestSampler(cover, forest, forest.bounds || bounds);
   const field = makeSurfaceField(bounds, grid, forestAt, runs, runAreas, roads, parking, summerRoutes);
+  field.horizon = terrainHorizon(dem, terrain.cols, terrain.rows, bounds);
   const nightLight = nightRunsFor(config).length
     ? { texture: { value: null }, limits: { value: new THREE.Vector4() }, strength: { value: 0 } } : null;
   const localMaterial = snowMaterial(bounds, field, false, nightLight);
@@ -527,7 +567,10 @@ export async function loadMappedGround(scene, config, baseURL) {
   const terrainHole = localPatches.length ? { border: () => false,
     inside: (ax, az, bx, bz) => localPatches.some(patch => patch.inside(ax, az, bx, bz)), receiveShadow: true } : null;
   meshTerrain(group, grid, localMaterial, terrainHole);
-  for (const patch of localPatches) meshTerrain(group, patch.meshGrid, localMaterial);
+  for (const patch of localPatches) {
+    const material = patch.granite ? summitTerrainMaterial(localMaterial, patch.meshGrid.bounds) : localMaterial;
+    meshTerrain(group, patch.meshGrid, material);
+  }
   scene.add(group);
 
   const fieldSample = {};

@@ -40,7 +40,8 @@ function clockCurve(lift) {
 function mappedExit(lift, config, ground, colliders, env) {
   const { profile, def, surface, gauge } = lift;
   const { top } = profile;
-  if (def.unload) return { ...liftPoint(def.unload), heading:def.unload.heading ?? top.heading+Math.PI, holdAtUnload:true };
+  if (def.unload) return { ...liftPoint(def.unload), heading:def.unload.heading ?? top.heading+Math.PI,
+    footMode:!!def.unload.footMode, holdAtUnload:true };
   if (lift.stationStyle === 'tye-mill') return { x: 552.1, z: 1384, heading: -.039, holdAtUnload: true };
   if (lift.stationStyle === 'rope-tow') return { ...top.world(3.9, -2.35), heading: top.heading + Math.PI, holdAtUnload: true };
   const estimate = top.world(gauge,0);
@@ -260,7 +261,9 @@ export async function buildMappedResortLifts(scene, config, ground, env) {
     for(const branch of other?[lift,other]:[lift]) {
       buildAerialLanes(branch.group,branch,ground,colliders,!!other);
       buildLiftTerminal(branch.group,branch,false,ground,colliders);
-      buildLiftTerminal(branch.group,branch,true,ground,colliders,!!other);
+      if (branch.def.topArchitecture !== 'aiguille-du-midi') {
+        buildLiftTerminal(branch.group,branch,true,ground,colliders,!!other);
+      }
     }
     const connector=other?buildLiftConnector(group,lift,other,ground,colliders):null;
     if(other)paired.add(other);
@@ -455,8 +458,8 @@ export async function buildMappedResortLifts(scene, config, ground, env) {
     mounted.count=0;
     if(player.setRiding)player.setRiding(false);
     else player.riding=false;
-    if(player.setFootMode)player.setFootMode(false);
-    else player.footMode=false;
+    if(player.setFootMode)player.setFootMode(!!ride.lift.exitPose.footMode);
+    else player.footMode=!!ride.lift.exitPose.footMode;
     if(player.model)player.model.visible=true;
     player.teleport(ride.lift.exitPose);
     return ride;

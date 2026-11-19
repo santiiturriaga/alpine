@@ -8,49 +8,71 @@ export function box(w, h, d, color, pos = [0, 0, 0], rot = [0, 0, 0]) {
   return part(new THREE.BoxGeometry(w, h, d), color, pos, rot);
 }
 
-export function mergeParts(parts) {
-  let total = 0;
-  const prep = [];
-  for (const p of parts) {
-    const g = (p.geo.index ? p.geo.toNonIndexed() : p.geo.clone());
-    const m = new THREE.Matrix4().compose(
-      new THREE.Vector3(p.pos[0], p.pos[1], p.pos[2]),
-      new THREE.Quaternion().setFromEuler(new THREE.Euler(p.rot[0], p.rot[1], p.rot[2])),
-      new THREE.Vector3(p.scale[0], p.scale[1], p.scale[2]),
-    );
-    g.applyMatrix4(m);
-    if (!g.attributes.normal) g.computeVertexNormals();
-    prep.push({ g, color: new THREE.Color(p.color) });
-    total += g.attributes.position.count;
+export function mergeParts(parts, indexed = false) {
+  // Preserve triangle order for the call sites which append UV or timber coordinates.
+  // Transform each source into the final arrays without keeping expanded geometry copies.
+  let count = 0, corners = 0;
+  for (const { geo } of parts) {
+    const triangles = geo.index?.count ?? geo.attributes.position.count;
+    count += indexed && geo.attributes.normal ? geo.attributes.position.count : triangles;
+    corners += triangles;
   }
-  const pos = new Float32Array(total * 3);
-  const nor = new Float32Array(total * 3);
-  const col = new Float32Array(total * 3);
-  let o = 0;
-  for (const { g, color } of prep) {
-    const pa = g.attributes.position.array;
-    const na = g.attributes.normal.array;
-    pos.set(pa, o * 3);
-    nor.set(na, o * 3);
-    const count = g.attributes.position.count;
-    for (let i = 0; i < count; i++) {
-      col[(o + i) * 3] = color.r;
-      col[(o + i) * 3 + 1] = color.g;
-      col[(o + i) * 3 + 2] = color.b;
+  const indices = indexed ? (count < 65536 ? new Uint16Array(corners) : new Uint32Array(corners)) : null;
+  const positions = new Float32Array(count * 3);
+  const normals = new Float32Array(count * 3);
+  // Some emissive detail uses linear HDR color values, so retain float colors there.
+  const color = new THREE.Color();
+  const wideColor = parts.some(p => {
+    color.set(p.color);
+    return Math.max(color.r, color.g, color.b) > 1 || Math.min(color.r, color.g, color.b) < 0;
+  });
+  const colors = wideColor ? new Float32Array(count * 3) : new Uint16Array(count * 3);
+  const matrix = new THREE.Matrix4(), normalMatrix = new THREE.Matrix3();
+  const v = new THREE.Vector3(), scale = new THREE.Vector3();
+  const q = new THREE.Quaternion(), euler = new THREE.Euler();
+  let offset = 0, corner = 0;
+  for (const part of parts) {
+    let g = part.geo;
+    if (!g.attributes.normal) {
+      g = g.index ? g.toNonIndexed() : g.clone();
+      g.computeVertexNormals();
     }
-    o += count;
-    g.dispose();
+    matrix.compose(v.fromArray(part.pos), q.setFromEuler(euler.fromArray(part.rot)), scale.fromArray(part.scale));
+    normalMatrix.getNormalMatrix(matrix);
+    const { position, normal } = g.attributes;
+    color.set(part.color);
+    const r = wideColor ? color.r : Math.round(color.r * 65535);
+    const green = wideColor ? color.g : Math.round(color.g * 65535);
+    const b = wideColor ? color.b : Math.round(color.b * 65535);
+    const length = indexed ? position.count : g.index?.count ?? position.count;
+    if (indices) {
+      const base = offset / 3;
+      const n = g.index?.count ?? position.count;
+      for (let i = 0; i < n; i++) indices[corner++] = base + (g.index ? g.index.getX(i) : i);
+    }
+    for (let i = 0; i < length; i++) {
+      const j = !indexed && g.index ? g.index.getX(i) : i;
+      v.fromBufferAttribute(position, j).applyMatrix4(matrix).toArray(positions, offset);
+      v.fromBufferAttribute(normal, j).applyNormalMatrix(normalMatrix);
+      normals[offset] = v.x;
+      normals[offset + 1] = v.y;
+      normals[offset + 2] = v.z;
+      colors[offset] = r; colors[offset + 1] = green; colors[offset + 2] = b;
+      offset += 3;
+    }
+    if (g !== part.geo) g.dispose();
   }
   const out = new THREE.BufferGeometry();
-  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
-  out.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  if (indices) out.setIndex(new THREE.BufferAttribute(indices, 1));
+  out.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  out.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  out.setAttribute('color', new THREE.BufferAttribute(colors, 3, !wideColor));
   out.computeBoundingSphere();
   return out;
 }
 
 export function mergedMesh(parts, { roughness = 0.82, metalness = 0.02, emissive = false } = {}) {
-  const geo = mergeParts(parts);
+  const geo = mergeParts(parts, true);
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true, roughness, metalness,
     emissive: emissive ? 0xffb45c : 0x000000,

@@ -3,10 +3,33 @@ import { climateUniforms } from './climate-state.js';
 export function bindSnowCrystals(shader) {
   shader.uniforms.snowSun = climateUniforms.snowSun;
   shader.uniforms.snowSunDirection = climateUniforms.snowSunDirection;
+  shader.uniforms.iceHorizon = climateUniforms.reflectedHorizon;
+  shader.uniforms.iceZenith = climateUniforms.reflectedZenith;
   shader.fragmentShader = shader.fragmentShader.replace('#include <common>', /* glsl */ `
     #include <common>
     uniform float snowSun;
     uniform vec3 snowSunDirection;
+    uniform vec3 iceHorizon, iceZenith;
+
+    vec3 shadeWinterSurface(vec3 radiance, vec3 viewNormal, vec3 toEye, float snow, float ice, float powder) {
+      vec3 n = normalize(viewNormal * mat3(viewMatrix));
+      vec3 v = normalize(toEye * mat3(viewMatrix));
+      float nv = clamp(dot(n, v), 0., 1.);
+      float nl = dot(n, snowSunDirection);
+      // Porous snow scatters skylight into sheltered slopes. The long optical
+      // path through dense snow absorbs more red than blue light.
+      float shelter = 1. - smoothstep(-.12,.48,nl);
+      vec3 snowLight = radiance * mix(vec3(1.), vec3(.79,.907,1.025), shelter * (.42 + .55 * powder));
+      float backscatter = pow(max(dot(v,snowSunDirection),0.), 10.) * max(nl,0.);
+      snowLight += radiance * powder * backscatter * snowSun * .19;
+      // Air/ice reflectance (n≈1.31). A smooth wind crust picks up the actual
+      // horizon and sky palette, including the colour change after sunset.
+      vec3 reflected = reflect(-v,n);
+      vec3 sky = mix(iceHorizon, iceZenith, smoothstep(-.04,.86,reflected.y));
+      float fresnel = .018 + .982 * pow(1. - nv, 5.);
+      vec3 crust = mix(radiance * vec3(.82,.92,.975), sky, fresnel);
+      return mix(radiance, mix(snowLight, crust, clamp(ice,0.,1.)), clamp(snow,0.,1.));
+    }
 
     vec3 crystalHash(vec2 cell) {
       vec3 p = fract(cell.xyx * vec3(.1031, .1099, .0973));

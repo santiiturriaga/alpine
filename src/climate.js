@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { updateHorizonSun } from './terrain-horizon.js';
 import { climateState, climateUniforms } from './climate-state.js';
 
 export { climateState, climateUniforms } from './climate-state.js';
@@ -163,6 +164,7 @@ export function createClimate({ scene, renderer, lighting, sky, storm, villageLi
       fillIntensity: (.32 + night * .14) * (1 - darkness * .86),
     });
     lighting?.setClimate?.(palette);
+    updateHorizonSun(climateUniforms.snowSunDirection.value);
     sky?.setClimate?.(palette);
     if (scene.fog) { scene.fog.density = fog; scene.fog.color.copy(palette.fogColor); }
     scene.background?.copy?.(palette.fogColor);
@@ -174,6 +176,8 @@ export function createClimate({ scene, renderer, lighting, sky, storm, villageLi
     climateUniforms.night.value = night;
     climateUniforms.terrainSun.value = cycle ? smooth(.78, .98, localTime.sunArc) * .60 : (1 - Math.max(late * .53, golden * .88)) * (1 - night);
     climateUniforms.snowSun.value = sunStrength;
+    climateUniforms.reflectedHorizon.value.copy(palette.horizon);
+    climateUniforms.reflectedZenith.value.copy(palette.zenith);
     climateUniforms.wetness.value += ((state.weather === 'clear' ? .07 : .72) - climateUniforms.wetness.value) * amount;
     storm?.setWeather?.({ precipitation, wind, gust, night, whiteout, snowline: season.snowline - 420 });
     villageLights?.update(dt, seconds, { night, season: state.season },camera);

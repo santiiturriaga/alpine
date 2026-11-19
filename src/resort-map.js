@@ -100,7 +100,8 @@ export function mappedAtlasSettings({ mountain, config, runs, ground, lifts }) {
     const lift = liftsById.get(def.id);
     return { ...def, board: lift?.boardPose, exit: lift?.exitPose };
   });
-  const landmarks = (config.landmarks ?? []).map(({ point, ...landmark }) => ({ ...landmark, ...toPoint(point) }))
+  const landmarks = (config.landmarks ?? []).map(({ point, view, ...landmark }) =>
+    ({ ...landmark, ...toPoint(point), arrival: view }))
     .filter(inBounds);
   for (const { id, name, points } of config.buildings ?? []) {
     if (!name || !points?.length || !/lodge|ski school|warming|restaurant/i.test(name)) continue;

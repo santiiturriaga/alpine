@@ -46,7 +46,7 @@ function addBatch(group, b) {
   if (b.wood.length) group.add(timberMesh(b.wood));
   for (const [key, kind] of [['plaster', 'stone'], ['stone', 'granite']]) {
     if (!b[key].length) continue;
-    const mesh = new THREE.Mesh(mergeParts(b[key]), detailedMaterial(kind));
+    const mesh = new THREE.Mesh(mergeParts(b[key], true), detailedMaterial(kind));
     mesh.castShadow = mesh.receiveShadow = true; mesh.name = 'Creekside ' + key; group.add(mesh);
   }
   for (const key of ['roof', 'metal']) {
@@ -60,6 +60,8 @@ function addBatch(group, b) {
     mesh.name = 'Warm patio bulbs and lantern glass'; group.add(mesh);
     b.glowMaterial = mesh.material;
   }
+  // Return only the installed fittings and materials to the climate controller.
+  for (const value of Object.values(b)) if (Array.isArray(value)) value.length = 0;
 }
 
 function localGroup(parent, anchor, name, yOffset = 0) {

@@ -1,12 +1,15 @@
+import { installTouchButtons } from './touch-controls.js';
+import { rendererUnavailable } from './renderer-recovery.js';
 import { updatePassGates } from './pass-gates.js';
 import { updateChaseFoliage } from './chase-foliage.js';
 import { setForestQuality } from './forest-lod.js';
+import { loadingProgress } from './mountain-loading.js';
 import { createMultiplayer } from './multiplayer.js';
 import { createTravelTracker } from './skier-profile.js';
 import { createSnowTraffic } from './snow-traffic.js';
 import {
   graphicsProfiles, graphicsIndex, bindGraphics, bindRealism, createRenderer, resizeViewport,
-  applyShadowResolution, updateSunShadow,
+  applyShadowResolution, sunShadowRefreshDue, updateSunShadow,
 } from './graphics.js';
 import * as THREE from 'three';
 import { AudioEngine } from './audio.js';
@@ -21,6 +24,7 @@ import {
 import { buildMappedResortLifts } from './mapped-resort-lifts.js';
 import { buildMappedResortPeople } from './mapped-resort-people.js';
 import { buildMappedResortWorld } from './mapped-resort-world.js';
+import { applyInternationalLandmarkSites } from './international-landmark-sites.js';
 import { Outfitter } from './outfitter.js';
 import { Expeditions } from './expeditions.js';
 import { Player } from './player.js';
@@ -194,63 +198,6 @@ function prepareExploration(panel, sections, travel) {
   explore.replaceWith(field);
 }
 
-function installTouchButtons({ keys, queueJump, cycleCamera, openMountain, pause }) {
-  const hud = $('hud');
-  const surface = document.createElement('div');
-  surface.className = 'mapped-touch';
-  surface.setAttribute('aria-label', 'Ski touch controls');
-  const style = document.createElement('style');
-  style.textContent = `
-    .mapped-touch { display:none; position:absolute; inset:0; pointer-events:none; }
-    @media (pointer:coarse) {
-      .mapped-touch { display:block; }
-      .mapped-touch button { pointer-events:auto; min-width:46px; min-height:44px; padding:5px 9px;
-        border:1px solid #dceff6b0; border-radius:7px; background:#122d40a8; color:#fff;
-        font:600 13px system-ui; touch-action:none; backdrop-filter:blur(4px); }
-      .mapped-touch button:active { background:#426479; }
-      .mapped-touch-move,.mapped-touch-actions {display:flex; gap:7px; position:absolute; }
-      .mapped-touch-move {bottom:103px; left:12px;}
-      .mapped-touch-actions {top:12px; right:12px;}
-      .mapped-resort .hud.riding > .mapped-touch {visibility:visible;}
-      .mapped-resort .hud.riding .mapped-touch-move {display:none;}
-      .mapped-resort .interaction-prompt {bottom:155px;}
-      .mapped-resort #webgl canvas {touch-action:none;}
-      .mapped-resort .collection-readout {top:64px;}
-      .mapped-resort #gear-mode kbd,.mapped-resort .trail-overlay kbd {display:none;}
-    }
-    @media (pointer:coarse) and (max-width:390px) {
-      .mapped-touch-actions {gap:4px;}
-      .mapped-touch-actions button {min-width:42px; padding-inline:6px; font-size:11px;}
-    }
-  `;
-  document.head.append(style);
-  for (const [group, buttons] of [
-    ['move', [['Left', 'KeyA'], ['Go', 'KeyW'], ['Brake', 'KeyS'], ['Right', 'KeyD'], ['Jump', 'Space']]],
-    ['actions', [['View', cycleCamera], ['Mountain', openMountain], ['Pause', pause]]],
-  ]) {
-    const cluster = document.createElement('div');
-    cluster.className = `mapped-touch-${group}`;
-    for (const [name, action] of buttons) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = name;
-      if (typeof action === 'function') button.addEventListener('click', action);
-      else {
-        button.addEventListener('pointerdown', (event) => {
-          event.preventDefault();
-          button.setPointerCapture(event.pointerId);
-          keys[action] = true;
-          if (action === 'Space') queueJump();
-        });
-        button.addEventListener('lostpointercapture', () => { keys[action] = false; });
-      }
-      cluster.append(button);
-    }
-    surface.append(cluster);
-  }
-  hud.append(surface);
-}
-
 export async function startMappedResort(mountain) {
   $('app').classList.add('mapped-resort');
   document.title = `Alpine Descent · ${mountain.label}`;
@@ -259,13 +206,13 @@ export async function startMappedResort(mountain) {
   label('.loading-copy .kicker', mountain.label);
   label('#load-status', `Loading ${mountain.label} terrain…`);
   label('#load-tip', 'Press G to choose a lift or trail, or M to open the resort map.');
-  $('loading-screen').style.setProperty('--loading-progress', .12);
-  $('load-bar').parentElement.setAttribute('aria-valuenow', '12');
+  loadingProgress(.12);
   await paint();
   const dataUrl = new URL(mountain.data, document.baseURI);
   const response = await fetch(dataUrl);
   if (!response.ok) throw new Error(`Could not load ${mountain.label} resort data (HTTP ${response.status}).`);
   const config = await response.json();
+  applyInternationalLandmarkSites(config);
   const query = new URLSearchParams(location.search);
   const runs = prepareRuns(config.runs);
   const host = $('webgl');
@@ -324,7 +271,7 @@ export async function startMappedResort(mountain) {
   const player = new Player(scene, camera, { ground, env, fx, tracks, audio });
   const travelTracker = createTravelTracker({ resortId: mountain.id, resortName: mountain.label, mountainAt: () => mountain.label });
   const mountainPanel = $('mountain-panel');
-  const outfitter = new Outfitter(player, () => outfitter.dialog.close());
+  const outfitter = new Outfitter(player, () => outfitter.dialog.close(), renderer);
   const multiplayer = createMultiplayer(scene,mountain.id,()=>player);
   let trickScore = 0;
   const crystalSpecs = crystalLocations(mountain.id, runs, ground, env);
@@ -414,7 +361,7 @@ export async function startMappedResort(mountain) {
     for (const [end, footMode, pose] of [['base', true, lift.boardPose], ['top', false, lift.exitPose]]) {
       const id = `${end}:${lift.def.id}`;
       const name = `${lift.def.name} · ${footMode ? 'base' : 'top'}`;
-      arrivals.set(id, { pose: { ...pose, holdAtUnload: !footMode }, name, footMode });
+      arrivals.set(id, { pose: { ...pose, holdAtUnload: !footMode }, name, footMode: footMode || !!pose.footMode });
       stationChoices.push({ id, label: name, section });
     }
   }
@@ -438,12 +385,12 @@ export async function startMappedResort(mountain) {
   arrivals.set('default', start);
   const quickChoices = config.terrainOnly ? [{ id: 'default', label: 'Mountain approach' }]
     : [{ id: 'base', label: `${mountain.label} base` }, { id: 'default', label: startName ?? 'Default ski start' }];
-  if (config.terrainOnly) for (const spot of config.landmarks ?? []) {
-    if (!spot.point) continue;
+  for (const spot of config.landmarks ?? []) {
+    if (!spot.point || (!config.terrainOnly && !spot.view)) continue;
     const [x,z] = spot.point;
     const id = `view:${spot.id}`;
     const heading = Math.atan2(x-defaultPose.x,z-defaultPose.z);
-    arrivals.set(id, { name: spot.name, pose: { x, z, heading, footMode: true }, footMode: true });
+    arrivals.set(id, { name: spot.name, pose: spot.view ?? { x, z, heading }, footMode: true });
     quickChoices.push({ id, label: spot.name });
   }
   if (config.id === 'stevens-pass') {
@@ -668,8 +615,9 @@ export async function startMappedResort(mountain) {
     audio.gondolaStart();
     ui.hidePrompt();
     const title = ride.lift.def.name;
-    const { x, z } = ride.lift.exitPose;
-    const summit = `${formatNumber(ground.heightAt(x, z))} m`;
+    const { x, z, footMode } = ride.lift.exitPose;
+    const summitHeight = (footMode ? env.walkSurfaceAt?.(x, z) : null) ?? ground.heightAt(x, z);
+    const summit = `${formatNumber(summitHeight)} m`;
     const terminal = ride.destination && ride.destination !== title ? ride.destination : 'Upper terminal';
     ui.cinematic(true, { title, sub: `${terminal} · ${summit}` });
     syncRide(ride);
@@ -749,16 +697,18 @@ export async function startMappedResort(mountain) {
     if (!lighting.sun.castShadow) return;
     const anchor = playing ? player.pos : menuCenter;
     const { shadowInterval } = graphicsProfiles[qualityIndex];
-    if (present - lastShadow < shadowInterval && anchor.distanceToSquared(lastShadowAnchor) < 4) return;
+    if (!renderer.shadowMap.needsUpdate &&
+        !sunShadowRefreshDue(present - lastShadow, anchor.distanceToSquared(lastShadowAnchor), shadowInterval)) return;
     lastShadow = present;
     lastShadowAnchor.copy(anchor);
     updateSunShadow(renderer, lighting.sun, SUN_DIR, anchor);
   }
 
   function draw(now) {
+    if (rendererUnavailable) return;
     const raw = Math.max(0, (now - lastFrame) / 1000);
     if (document.hidden) return;
-    if (ui.isOpen('map') || document.getElementById('sled-game')?.open) {
+    if (ui.isOpen('map') || document.getElementById('destination-selector')?.open || document.getElementById('sled-game')?.open) {
       if(playing)multiplayer.update(0,trickScore,outfitter.broadcastOutfit ?? outfitter.state.outfit,expeditions.active?.model,false);
       lastFrame = now;
       return;
@@ -981,7 +931,7 @@ export async function startMappedResort(mountain) {
   ui.setLoading(.95, 'Preparing the first view…');
   await paint();
   draw(performance.now());
-  ui.finishLoading();
+  await ui.finishLoading();
   ui.showStart(!playing);
   renderer.setAnimationLoop(draw);
 

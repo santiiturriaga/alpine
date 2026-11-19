@@ -7,6 +7,8 @@ import { makeCanvas, canvasTexture, lerp, mulberry32 } from './util.js';
 import { surfaceMaterial } from './materials.js';
 import { makePeak2PeakBadge } from './lift-stations.js';
 import { LODGE_FRAME, LODGE_CAFE, LODGE_TERRACE, LODGE_ANNEX, terraceStairHeight } from './roundhouse-site.js';
+import { furnishShop } from './shop-interiors.js';
+import { addStoneFloor, addWoolCarpet } from './interior-floors.js';
 
 // Only these mapped village buildings are replaced with open-door shells.
 // Furnishings and room plans are an interpretation; mapped anchors are retained.
@@ -15,6 +17,7 @@ const rooms = [];
 const decks = [];
 const socialSlots = [];
 const diningCounters = [];
+const lodgeRunner = ['#473334', '#764641', '#d9b484'];
 export function lodgeSocialSlots() { return socialSlots; }
 
 function lodgeGuest(room, x, z, turn, activity, options = {}) {
@@ -78,6 +81,9 @@ function ramp(room, parent) {
 
 function furnish(room, group, grid) {
   if(room.kind === 'dining') return furnishDining(room,group,grid);
+  if(room.kind === 'barber' || room.kind === 'outfitter') {
+    return furnishShop(room, group, (x,z,w,d)=>collider(grid,room,x,z,w,d,'furniture'), label);
+  }
   const timber = [], details = [], stone = [], hw = room.w / 2, hd = room.d / 2;
   // Keep the centre aisle and door approach clear.
   const table = (x, z, w = 2.05) => {
@@ -90,35 +96,24 @@ function furnish(room, group, grid) {
     collider(grid, room, x, z, w + .15, 2.25, 'furniture');
     details.push(box(.12, .15, .12, '#e7e0d0', [x + .45, .92, z]));
   };
-  if (room.kind !== 'rental') {
-    const tableColumns = room.w > 25 ? [-hw + 3.4, -6.4, 6.4, hw - 3.4] : [-hw + 3.4, hw - 3.4];
-    for (const x of tableColumns) {
-      for (const z of [-hd + 4.2, .5]) {
-        if (room.w < 13 && x > 0 || room.d < 10 && z > 0) continue;
-        table(x, z, room.w < 13 ? 1.6 : 2.5);
-        if (room.id === 'roundhouse') {
-          lodgeGuest(room,x-.39,z+.89,Math.PI,'diner',{seated:1});
-          if(z>.1)lodgeGuest(room,x+.45,z-.89,0,'diner',{seated:1});
-        }
-      }
-    }
-    const x = hw - 2.1, z = -hd + 1.0;
-    stone.push(box(3, 2.1, .65, '#696258', [x, 1.05, z]));
-    details.push(box(1.55, .86, .08, '#201f1d', [x, .65, z + .36]));
-    const fire = new THREE.Mesh(new THREE.PlaneGeometry(1.18, .5), new THREE.MeshBasicMaterial({ color: '#ed9751' }));
-    fire.position.set(x, .61, z + .41); group.add(fire);
-    room.hearth = { ...world(room, x, z + .41), y: room.y + .61 };
-    collider(grid, room, x, z, 3.1, 1.1, 'furniture');
-  } else {
-    for (const x of [-hw + 1.0, hw - 1.0]) {
-      timber.push(box(1.0, .62, room.d - 2.4, '#96744e', [x, .31, 0]));
-      collider(grid, room, x, 0, 1.05, room.d - 2.4, 'furniture');
-      for (let z = -hd + 1.8; z < hd - 1; z += .48) {
-        details.push(box(.13, 2.05, .09, z % 1 > .5 ? '#a93e32' : '#31576b', [x, 1.7, z], [0, 0, x > 0 ? -.16 : .16]));
+  const tableColumns = room.w > 25 ? [-hw + 3.4, -6.4, 6.4, hw - 3.4] : [-hw + 3.4, hw - 3.4];
+  for (const x of tableColumns) {
+    for (const z of [-hd + 4.2, .5]) {
+      if (room.w < 13 && x > 0 || room.d < 10 && z > 0) continue;
+      table(x, z, room.w < 13 ? 1.6 : 2.5);
+      if (room.id === 'roundhouse') {
+        lodgeGuest(room,x-.39,z+.89,Math.PI,'diner',{seated:1});
+        if(z>.1)lodgeGuest(room,x+.45,z-.89,0,'diner',{seated:1});
       }
     }
   }
-  if(room.id==='village-cafe')lodgeGuest(room, .30, Math.min(1.4,hd*.4), -.7, 'customer');
+  const hearthX = hw - 2.1, hearthZ = -hd + 1.0;
+  stone.push(box(3, 2.1, .65, '#696258', [hearthX, 1.05, hearthZ]));
+  details.push(box(1.55, .86, .08, '#201f1d', [hearthX, .65, hearthZ + .36]));
+  const fire = new THREE.Mesh(new THREE.PlaneGeometry(1.18, .5), new THREE.MeshBasicMaterial({ color: '#ed9751' }));
+  fire.position.set(hearthX, .61, hearthZ + .41); group.add(fire);
+  room.hearth = { ...world(room, hearthX, hearthZ + .41), y: room.y + .61 };
+  collider(grid, room, hearthX, hearthZ, 3.1, 1.1, 'furniture');
   // Service counter at the back with hand-built cups and a menu board.
   const counterW = Math.min(5.7, room.w * .4);
   const cappBar = room.id === 'roundhouse', counterZ = -hd + (cappBar ? 2.05 : 1.0);
@@ -143,7 +138,7 @@ function furnish(room, group, grid) {
     lodgeGuest(room,-1.2,counterZ-1.05,0,'server',{shift:1.3});
     lodgeGuest(room,1.15,counterZ+1.78,Math.PI,'customer');
   } else {
-    label(group, room.kind === 'rental' ? 'RENTALS • BOOT FITTING' : 'MOUNTAIN CAFÉ', 'WARM UP • TAKE A SEAT', -1.2, Math.min(2.1, room.h - .55), -hd + .3, Math.min(4.2, room.w * .6));
+    label(group, 'MOUNTAIN CAFÉ', 'WARM UP • TAKE A SEAT', -1.2, Math.min(2.1, room.h - .55), -hd + .3, Math.min(4.2, room.w * .6));
   }
   label(group, 'EXIT →', 'BACK TO THE MOUNTAIN', hw - 2.1, 2.0, hd - .18, 2.1, Math.PI);
   // Timber ceiling joists and warm pendant fixtures use emissive geometry;
@@ -226,12 +221,16 @@ function furnishDining(room,group,grid) {
   mesh(group,details);mesh(group,lamps,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.5,emissive:0xffc775,emissiveIntensity:.32,side:THREE.DoubleSide}));
 }
 
-function buildRoundhouseBalcony(scene,grid,base) {
+function buildRoundhouseBalcony(scene,grid,base,market) {
   const room={...LODGE_FRAME,y:base+LODGE_TERRACE.floor,id:'roundhouse-balcony',h:3.2};
   const group=new THREE.Group();group.name='Roundhouse terrace · accessible timber balcony';
   group.position.set(room.x,room.y,room.z);group.rotation.y=room.yaw;scene.add(group);
   const wood=[],metal=[],details=[];
-  for(let x=-20.1;x<=30.2;x+=.22)wood.push(box(.204,.022,5.02,'#8f7355',[x,.013,27.35]));
+  const end=29.86, marketFront=market.z+market.d/2;
+  for(let x=-20.1;x<=30.2;x+=.22){
+    const start=Math.abs(x-market.x)<market.w/2 ? marketFront : 24.84;
+    wood.push(box(.204,.022,end-start,'#8f7355',[x,.013,(start+end)/2]));
+  }
   for(const x of [-16.6,-8.9,1.6,10.2,17.5]){
     wood.push(box(2.05,.10,.85,'#a17d53',[x,.81,27.25]));
     for(const side of [-1,1]){
@@ -316,8 +315,9 @@ function buildRoom(scene, grid, room, shell = true) {
     // Roundhouse exterior is built by roundhouse.js, including its door opening.
     for (const [l, r] of [[-hw, doorL], [doorR, hw]]) wall((l + r) / 2, hd, r - l, .2);
   }
-  // Floor always clears the elevation mesh, with a shallow ramp to the snow.
+  // Keep the walk surface and threshold datum as the base for the stone and runner.
   walls.push(box(room.w, .21, room.d, '#8f785b', [0, -.105, 0]));
+  addStoneFloor(group, { w: room.w, d: room.d });
   if (shell) {
     const low = Math.min(...[-hw, -hw / 2, 0, hw / 2, hw].flatMap(x => [-hd, -hd / 2, 0, hd / 2, hd].map(z => {
       const p = world(room, x, z); return heightAt(p.x, p.z);
@@ -333,11 +333,16 @@ function buildRoom(scene, grid, room, shell = true) {
     ? surfaceMaterial('glass', { ...glassOptions, opacity:.46 })
     : new THREE.MeshStandardMaterial(glassOptions);
   mesh(group, panes, glass);
-  // Entrance mat and twin jambs make the opening legible from outside.
+  // Twin jambs and a runner centered on the doorway mark the way inside.
   const doorHead=room.doorHead??2.75;
-  mesh(group, [box(room.doorWidth, .025, 1.1, '#33494b', [room.doorX, .014, hd - .58]),
-    ...[doorL, doorR].map(x => box(.12, doorHead, .27, '#60442f', [x, doorHead/2, hd])),
+  mesh(group, [...[doorL, doorR].map(x => box(.12, doorHead, .27, '#60442f', [x, doorHead/2, hd])),
     box(room.doorWidth+.15,.095,.22,'#60442f',[room.doorX,doorHead,hd])]);
+  const runnerLength = room.kind === 'dining' ? 2.25 : room.kind === 'cafe' ? Math.min(6.4, room.d * .32) : 1.0;
+  addWoolCarpet(group, {
+    w: room.doorWidth - .28, d: runnerLength, x: room.doorX, z: hd - .12 - runnerLength / 2,
+    palette: room.kind === 'outfitter' || room.kind === 'barber' ? ['#303e3e','#425551','#979481'] : lodgeRunner,
+    name: 'Woven entrance runner',
+  });
   if(room.entrySteps){
     const frames=[],glass=[],leaf=.79;
     for(const side of [-1,1]){
@@ -373,7 +378,9 @@ function mappedVillageRoom(lot, id, name, kind) {
   const w = Math.max(...local.map(p => p.x)) - Math.min(...local.map(p => p.x));
   const d = Math.max(...local.map(p => p.z)) - Math.min(...local.map(p => p.z));
   const y = Math.max(...lot.points.map(p => heightAt(...p))) + .19;
-  return { id, name, kind, x, z, yaw, w, d, y, h: 3.9, doorX: 0, doorWidth: 2.2, rampLength: 5 };
+  const rampLength = 5;
+  const approach = { ...world({x,z,yaw},0,d/2+rampLength+.65), heading:yaw+Math.PI, footMode:true };
+  return { id, name, kind, x, z, yaw, w, d, y, h: 3.9, doorX: 0, doorWidth: 2.2, rampLength, approach };
 }
 
 export function buildLodgeInteriors(scene, grid) {
@@ -385,10 +392,19 @@ export function buildLodgeInteriors(scene, grid) {
   const roomCenter = world(roundhouse, LODGE_CAFE.x, LODGE_CAFE.front - 8.7);
   buildRoom(scene, grid, { ...roundhouse, ...roomCenter, y:base+LODGE_CAFE.floor, w:16.4, d:17.4, h:2.62,
     doorX:0, doorWidth:3.1, doorHead:2.26, entrySteps:LODGE_CAFE, frontWindows:true }, false);
-  const diningCenter=world(roundhouse,4.6,18.5);
-  buildRoom(scene,grid,{...roundhouse,...diningCenter,id:'roundhouse-dining',name:'Roundhouse Mountain Market',kind:'dining',y:base+LODGE_TERRACE.floor,w:38.8,d:17.0,h:4.70,doorX:16.2,doorWidth:2.6,frontWindows:true},false);
-  buildRoundhouseBalcony(scene,grid,base);
+  const market={x:4.6,z:18.5,w:38.8,d:17.0};
+  const diningCenter=world(roundhouse,market.x,market.z);
+  buildRoom(scene,grid,{...roundhouse,...market,...diningCenter,id:'roundhouse-dining',name:'Roundhouse Mountain Market',kind:'dining',y:base+LODGE_TERRACE.floor,h:4.70,doorX:16.2,doorWidth:2.6,frontWindows:true},false);
+  buildRoundhouseBalcony(scene,grid,base,market);
   const annex = LODGE_ANNEX;
+  const annexFloor = new THREE.Group();
+  annexFloor.name = 'Roundhouse annex · walk-in floor';
+  annexFloor.position.set(LODGE_FRAME.x, base + annex.floor, LODGE_FRAME.z);
+  annexFloor.rotation.y = LODGE_FRAME.yaw;
+  scene.add(annexFloor);
+  addStoneFloor(annexFloor, { w: annex.width, d: annex.depth, x: annex.x, z: annex.z });
+  addWoolCarpet(annexFloor, { w: annex.doorWidth - .28, d: 5.6, x: annex.doorX,
+    z: annex.z + annex.depth / 2 - 2.92, palette: lodgeRunner, name: 'Woven entrance runner' });
   decks.push({ floorAt(x,z) {
     const p=transform(LODGE_FRAME,x,z);
     const inside=Math.abs(p.x-annex.x)<=annex.width/2 && Math.abs(p.z-annex.z)<=annex.depth/2;
@@ -401,8 +417,9 @@ export function buildLodgeInteriors(scene, grid) {
   const y = Math.max(...corners.map(p => heightAt(p.x, p.z))) + .25;
   buildRoom(scene, grid, { ...rendezvous, y, h: 5.6, doorX: 0, doorWidth: 3.2, rampLength: 15 });
   for (const lot of buildingData.filter(b => ENTERABLE_VILLAGE_IDS.has(b.id))) {
-    const rental = lot.id === '295033275';
-    buildRoom(scene, grid, mappedVillageRoom(lot, rental ? 'village-rentals' : 'village-cafe', rental ? 'Village Ski Rentals' : 'Village Warming Hut', rental ? 'rental' : 'cafe'));
+    const barber = lot.id === '295033275';
+    buildRoom(scene, grid, mappedVillageRoom(lot, barber ? 'village-barber' : 'village-outfitter',
+      barber ? 'Whistler Village Barber' : 'Whistler Village Outfitters', barber ? 'barber' : 'outfitter'));
   }
   return {
     rooms,

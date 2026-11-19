@@ -3,6 +3,7 @@ import { cameraClipper } from './camera-obstacles.js';
 import { buildMappedForest } from './mapped-resort-forest.js';
 import { loadMappedGround, pointInPolygon, runStyle } from './mapped-resort-ground.js';
 import { buildMappedLodges } from './stevens-pass-buildings.js';
+import { buildInternationalLandmarks } from './international-landmarks.js';
 import { buildStevensPassDetails } from './stevens-pass-details.js';
 import { clamp, makeCanvas } from './util.js';
 
@@ -189,6 +190,7 @@ export async function buildMappedResortWorld(scene, config, baseURL) {
   const env = createEnvironment();
   const ground = await loadMappedGround(root, config, baseURL);
   const lodges = buildMappedLodges(root, config, ground, env);
+  buildInternationalLandmarks(root, config, ground, env);
   if (config.id === 'stevens-pass') buildStevensPassDetails(root, config, ground, env, pointInPolygon);
   const forest = await buildMappedForest(root, ground, config, env);
   const start = config.terrainOnly && config.startPoint

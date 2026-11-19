@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="./styles.css" />
 <link rel="stylesheet" href="./trail-map.css" />
 <link rel="stylesheet" href="./sled-game.css" />
+<link rel="stylesheet" href="./destination-selector.css" />
 </head>
 <body>
 <div id="app">
@@ -54,6 +55,7 @@
       </div>
     </div>
     <div class="loading-tip"><span>LOCAL KNOWLEDGE</span><p id="load-tip">Unload at Roundhouse Lodge and explore the plaza or ride PEAK 2 PEAK to Blackcomb.</p></div>
+    <button id="load-destinations" class="destination-recover" type="button" data-destination-open hidden>Choose a mountain</button>
   </section>
 
   <!-- ══════════════ START ══════════════ -->
@@ -68,6 +70,7 @@
           <svg class="ico-sound" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 9h4l5-4v14l-5-4H4V9Z"/><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12"/></svg>
           <svg class="ico-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 9h4l5-4v14l-5-4H4V9Z"/><path d="m16 9 5 6m0-6-5 6"/></svg>
         </button>
+        <button class="text-btn destination-menu-link" type="button" data-destination-open>Destinations</button>
         <button class="text-btn" id="menu-mountain">Mountain</button>
         <button class="text-btn" id="how-to-btn">Field Guide</button>
       </nav>
@@ -208,10 +211,9 @@
 
   <dialog id="mountain-panel" aria-labelledby="mountain-title">
     <header><h2 id="mountain-title">Mountain</h2><button id="mountain-done" aria-label="Close mountain settings">✕</button></header>
-    <fieldset id="resort-travel-field"><legend>Resort</legend><div class="resort-switch">
-      <select id="resort-choose" aria-label="Choose ski resort"></select>
-      <button id="resort-travel" type="button">Travel</button>
-    </div></fieldset>
+    <fieldset id="resort-travel-field"><legend>Resort</legend>
+      <button data-destination-open type="button">Choose a mountain</button>
+    </fieldset>
     <fieldset id="skier-profile"><legend>Skier profile</legend>
       <form id="profile-name-form" class="profile-name-form">
         <label for="profile-name">Multiplayer name</label>
@@ -258,6 +260,8 @@
       <button data-arrival="come-along">Come a Long glade</button><button data-arrival="olympic-plaza">Olympic Plaza at blue hour</button>
       <button data-arrival="glacier-cave">Blackcomb Glacier cave</button>
       <button data-arrival="wildlife">Roundhouse birdwatching</button>
+      <button data-arrival="village-outfitter">Whistler Village Outfitters</button>
+      <button data-arrival="village-barber">Whistler Village Barber</button>
       <button data-arrival="helicopter">Alpine helicopter</button>
       <button data-arrival="snowcat">Service snowcat</button>
       <button data-arrival="snowmobile">Snowmobile</button>
@@ -284,10 +288,24 @@
     <button id="mountain-outfitter" type="button">Outfitter &amp; field notes <kbd>L</kbd></button>
   </dialog>
   <dialog id="outfitter" aria-labelledby="outfitter-name">
-    <header><div><h2 id="outfitter-name">Mountain outfitter</h2><span data-balance></span></div><button data-shop-close aria-label="Close outfitter">✕</button></header>
-    <h3>Skis</h3><div class="ski-catalog" data-skis></div>
-    <h3>Outerwear</h3><div class="gear-swatches" data-apparel></div>
-    <h3>Field notes</h3><ul data-finds></ul>
+    <header><div><h2 id="outfitter-name">Mountain outfitter</h2><span data-balance></span></div><button data-shop-close aria-label="Close shop">✕</button></header>
+    <div class="shop-layout">
+      <figure class="shop-preview">
+        <canvas width="440" height="530" data-gear-preview role="img" aria-label="3D preview of your skier and equipped outfit"></canvas>
+        <figcaption><button type="button" data-turn="-.45" aria-label="Turn skier left">↶</button><span>Your skier</span><button type="button" data-turn=".45" aria-label="Turn skier right">↷</button></figcaption>
+      </figure>
+      <section data-shop-gear aria-label="Equipment and apparel">
+        <h3>Outerwear</h3><div class="gear-swatches" data-apparel></div>
+        <h3>Footwear</h3><article class="gear-card snow-shoe-card" data-footwear></article>
+        <h3>Skis</h3><div class="ski-catalog" data-skis></div>
+        <h3>Field notes</h3><ul data-finds></ul>
+      </section>
+      <section data-shop-barber hidden aria-label="Hair customization">
+        <h3>Hair</h3>
+        <div class="gear-swatches"><label>Cut <select data-haircut></select></label><label>Color <select data-hair-color></select></label></div>
+        <p class="barber-detail">Your haircut is visible on foot. Your helmet goes back on when you click into your skis.</p>
+      </section>
+    </div>
     <output aria-live="polite"></output>
   </dialog>
 
@@ -455,6 +473,51 @@
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.js" } }
 </script>
+<dialog id="destination-selector" aria-labelledby="destination-title">
+  <div class="destination-layout">
+    <header class="destination-header">
+      <h2 id="destination-title">Choose a mountain</h2>
+      <div class="destination-controls">
+        <label class="destination-list">
+          <span>All mountains</span>
+          <select id="destination-choose" aria-label="All mountains"></select>
+          <span aria-hidden="true" class="destination-chevron">⌄</span>
+        </label>
+        <button type="button" class="destination-round" id="destination-close" aria-label="Close mountain selector">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+    </header>
+    <div class="destination-stage" id="destination-stage" tabindex="0" role="region" aria-label="Mountain carousel" aria-describedby="destination-help">
+      <div class="destination-orbit" aria-hidden="true"></div>
+      <div class="destination-plinth" aria-hidden="true"></div>
+      <div class="destination-models" id="destination-models"></div>
+      <p id="destination-preview-status" role="status" hidden></p>
+      <button type="button" class="destination-round" id="destination-rotate" aria-label="Rotate mountain preview" title="Rotate preview" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 1 2.4 5.7M4 6v6h6"/></svg>
+      </button>
+    </div>
+    <div class="destination-details">
+      <button type="button" class="destination-round destination-arrow" id="destination-previous" aria-label="Previous mountain">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5m6-6-6 6 6 6"/></svg>
+      </button>
+      <div class="destination-caption" aria-live="polite" aria-atomic="true">
+        <p id="destination-country"></p>
+        <h3 id="destination-name"></h3>
+      </div>
+      <button type="button" class="destination-round destination-arrow" id="destination-next" aria-label="Next mountain">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+      </button>
+    </div>
+    <div class="destination-action">
+      <button type="button" id="destination-travel" aria-describedby="destination-name"></button>
+    </div>
+    <footer class="destination-footer">
+      <p class="destination-credits"><span><i></i> Mapped lifts</span><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a></p>
+      <p id="destination-help"><span class="destination-desktop-help">Scroll to browse · Drag the selected model to rotate</span><span class="destination-touch-help">Swipe to browse</span></p>
+    </footer>
+  </div>
+</dialog>
 <script type="module" src="./src/resort-entry.js"></script>
 </body>
 </html>

@@ -67,7 +67,7 @@ export function createGuestSimulation({ grid, lifts, queueSlots, interiors, pers
 
   for (const lift of lifts?.lifts ?? []) {
     if (!lift.def.rideable || !lift.def.aerial || lift.def.type === 'p2p') continue;
-    const chair = lift.def.type === 'chair', count = lift.carriers.count;
+    const chair = lift.def.type === 'chair', count = lift.perSide * 2;
     const { duration, sections } = lift.circulation;
     const station = {
       lift, chair, count, headway: duration / count, lanes: [],

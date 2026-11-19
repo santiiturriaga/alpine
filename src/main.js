@@ -1,3 +1,5 @@
+import { installTouchButtons } from './touch-controls.js';
+import { rendererUnavailable } from './renderer-recovery.js';
 import { updatePassGates } from './pass-gates.js';
 import { updateChaseFoliage } from './chase-foliage.js';
 import { createMountainQuests } from './mountain-quests.js';
@@ -5,8 +7,8 @@ import { createMultiplayer } from './multiplayer.js';
 import { createTravelTracker } from './skier-profile.js';
 import { createSnowTraffic } from './snow-traffic.js';
 import {
-  graphicsProfiles, graphicsIndex, bindGraphics, bindRealism, createRenderer, resizeViewport,
-  applyShadowResolution, updateSunShadow,
+  graphicsProfiles, graphicsIndex, bindGraphics, bindRealism, createRenderer, resizeViewport, prepareFirstFrame,
+  applyShadowResolution, sunShadowRefreshDue, updateSunShadow,
 } from './graphics.js';
 import * as THREE from 'three';
 import { buildTerrain, heightAt, normalAt, surfaceAt, treeCoverAt } from './terrain.js';
@@ -39,7 +41,7 @@ import { AudioEngine } from './audio.js';
 import { UI } from './ui.js';
 import { inRoundhouseBuilding, whistlerAtlasSettings } from './whistler-atlas.js';
 import { createSkiPatrol } from './ski-patrol.js';
-import { GondolaInterior,prewarmGondolaInterior } from './gondola-interior.js';
+import { GondolaInterior } from './gondola-interior.js';
 import { PEAK_TO_PEAK_BERTH_TIME, peakToPeakBerthOpening } from './gondola-shell.js';
 import {
   FITZSIMMONS, PEAK_TO_PEAK, VILLAGE_GONDOLA_UPPER, PEAK_EXPRESS, RUNS, VILLAGE_START, COME_ALONG_START, startPose, runFromSource, runPointAt, FINISHES, WORLD,
@@ -215,7 +217,7 @@ async function boot() {
     resortId: 'whistler-blackcomb', resortName: 'Whistler Blackcomb',
     mountainAt: position => mountainAt(position.x, position.z),
   });
-  outfitter=new Outfitter(player,closeShop);
+  outfitter=new Outfitter(player,closeShop,renderer);
   multiplayer=createMultiplayer(scene,'whistler-blackcomb',()=>player);
   challenges.onWin=id=>{const coins=id==='avalanche'?12:id==='race'?8:5;outfitter.credit(coins);
     ui.toast('FINISH BONUS',coins+' mountain coins','green','check');};
@@ -249,57 +251,28 @@ async function boot() {
   bindKeys();
   resetRunState(false);
 
-  setLoad(0.97, 'Waxing the skis…');
+  setLoad(0.97, 'Lighting the first view…');
   await nextFrame();
-  const creekside = env.lifts.lifts.find(({ def }) => def.name === 'Creekside Gondola');
-  const bootShadowAnchor = shadowAnchor.clone(), bootCamera = camera.clone();
-  const prepareView = (view, focus) => {
-    climate.update(0, view);
-    env.update(0, 0, view);
-    terrain.updateDetail(focus, view.position);
-    expeditions.drawNear(view.position);
-    valley?.update(0, view);
-    sky.update(0, view);
-    shadowAnchor.copy(focus);
-    updateSun();
-  };
-  try {
-    await prewarmGondolaInterior(renderer, scene, camera, creekside, (boardingCamera, position) => {
-      const rider = position.clone();
-      rider.y -= 2;
-      prepareView(boardingCamera, rider);
-    });
-    const arrivals = [arrivalPose('creekside')];
-    if (!directArrival && !capturingIntro) arrivals.push(startPose(), VILLAGE_START);
-    for (const pose of arrivals) {
-      player.footMode = pedestrianArrival(pose);
-      player.teleport(pose);
-      prepareView(camera, player.pos);
-      terrain.updateSkiSnow(player);
-      skiContact.update(player, true);
-      collectibles.prepareRender(camera);
-      renderer.render(scene, camera);
-    }
-  } catch { /* some drivers dislike a cold compile; first frame will handle it */ }
-  finally {
-    terrain.updateSkiSnow(player, false);
-    skiContact.update(player, false);
-    const { x: width, y: height } = renderer.getSize(new THREE.Vector2());
-    renderer.setViewport(0, 0, width, height);
-    player.footMode = false;
-    player.teleport(startPose());
-    player.model.visible = false;
-    bootCamera.aspect = width / height;
-    camera.copy(bootCamera);
-    camera.updateProjectionMatrix();
-    expeditions.drawNear(camera.position);
-    shadowAnchor.copy(bootShadowAnchor);
-    updateSun();
+  // Upload the scene the player will actually see. Other arrivals upload on approach.
+  if (directArrival) {
+    const pose = arrivalPose(destination);
+    player.footMode = pedestrianArrival(pose);
+    player.teleport(pose);
+    shadowAnchor.copy(player.pos);
+  } else {
+    updateIntroCamera(0);
   }
+  env.update(0, 0, camera);
+  terrain.streamDetail(directArrival ? player.pos : camera.position, camera.position);
+  expeditions.drawNear(camera.position);
+  valley?.update(0, camera);
+  sky.update(0, camera);
+  updateSun(true);
+  collectibles.prepareRender(camera);
+  await prepareFirstFrame(renderer, scene, camera);
+  renderer.render(scene, camera);
 
-  setLoad(1, 'Ready when you are.');
-  await wait(280);
-  ui.finishLoading();
+  await ui.finishLoading();
   ui.showStart(!directArrival);
   ui.showModal(null);
   ui.hideModals();
@@ -374,6 +347,7 @@ function showFatal(message, err) {
   }
   const bar = $('load-bar');
   if (bar) bar.style.background = '#b23a2b';
+  $('load-destinations').hidden = false;
 }
 
 /* ── flow ───────────────────────────────────────────────────── */
@@ -411,7 +385,7 @@ async function startGame(pose = startPose(), startAudio = true) {
   scheduleFrame();
   updatePrompt();
   audio.ui();
-  if (pose === startPose() && !query.has('challenge')) ui.toast('ROUNDHOUSE LODGE', 'W to push off · E to board PEAK 2 PEAK', 'blue', 'lift');
+  if (pose === startPose() && !query.has('challenge')) ui.toast('ROUNDHOUSE LODGE', matchMedia('(pointer:coarse)').matches ? 'Hold Go to ski · Tap the lift prompt to board' : 'W to push off · E to board PEAK 2 PEAK', 'blue', 'lift');
   if (pose === COME_ALONG_START) ui.toast('COME A LONG', 'W to push off · A and D to carve', 'blue', 'check');
   transitioning = false;
 }
@@ -545,6 +519,8 @@ function closeMap() {
 }
 
 function arrivalPose(name) {
+  const shop = env.interiors.rooms.find(room => room.id === name && room.approach);
+  if (shop) return shop.approach;
   const vehicle=expeditions.arrival(name);
   if(vehicle)return vehicle;
   if(name==='skiers-plaza')return SKIERS_PLAZA_START;
@@ -610,13 +586,13 @@ function closeMountainPanel(resume=true) {
   panelReturn=null;
 }
 
-function openShop(){
+function openShop(shop){
   if(!outfitter||outfitter.dialog.open||transitioning)return;
   if(scenicPose)leaveScenicView();
   shopReturn=$('mountain-panel').open ? panelReturn : paused?'pause':playing?'game':'menu';
   closeMountainPanel(false);releaseMouseLook();keysBackupClear();
   if(playing)paused=true;
-  outfitter.open();
+  outfitter.open(shop);
 }
 function closeShop(){
   outfitter.dialog.close();
@@ -1146,6 +1122,13 @@ function nearbyDiningCounter() {
   return player.footMode ? env.interiors?.serviceAt?.(x,z,y) : null;
 }
 
+function nearbyShop() {
+  if (!player.footMode) return null;
+  const { x, y, z } = player.pos;
+  const room = env.interiorAt?.(x,z,y);
+  return room?.kind === 'outfitter' || room?.kind === 'barber' ? room : null;
+}
+
 function interact() {
   if (!playing || paused || transitioning || finished || scenicPose) return;
   if(ride){arriveFromRide();return;}
@@ -1174,7 +1157,8 @@ function interact() {
     if(first!==undefined)ui.toast(animal.title,first?'Wildlife sighting · 4 coins':'Wildlife sighting','green','star');
     return;
   }
-  if(env.interiorAt?.(player.pos.x,player.pos.z,player.pos.y)?.kind==='rental'){openShop();return;}
+  const shop=nearbyShop();
+  if(shop){openShop(shop);return;}
   boardLift();
 }
 
@@ -1187,8 +1171,9 @@ function updatePrompt() {
   if(counter){ui.prompt(counter.title,`Buy ${counter.item} · ${counter.price} coins`,false);return;}
   const animal=wildlife.nearest(player.pos);
   if(animal){ui.prompt(animal.title,'Observe quietly',false);return;}
-  if(env.interiorAt?.(player.pos.x,player.pos.z,player.pos.y)?.kind==='rental'){
-    ui.prompt('Mountain outfitter','Choose skis and equipment',false);return;
+  const shop=nearbyShop();
+  if(shop){
+    ui.prompt(shop.name,shop.kind==='barber'?'Choose a haircut and color':'Browse outerwear, footwear and skis',false);return;
   }
   const choices = nearbyLifts();
   const board = selectedBoard(choices);
@@ -1413,6 +1398,15 @@ function buildInput() {
 
 function bindUI() {
   bindMountainPanel();
+  installTouchButtons({
+    keys, queueJump: () => { ollieQueued = true; },
+    cycleCamera: () => {
+      if (ride) changeRideView();
+      else if (expeditions.active) expeditions.changeView();
+      else ui.setCameraLabel(player.cycleCamera());
+    },
+    openMountain: openMountainPanel, pause: pauseGame,
+  });
   $('drop-in')?.addEventListener('click', () => startGame());
   $('village-start')?.addEventListener('click', () => startGame(VILLAGE_START));
   $('board-lift')?.addEventListener('click', interact);
@@ -1548,12 +1542,13 @@ function updateIntroCamera(dt) {
   }
 }
 
-function updateSun() {
+function updateSun(force = false) {
   if (!lighting?.sun?.castShadow || paused) return;
   const anchor = scenicPose ? scenicTarget : playing && player ? player.pos : shadowAnchor;
   const change = anchor.distanceToSquared(lastShadowAnchor);
   const { shadowInterval } = graphicsProfiles[qualityIndex];
-  if (displayTime - lastShadowTime < shadowInterval && change < 4) return;
+  if (!force && !renderer.shadowMap.needsUpdate &&
+      !sunShadowRefreshDue(displayTime - lastShadowTime, change, shadowInterval)) return;
   lastShadowTime = displayTime;
   lastShadowAnchor.copy(anchor);
   const flightHeight = expeditions.active?.id === 'helicopter' ? expeditions.active.clearance : 0;
@@ -1586,6 +1581,7 @@ function scheduleFrame() {
 }
 
 function frame(now) {
+  if (rendererUnavailable) return;
   const raw = (now - lastFrame) / 1000;
   lastFrame = now;
   const dt = clamp(Number.isFinite(raw) ? raw : 0.016, 0.001, 0.12);
@@ -1597,7 +1593,7 @@ function frame(now) {
     scheduleFrame();
     return;
   }
-  if (ui.isOpen('map') || document.getElementById('sled-game')?.open) {
+  if (ui.isOpen('map') || document.getElementById('destination-selector')?.open || document.getElementById('sled-game')?.open) {
     if(playing){
       if(!transitioning && quests.winchLive)quests.update(dt);
       multiplayer.update(0,trickScore,outfitter.broadcastOutfit ?? outfitter.state.outfit,expeditions.active?.model,false);

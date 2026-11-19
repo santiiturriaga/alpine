@@ -3,6 +3,7 @@ import {
 } from './worlddata.js';
 import { ResortMap } from './resort-map.js';
 import { RouteGuide } from './route-guide.js';
+import { loadingProgress, finishMountainLoading } from './mountain-loading.js';
 import { clamp, formatNumber, formatTime } from './util.js';
 import {
   formatTravelDistance, onProfileChange, setSkierName, setSkierUnits, skierName, skiUnits, travelStats, unitPreference,
@@ -127,23 +128,11 @@ export class UI {
   /* ── loading & screens ─────────────────────────────────────── */
 
   setLoading(p, text) {
-    const pct = clamp(p, 0, 1);
-    this.el.loading?.style.setProperty('--loading-progress', pct);
-    this.el.loadBar?.parentElement.setAttribute('aria-valuenow', Math.round(pct * 100));
-    if (text && this.el.loadStatus) this.el.loadStatus.textContent = text;
+    loadingProgress(p, text);
   }
 
   finishLoading() {
-    const screen = this.el.loading;
-    if (!screen) return;
-    if (Number(screen.style.getPropertyValue('--loading-progress')) < 1) {
-      this.setLoading(1, 'Ready when you are.');
-      if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        setTimeout(() => screen.classList.add('hidden'), 280);
-        return;
-      }
-    }
-    screen.classList.add('hidden');
+    return finishMountainLoading();
   }
 
   showStart(show = true) {

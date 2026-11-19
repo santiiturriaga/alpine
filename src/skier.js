@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { canvasTexture, clamp, damp, makeCanvas, mulberry32 } from './util.js';
 import { baseThickness, isSkiStyle, skiDeck } from './skier-equipment.js';
+import { buildSnowShoe } from './snow-shoes.js';
 
 export { skiProfile } from './skier-equipment.js';
 
@@ -174,6 +175,43 @@ function rounded(parent, mat, w, h, d, x, y, z, radius) {
 function piping(parent, mat, points, radius = 0.003) {
   const curve = new THREE.CatmullRomCurve3(points.map((p) => new THREE.Vector3(...p)));
   return put(parent, new THREE.TubeGeometry(curve, 18, radius, 6, false), mat);
+}
+
+const haircutGeometry = new Map();
+function haircutMesh(style) {
+  if (haircutGeometry.has(style)) return haircutGeometry.get(style);
+  const steps = 56, rows = 22, positions = [], indices = [], colors = [];
+  for (let j = 0; j <= rows; j++) {
+    for (let i = 0; i <= steps; i++) {
+      const a = i / steps * Math.PI * 2;
+      const front = Math.max(0, Math.cos(a));
+      const hairline = THREE.MathUtils.lerp(1.98, 1.24, front ** .45) +
+        (style === 'part' ? .15 * Math.sin(a + .40) * front : 0);
+      const p = Math.max(.001, j / rows) * hairline;
+      const curl = Math.sin(15 * a - 16 * p) * Math.cos(p * 19 + a * 7);
+      const grain = Math.cos(17 * a + p * 8 * Math.cos(a));
+      const strandFalloff = THREE.MathUtils.smoothstep(p, .03, .32);
+      const strand = (style === 'curls' ? .065 * curl : style === 'part' ? .027 * grain : 0) * strandFalloff;
+      const lift = style === 'curls' ? .111 : style === 'part' ? .105 : .091;
+      const sweep = style === 'part' ? -.023 * Math.cos(p) ** 2 * front : 0;
+      const ring = Math.sin(p) * (1 + strand);
+      positions.push(Math.sin(a) * ring * .084 + sweep, .127 + Math.cos(p) * lift * (1 + strand),
+        .007 + Math.cos(a) * ring * .091);
+      const split = Math.exp(-((Math.sin(a + .43 + p * .22) * 13) ** 2)) * front * strandFalloff;
+      const shade = style === 'part' ? .91 + .09 * grain - .35 * split : style === 'curls' ? .90 + .1 * curl : .9 + .045 * grain;
+      colors.push(shade, shade, shade);
+      if (j === rows || i === steps) continue;
+      const k = j * (steps + 1) + i;
+      indices.push(k, k + steps + 1, k + 1, k + 1, k + steps + 1, k + steps + 2);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  haircutGeometry.set(style, geo);
+  return geo;
 }
 
 // A sewn garment rounds the changing joint angle. Two capped cylinders
@@ -547,40 +585,69 @@ export function createSkier({
   const head = new THREE.Group();
   head.position.set(0, .563, .015);
   torso.add(head);
+  const skiHead = new THREE.Group();
+  head.add(skiHead);
+  let casualHead, hair, haircut = 'helmet', snowShoes = false;
   const face = new THREE.SphereGeometry(.095, 32, 24);
   face.scale(.84, 1.07, .90);
-  put(head, face, skin, 0, .109, .010);
-  put(head, shell([[-.003,.066,.066,.008],[.035,.079,.075,.011],
+  put(skiHead, face, skin, 0, .109, .010);
+  put(skiHead, shell([[-.003,.066,.066,.008],[.035,.079,.075,.011],
     [.068,.089,.083,.014],[.089,.09,.089,.019],[.111,.082,.093,.020],[.129,.067,.085,.019]], .024), gaiter);
   const helmetProfile = [
     [.104,.101,.108,-.015],[.117,.108,.114,-.012],[.151,.117,.123,-.009],
     [.185,.114,.123,-.014],[.215,.102,.113,-.016],[.243,.077,.083,-.018],
     [.259,.052,.055,-.016],[.267,.007,.008,-.013],
   ];
-  put(head, shell(helmetProfile, .002, 48), helmetMaterial);
-  put(head, helmetTrim(helmetProfile, .79, Math.PI * 2 - .79, .135, .158, true), black).castShadow = false;
+  put(skiHead, shell(helmetProfile, .002, 48), helmetMaterial);
+  put(skiHead, helmetTrim(helmetProfile, .79, Math.PI * 2 - .79, .135, .158, true), black).castShadow = false;
   const rearDecal = new THREE.Group();
   rearDecal.position.set(.014, .186, -.143);
   rearDecal.rotation.set(-.24, Math.PI + .12, 0);
   rearDecal.scale.setScalar(.021);
-  head.add(rearDecal);
+  skiHead.add(rearDecal);
   const helmetDecals = decalShapes(rearDecal, helmetDecalMaterial);
-  put(head, goggleShield(false), black);
-  put(head, goggleShield(true), lens).castShadow = false;
+  put(skiHead, goggleShield(false), black);
+  put(skiHead, goggleShield(true), lens).castShadow = false;
   const noseBridge = new THREE.SphereGeometry(1, 20, 12);
   noseBridge.scale(.023, .012, .013);
-  put(head, noseBridge, black, 0, .115, .112);
+  put(skiHead, noseBridge, black, 0, .115, .112);
   for (const side of [-1, 1]) {
     const ear = shell([[.052,.004,.011,-.012],[.063,.017,.027,-.014],[.093,.023,.035,-.02],
       [.131,.019,.038,-.023],[.157,.011,.031,-.023]], .008, 24);
-    put(head, ear, gaiter, side * .087);
+    put(skiHead, ear, gaiter, side * .087);
     for (const [a, b, y] of [[.19,.88,.247],[1.27,1.9,.239],[2.06,2.63,.226],[2.53,2.94,.196]]) {
       const start = side > 0 ? a : -b, end = side > 0 ? b : -a;
-      put(head, helmetTrim(helmetProfile, start, end, y - .003, y + .003), black).castShadow = false;
+      put(skiHead, helmetTrim(helmetProfile, start, end, y - .003, y + .003), black).castShadow = false;
     }
-    piping(head, gaiter, [[side*.061,.069,.071],[side*.045,.063,.092],[side*.019,.061,.101]], .0018);
+    piping(skiHead, gaiter, [[side*.061,.069,.071],[side*.045,.063,.092],[side*.019,.061,.101]], .0018);
   }
-  rounded(head, gaiter, .03, .025, .008, 0, .146, -.137, .0016);
+  rounded(skiHead, gaiter, .03, .025, .008, 0, .146, -.137, .0016);
+
+  function buildCasualHead() {
+    casualHead = new THREE.Group();
+    casualHead.name = 'Uncovered head';
+    casualHead.visible = false;
+    head.add(casualHead);
+    put(casualHead, face, skin, 0, .109, .01);
+    const sphere = new THREE.SphereGeometry(1, 18, 12);
+    const detail = (mat, x, y, z, sx, sy, sz) => {
+      const mesh = put(casualHead, sphere, mat, x, y, z);
+      mesh.scale.set(sx, sy, sz);
+      return mesh;
+    };
+    const white = material(0xede7db, .72), iris = material(0x4f5549, .65);
+    const lips = material(0x965b53, .75), eyebrows = material(0x593931, .90);
+    detail(skin, 0, .109, .092, .015, .025, .020);
+    detail(lips, 0, .064, .085, .021, .0038, .006);
+    for (const side of [-1, 1]) {
+      detail(skin, side * .075, .106, .004, .012, .024, .016);
+      detail(white, side * .031, .132, .084, .015, .0065, .006);
+      detail(iris, side * .030, .132, .089, .0058, .0056, .0026);
+      detail(eyebrows, side * .033, .148, .082, .016, .0035, .004).rotation.z = side * -.12;
+    }
+    hair = put(casualHead, haircutMesh('part'), new THREE.MeshStandardMaterial({ color: 0x372c27, roughness: .86, vertexColors: true }));
+    hair.name = 'Haircut';
+  }
 
   let activeStyle = 'all-mountain', activeDeck = skiDeck(activeStyle);
   const decks = [];
@@ -650,22 +717,24 @@ export function createSkier({
     carried.rotation.set(-Math.PI / 2, side * .035, side * .075);
     carriedSkis.add(carried);
     addEquipment(carried);
-    const boot = put(ski, shell([[.036,.058,.163,-.025],[.06,.067,.176,-.023],[.097,.067,.162,-.02],
+    const skiBoot = new THREE.Group();
+    ski.add(skiBoot);
+    const boot = put(skiBoot, shell([[.036,.058,.163,-.025],[.06,.067,.176,-.023],[.097,.067,.162,-.02],
       [.122,.064,.12,-.038],[.154,.065,.09,-.052],[.183,.062,.076,-.05]], .003, 36), bootShell);
     boot.name = 'Molded ski boot lower shell';
-    put(ski, shell([[.021,.060,.156,-.026],[.032,.067,.167,-.026],[.047,.065,.166,-.026]], .001), black);
+    put(skiBoot, shell([[.021,.060,.156,-.026],[.032,.067,.167,-.026],[.047,.065,.166,-.026]], .001), black);
     const cuff = new THREE.Group();
     cuff.position.set(0,.168,-.056);
-    ski.add(cuff);
+    skiBoot.add(cuff);
     put(cuff, shell([[-.041,.06,.070,.002],[-.023,.068,.084,.002],[.02,.071,.081,.000],
       [.057,.071,.073,.002],[.086,.07,.071,.008],[.096,.066,.068,.013]], .005, 36), bootShell);
     put(cuff, shell([[.068,.065,.054,.008],[.091,.067,.063,.013],[.111,.058,.053,.017]], .009), gaiter);
     for (const edgeSide of [-1, 1]) {
       const rivet = put(cuff, new THREE.CylinderGeometry(.012,.012,.006,16), steel, edgeSide * .065, -.009, -.004);
       rivet.rotation.z = Math.PI / 2;
-      piping(ski, black, [[edgeSide*.060,.053,.093],[edgeSide*.066,.061,.018],[edgeSide*.062,.063,-.064]], .0022);
+      piping(skiBoot, black, [[edgeSide*.060,.053,.093],[edgeSide*.066,.061,.018],[edgeSide*.062,.063,-.064]], .0022);
     }
-    for (const [part, y, z] of [[ski,.099,.113],[ski,.127,.064],[cuff,.018,.077],[cuff,.064,.075]]) {
+    for (const [part, y, z] of [[skiBoot,.099,.113],[skiBoot,.127,.064],[cuff,.018,.077],[cuff,.064,.075]]) {
       const strap = piping(part, black, [[-side*.051,y-.015,z-.04],[0,y,z],[side*.051,y-.018,z-.041]], .0053);
       strap.name = 'Boot buckle ladder';
       const buckle = rounded(part, steel, .032, .012, .023, side * .038, y - .004, z - .008, .0028);
@@ -674,7 +743,7 @@ export function createSkier({
     }
 
     const trousers = jointGarment(group, pants, { side });
-    legs.push({ side, ski, equipment, trousers, cuff });
+    legs.push({ side, ski, equipment, trousers, cuff, skiBoot });
 
     const shoulder = new THREE.Group();
     shoulder.position.set(side * .205, .454, -.006);
@@ -829,7 +898,7 @@ export function createSkier({
   function animate(dt, params, groundHeight) {
     const { speed, steer, tuck, brake, airborne, grab, crash, crashTime,
       stride = 0, stridePhase = 0, climb = 0, footMode = false, walk = 0, snowSink = 0,
-      walkStride = .49, walkDirection = 1, switchStance = false, switchSide = 1, stairTreadAt, mount,
+      walkStride = .49, walkDirection = 1, switchStance = false, switchSide = 1, stairTreadAt, mount, display = false,
       stop = 0, stopSign = 1, skiYaw = 0, poleSwing = -1, poleSide = 1 } = params;
     if (groundHeight) {
       frameMatrix.copy(group.parent.matrix);
@@ -838,7 +907,11 @@ export function createSkier({
       inverseRotation.copy(frameRotation).invert();
     }
     const sf = clamp(speed / 36, 0, 1);
-    carriedSkis.visible = footMode && !mount;
+    carriedSkis.visible = footMode && !mount && !display;
+    if (casualHead) {
+      casualHead.visible = footMode && haircut !== 'helmet';
+      skiHead.visible = !casualHead.visible;
+    }
     const edgeLoad = footMode || airborne || crash ? 0 : clamp((speed - 1.4) / 10, 0, 1);
     const steerLean = steer * edgeLoad * (.38 + sf * .49) * (switchStance ? -1 : 1);
     lean = damp(lean, steerLean * (1 - .23 * brake), 8, dt);
@@ -910,8 +983,8 @@ export function createSkier({
       elbow.updateMatrix();
       sleeveEnd.set(0, -.257, .003).applyMatrix4(elbow.matrix);
       sleeve.update(sleeveStart, elbow.position, sleeveEnd, windPhase, wind);
-      pole.visible = !mount;
-      if (mount) continue;
+      pole.visible = !mount && !display;
+      if (mount || display) continue;
       // Keep the shaft trailing independently of forearm flex, and let the pole
       // trail further if its unadjusted tip would pass through the snow.
       poleDirection.set(side * (.23 + sf * .09) * (1 - racingTuck) + side * sweep * 1.48,
@@ -938,8 +1011,12 @@ export function createSkier({
       poleTarget.setFromUnitVectors(down, poleDirection);
       pole.quaternion.copy(armRotation).multiply(poleTarget);
     }
-    for (const [i, { side, ski, equipment, trousers, cuff }] of legs.entries()) {
+    for (const [i, { side, ski, equipment, trousers, cuff, skiBoot, walkShoe }] of legs.entries()) {
       equipment.visible = !footMode && (!mount || !!mount.skis);
+      if (walkShoe) {
+        walkShoe.visible = footMode && snowShoes;
+        skiBoot.visible = !walkShoe.visible;
+      }
       const cycle = stridePhase + (side < 0 ? Math.PI : 0);
       const walkPhase = ((cycle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) / Math.PI;
       const step = footMode ? (walkPhase < 1 ? 1 - 2 * walkPhase : -Math.cos((walkPhase - 1) * Math.PI)) : Math.sin(cycle);
@@ -1024,7 +1101,8 @@ export function createSkier({
   }
 
   const acceptsColor = (value) => typeof value === 'string' && /^#(?:[\da-f]{3}|[\da-f]{6})$/i.test(value);
-  function setAppearance({ jacket: color, pants: trousers, helmet: shellColor, backpack, sticker, skis, apparel } = {}) {
+  function setAppearance({ jacket: color, pants: trousers, helmet: shellColor, backpack, sticker, skis, apparel,
+    haircut: cut, hairColor, footwear } = {}) {
     const patrol = apparel === 'patrol-shell';
     if (patrol && !rescueTrim) {
       rescueTrim = patrolTrim();
@@ -1043,6 +1121,23 @@ export function createSkier({
       gloveLeather.color.copy(gloveBase).lerp(jacket.color, .11);
     }
     if (acceptsColor(trousers)) pants.color.set(trousers);
+    if (cut !== undefined) {
+      haircut = ['crop', 'part', 'curls'].includes(cut) ? cut : 'helmet';
+      if (haircut !== 'helmet') {
+        if (!casualHead) buildCasualHead();
+        hair.geometry = haircutMesh(haircut);
+      }
+    }
+    if (hair && acceptsColor(hairColor)) hair.material.color.set(hairColor);
+    if (footwear !== undefined) {
+      snowShoes = footwear === 'traverse';
+      if (snowShoes) for (const leg of legs) {
+        if (leg.walkShoe) continue;
+        leg.walkShoe = buildSnowShoe(leg.side);
+        leg.walkShoe.visible = false;
+        leg.ski.add(leg.walkShoe);
+      }
+    }
     if (acceptsColor(shellColor)) {
       helmetMaterial.color.set(shellColor);
       const { r, g, b } = helmetMaterial.color;

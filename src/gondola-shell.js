@@ -219,11 +219,16 @@ function cabinFinishes() {
       roughness:.52,metalness:.12,side:THREE.DoubleSide,depthWrite:false}),
   };
   finishes.glass.onBeforeCompile=shader=>{
+    shader.uniforms.cabinRealism = climateUniforms.realism;
+    shader.uniforms.cabinHorizon = climateUniforms.reflectedHorizon;
+    shader.uniforms.cabinZenith = climateUniforms.reflectedZenith;
     shader.vertexShader=shader.vertexShader.replace('#include <common>',`#include <common>
       varying vec2 cabinUv;`).replace('#include <begin_vertex>',`#include <begin_vertex>
       cabinUv=uv;`);
     shader.fragmentShader=shader.fragmentShader.replace('#include <common>',`#include <common>
-      varying vec2 cabinUv;`).replace('#include <opaque_fragment>',`
+      varying vec2 cabinUv;
+      uniform float cabinRealism;
+      uniform vec3 cabinHorizon, cabinZenith;`).replace('#include <opaque_fragment>',`
       float rim=pow(1.-max(0.,dot(normal,normalize(vViewPosition))),3.4);
       float outside=gl_FrontFacing?1.:0.;
       // The actual captured valley is reflected in the front surface. A
@@ -239,6 +244,13 @@ function cabinFinishes() {
       #endif
       outgoingLight+=outside*(cloudBand*.11+narrowBand*.10)*vec3(.68,.77,.80);
       diffuseColor.a=mix(.10+.10*rim,.78+.18*rim,outside);
+      if (cabinRealism > .5) {
+        vec3 ray = reflect(-normalize(vViewPosition), normal) * mat3(viewMatrix);
+        vec3 skyTint = mix(cabinHorizon, cabinZenith, smoothstep(-.02,.82,ray.y));
+        float glassFresnel = .042 + .958 * pow(1. - abs(dot(normal,normalize(vViewPosition))), 5.);
+        outgoingLight = mix(outgoingLight, skyTint, (.12 + .69*glassFresnel)*smoothstep(-.09,.15,ray.y));
+        diffuseColor.a = mix(.085, .58, outside) + .34*glassFresnel;
+      }
       #include <opaque_fragment>`);
     fleetDoorShader(shader);
   };

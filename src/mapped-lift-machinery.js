@@ -418,6 +418,7 @@ export function buildLiftTerminal(group, lift, top, ground, colliders, sharedMid
   root.position.set(frame.x,frame.y,frame.z);root.rotation.y=frame.heading;group.add(root);
   const end = top ? 1 : -1;
   const tyeSummit = lift.stationStyle === 'tye-mill' && top;
+  const architecturalShelter = top ? lift.def.topArchitecture : lift.def.bottomArchitecture;
   const parts=[];
   const halfWidth=seats*.26+.14;
   if (!tyeSummit) deck(root,frame,ground,gauge,(top?-1.8:-4.2),halfWidth*2+.63,top?4.5:10.0);
@@ -436,7 +437,7 @@ export function buildLiftTerminal(group, lift, top, ground, colliders, sharedMid
     }
     lift.wheels.push(assembly(root,wheel,'Rotating bullwheel'));
     if (detachable) {
-      hood(parts,gauge,top?7.3:9.3,top,paint,cableRise,lift.stationStyle === 'hogsback-express');
+      if (!architecturalShelter) hood(parts,gauge,top?7.3:9.3,top,paint,cableRise,lift.stationStyle === 'hogsback-express');
       const inner = -end*4.25;
       footing(frame,ground,parts,colliders,0,inner,.52,iron,cableRise(inner)-.24);
       parts.push(beam([0,cableRise(inner*1.7)-.26,inner*1.7],[0,-.26,0],.98,.22,iron));
@@ -459,7 +460,7 @@ export function buildLiftTerminal(group, lift, top, ground, colliders, sharedMid
       for(let i=0;i<7;i++) parts.push(box(.09,.030,.44,iron,[(i-3)*.10,.597,-end*.16]));
       sheaves(parts,gauge,-end*1.22,0,4,vintage);
     }
-    if (!tyeSummit) operatorShelter(root,parts,frame,ground,colliders,-gauge-3.0,end*1.2,paint);
+    if (!tyeSummit && !architecturalShelter) operatorShelter(root,parts,frame,ground,colliders,-gauge-3.0,end*1.2,paint);
   } else {
     footing(frame,ground,parts,colliders,0,0,.42,iron,-.38);
     parts.push(box(gauge*2+.33,.21,.26,paint,[0,-.44,0]));

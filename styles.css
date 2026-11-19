@@ -102,7 +102,7 @@ svg { display: block; }
   gap: clamp(18px,4.5vh,42px); overflow: hidden;
 }
 .loading-screen::before {
-  content: ""; position: absolute; inset: -20%;
+  content: ""; position: absolute; inset: -20%; pointer-events: none;
   background-image: repeating-radial-gradient(ellipse at 68% 24%, transparent 0 55px, rgba(157,205,224,.05) 56px 57px, transparent 58px 118px);
   transform: rotate(-8deg); animation: driftLines 60s linear infinite;
 }
@@ -110,19 +110,16 @@ svg { display: block; }
 .loading-stage { position: relative; width: min(640px, 86vw); }
 .snowball-loader {
   --snowball-diameter: clamp(86px, 24vmin, 190px);
-  --snowball-width: calc(var(--snowball-diameter) * (.14 + .86 * var(--loading-progress, 0)));
-  --roll-easing: 260ms cubic-bezier(.2,.68,.28,1);
   position: relative; height: var(--snowball-diameter);
 }
 .snowball-path { position: absolute; inset: 0 calc(var(--snowball-diameter) / 2) 0 13px; }
 .snowball-carriage {
-  position: absolute; left: calc(100% * var(--loading-progress, 0)); bottom: calc(-.08 * var(--snowball-width) + 2px);
-  width: var(--snowball-width); transform: translateX(-50%);
-  transition: left var(--roll-easing), bottom var(--roll-easing), width var(--roll-easing);
+  position: absolute; inset: 0; pointer-events: none; will-change: transform;
 }
 .forming-snowball {
-  width: 100%; height: auto; transform: rotate(calc(650deg * var(--loading-progress, 0) - 16deg));
-  transition: transform var(--roll-easing); filter: drop-shadow(1px 5px 7px #061822a6);
+  position: absolute; width: var(--snowball-diameter); height: var(--snowball-diameter);
+  bottom: calc(-.07 * var(--snowball-diameter)); left: calc(-.5 * var(--snowball-diameter));
+  transform: translateY(37%) scale(.14); will-change: transform;
 }
 .graphics-control { display: flex; align-items: center; gap: 9px; }
 .graphics-control span { font-size: .72rem; color: #bed4dc; }
@@ -131,8 +128,6 @@ svg { display: block; }
 @media (max-height:600px) { .loading-tip { display: none; } }
 @media (prefers-reduced-motion: reduce) {
   .loading-screen::before { animation: none; }
-  .snowball-loader { --roll-easing: 0ms; }
-  .forming-snowball { transform: none; }
 }
 .loading-copy { position: relative; text-align: center; width: min(540px, 86vw); }
 .kicker {
@@ -148,7 +143,7 @@ svg { display: block; }
 .loading-copy h1 { font-size: clamp(42px, 7.4vw, 84px); margin-top: 16px; }
 .loading-copy h1 em { font-style: normal; color: transparent; -webkit-text-stroke: 1.4px rgba(231,245,252,.62); }
 .load-track { position: absolute; inset: auto 0 0; height: 2px; background: #d6ecf33d; }
-#load-bar { height: 100%; width: calc(100% * var(--loading-progress, 0)); background: linear-gradient(90deg, #b6d6e93b, #e8f6ff); box-shadow: 0 0 10px #c8e5ff63; transition: width var(--roll-easing); }
+#load-bar { height: 100%; width: 100%; transform: scaleX(0); transform-origin: left; background: linear-gradient(90deg, #b6d6e93b, #e8f6ff); box-shadow: 0 0 10px #c8e5ff63; }
 .loading-meta { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 6px 18px; margin-top: 16px; }
 #load-status { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: #e1f1f8bd; }
 #load-skier { font-size: 12px; font-weight: 600; letter-spacing: .04em; color: #f3d49b; overflow-wrap: anywhere; }
@@ -616,10 +611,24 @@ svg { display: block; }
 .photo-tools input[type=range] { width:75px; vertical-align:middle; accent-color:#b4ddeb; }
 #boost-readout { font-weight:650; }
 #boost-readout progress { width:52px; height:4px; margin-left:5px; vertical-align:middle; accent-color:currentColor; }
-#outfitter { box-sizing:border-box; width:min(740px,94vw); max-height:86dvh; overflow:auto; margin:auto; padding:24px; color:#eaf1ee; background:#15262bef; border:1px solid #b9ccd454; border-radius:12px; box-shadow:0 18px 70px #06161b99; backdrop-filter:blur(15px); font:15px var(--font-body); }
+#outfitter { box-sizing:border-box; width:min(906px,94vw); max-height:86dvh; overflow:auto; margin:auto; padding:24px; color:#eaf1ee; background:#15262bef; border:1px solid #b9ccd454; border-radius:12px; box-shadow:0 18px 70px #06161b99; backdrop-filter:blur(15px); font:15px var(--font-body); }
 #outfitter::backdrop { background:#0b1a2560; backdrop-filter:blur(4px); }
 #outfitter header {display:flex;justify-content:space-between;align-items:start;} #outfitter h2 {font-size:30px;margin:0;} #outfitter h3 {margin:22px 0 8px;}
 #outfitter [data-balance] {color:#ebcc83;} #outfitter button,#outfitter select {font:inherit;color:inherit;background:#30464d;border:1px solid #b9ccd446;border-radius:5px;padding:6px 10px;} #outfitter button{cursor:pointer;} #outfitter button:disabled{opacity:.58;cursor:default;}
+.shop-layout { display:grid; grid-template-columns:minmax(0,.94fr) minmax(0,1.45fr); gap:22px; margin-top:16px; align-items:start; }
+.shop-layout h3:first-child { margin-top:0; }
+.shop-preview { margin:0; position:sticky; top:0; align-self:start; overflow:hidden; border:1px solid #b9ccd446; border-radius:7px; background:#1d3037; }
+.shop-preview canvas { display:block; width:100%; height:auto; }
+.shop-preview figcaption { display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border-top:1px solid #b9ccd438; color:#c5d8db; }
+.shop-preview button { min-width:39px; min-height:34px; }
+.snow-shoe-card { --topsheet:#d1a66c; }
+.barber-detail { color:#b9ced2; line-height:1.6; max-width:32ch; }
+@media (max-width:580px) {
+  #outfitter { padding:15px; }
+  .shop-layout { grid-template-columns:minmax(0,1fr); gap:16px; }
+  .shop-preview { position:static; width:min(100%,190px); justify-self:center; }
+  .shop-preview figcaption { padding:5px 8px; }
+}
 .ski-catalog {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}.gear-card {padding:11px 13px;border:1px solid #b9ccd43a;border-top:3px solid var(--topsheet);border-radius:5px;display:grid;gap:6px;}
 .gear-card p {margin:0;}.gear-card small {color:#bcced2;}.gear-card button {justify-self:start;}
 .gear-swatches {display:flex;flex-wrap:wrap;gap:9px;}.gear-swatches label {display:grid;gap:2px;font-size:13px;}
@@ -727,4 +736,186 @@ svg { display: block; }
   margin-top: .55rem;
   color: #dce8f0;
   font-variant-numeric: tabular-nums;
+}
+
+/* Touch controls and compact pause menus */
+:root {
+  --touch-top: max(12px, env(safe-area-inset-top));
+  --touch-right: max(12px, env(safe-area-inset-right));
+  --touch-bottom: max(12px, env(safe-area-inset-bottom));
+  --touch-left: max(12px, env(safe-area-inset-left));
+  --touch-action-width: 170px;
+  --touch-move-offset: 100px;
+}
+.mapped-touch, .touch-tap-label { display: none; }
+.pause-settings .setting-row[hidden] { display: none; }
+
+@media (pointer: coarse), (max-height: 620px) {
+  .pause-screen {
+    padding: var(--touch-top) var(--touch-right) var(--touch-bottom) var(--touch-left);
+    background: #0a182683;
+  }
+  .pause-screen .pause {
+    width: min(420px, 100%);
+    max-height: 100%;
+    padding: 0 18px 15px;
+    background: linear-gradient(160deg, #203a49, #122834 53%);
+    overscroll-behavior: contain;
+    scroll-padding-block: 69px 13px;
+    touch-action: pan-y;
+  }
+  .pause-head {
+    position: sticky;
+    z-index: 1;
+    top: 0;
+    padding: 10px 18px;
+    margin: 0 -18px 10px;
+    background: #203a49;
+  }
+  .pause-head h2 { font-size: 32px; }
+  .pause-head::after { display: none; }
+  .pause-head .modal-close { width: 44px; height: 44px; opacity: .92; }
+  .pause-settings { margin: 14px 0 8px; }
+  .pause-settings .setting-row { min-height: 44px; padding-block: 0; gap: 8px; }
+  .pause-settings .setting-row:has(.graphics-control) { padding-block: 5px; }
+  .pause-settings .setting-row button { min-height: 44px; }
+  .pause-settings .seg { margin-block: 5px; }
+  .pause-settings .graphics-control input { height: 30px; }
+  .pause-foot { padding-top: 0; }
+  .pause-foot button { min-height: 44px; }
+}
+
+@media (pointer: coarse) {
+  #app:has(.modal-screen:not(.hidden), dialog[open]) :is(#hud, #instruments, #course-hud) { display: none; }
+  .pause kbd, #gear-mode kbd, .trail-overlay kbd, .interaction-prompt kbd, .ride-panel kbd { display: none; }
+  #webgl canvas { touch-action: none; }
+  .mapped-touch {
+    position: absolute;
+    display: block;
+    inset: 0;
+    pointer-events: none;
+  }
+  .mapped-touch button {
+    min-width: 44px;
+    min-height: 46px;
+    padding: 4px 6px;
+    border: 1px solid #bdd5e0a0;
+    border-radius: 9px;
+    background: #142d3ee6;
+    color: #eff7fb;
+    font: 600 13px/1.2 var(--font-body);
+    box-shadow: 0 2px 8px #091c322b, inset 0 1px 0 #edf7ff24;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mapped-touch button:active { background: #405e70; border-color: #e4f5ff; }
+  .mapped-touch-move, .mapped-touch-actions { position: absolute; display: grid; gap: 5px; }
+  .mapped-touch-move {
+    left: var(--touch-left);
+    right: var(--touch-right);
+    bottom: calc(var(--touch-bottom) + var(--touch-move-offset));
+    grid-template-columns: repeat(2, clamp(44px, 14vw, 60px)) 1fr repeat(3, clamp(44px, 14vw, 60px));
+  }
+  .mapped-touch-move button { touch-action: none; }
+  .mapped-touch-move [data-control="go"] { grid-column: 4; background: #f5c578; color: #152835; }
+  .mapped-touch-move [data-control="go"]:active { background: #ffe0a6; }
+  .mapped-touch-actions {
+    top: var(--touch-top);
+    right: var(--touch-right);
+    width: var(--touch-action-width);
+    grid-template-columns: 44px 1fr 49px;
+  }
+  .hud.riding > .mapped-touch { visibility: visible; }
+  .hud.riding .mapped-touch-move { display: none; }
+  .terrain-readout {
+    top: calc(var(--touch-top) + 4px);
+    left: var(--touch-left);
+    width: calc(100% - var(--touch-left) - var(--touch-right) - var(--touch-action-width) - 9px);
+  }
+  .terrain-readout > div:first-child { display: flex; align-items: baseline; }
+  #altitude { flex: none; }
+  #trail-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .collection-readout { right: var(--touch-right); top: calc(var(--touch-top) + 52px); }
+  .ski-readout { left: var(--touch-left); bottom: var(--touch-bottom); }
+  #boost-readout { position: absolute; left: calc(100% + 9px); top: 0; width: max-content; }
+  #gear-mode {
+    min-height: 44px;
+    padding: 3px 11px;
+    border: 1px solid #bdd5e0ae;
+    border-radius: 7px;
+    margin-top: 3px;
+    background: #142d3ee6;
+    color: #eff7fb;
+    -webkit-text-stroke: 0;
+    font: 600 13px/1.15 var(--font-body);
+  }
+  .instruments { mix-blend-mode: normal; -webkit-text-stroke: 2.5px #142b36; }
+  .course-hud { top: calc(var(--touch-top) + 77px); }
+  #assignment-hud { left: var(--touch-left); bottom: auto; top: calc(var(--touch-top) + 65px); }
+  #patrol-nav, #patrol-winch { top: calc(var(--touch-top) + 73px); }
+
+  .interaction-prompt {
+    max-width: min(420px, calc(100% - var(--touch-left) - var(--touch-right)));
+    bottom: calc(var(--touch-bottom) + var(--touch-move-offset) + 57px);
+    width: max-content;
+    gap: 5px;
+    padding: 0;
+  }
+  .board-lift {
+    min-width: 0;
+    gap: 8px;
+    padding: 6px 10px 6px 6px;
+    min-height: 44px;
+    border: 1px solid #b4d4df8e;
+    border-radius: 9px;
+    background: #122a39eb;
+    touch-action: manipulation;
+  }
+  .board-lift > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+  .board-lift small { color: #deedf4; line-height: 1.2; }
+  .touch-tap-label {
+    display: grid;
+    place-items: center;
+    flex: none;
+    min-width: 32px;
+    min-height: 32px;
+    padding: 2px 4px;
+    background: #f5c578;
+    color: #172d3a;
+    border-radius: 5px;
+    text-shadow: none;
+    font: 600 12px var(--font-body);
+  }
+  .lift-control { min-height: 44px; background: #122a39eb; touch-action: manipulation; }
+  .ride-panel { left: var(--touch-left); bottom: var(--touch-bottom); }
+  .trail-overlay { right: var(--touch-right); bottom: var(--touch-bottom); }
+  #map-open {
+    min-height: 44px;
+    padding: 4px 12px;
+    border: 1px solid #bdd5e0ae;
+    border-radius: 7px;
+    background: #142d3ee6;
+    text-shadow: none;
+  }
+  #nearby-map, #route-guidance {
+    position: absolute;
+    bottom: calc(var(--touch-move-offset) + 57px);
+    right: 0;
+  }
+  #nearby-map { width: min(29vw, 112px); }
+  #route-guidance { width: min(43vw, 175px); }
+  #nearby-map:not([hidden]) + #route-guidance { bottom: calc(var(--touch-move-offset) + 65px + min(29vw, 112px)); }
+}
+
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 520px) {
+  :root { --touch-move-offset: 55px; }
+  .ski-readout { display: flex; align-items: center; gap: 12px; }
+  #boost-readout { position: static; }
+  #gear-mode { margin-top: 0; }
+}
+@media (pointer: coarse) and (orientation: landscape) and (min-width: 690px) and (max-height: 520px) {
+  .interaction-prompt {
+    bottom: calc(var(--touch-bottom) + var(--touch-move-offset) - 3px);
+    max-width: min(365px, calc(100% - var(--touch-left) - var(--touch-right) - 370px));
+  }
 }

@@ -179,7 +179,7 @@ export function buildResortPeople(scene,{grid,interiors,lifts,queueSlots=[],soci
       ...(working ? { jacket:spot.activity==='operator'?0xea952a:0x315c62,pants:0x252e34,helmet:0x2d3439 } : {})}));
   }
   for(const room of interiors?.rooms||[]) {
-    if(room.kind==='rental')continue;
+    if(room.kind==='outfitter'||room.kind==='barber')continue;
     if(room.id.startsWith('roundhouse'))continue; // The café and market have authored occupied seats and service lanes.
     const c=Math.cos(room.yaw),s=Math.sin(room.yaw);
     for(const sign of [-1,1]) {

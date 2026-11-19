@@ -4,21 +4,25 @@ import { mergeParts } from './scenery.js';
 // Object coordinates survive the batching step. Grain follows the long axis of
 // every post, rail and brace instead of running horizontally across the lodge.
 export function timberMesh(parts) {
-  const coordinates = [];
+  const geometry = mergeParts(parts, true);
+  const coordinates = new Float32Array(geometry.attributes.position.count * 3);
+  let offset = 0;
   for (const p of parts) {
-    const geo = p.geo.index ? p.geo.toNonIndexed() : p.geo;
+    const geo = p.geo;
     geo.computeBoundingBox();
     const size = geo.boundingBox.getSize(new THREE.Vector3());
     const long = size.y >= size.x && size.y >= size.z ? 1 : size.x >= size.z ? 0 : 2;
     const a = geo.attributes.position;
-    for (let i = 0; i < a.count; i++) {
-      const v = [a.getX(i), a.getY(i), a.getZ(i)];
-      coordinates.push(v[(long + 1) % 3], v[(long + 2) % 3], v[long]);
+    const expanded = geo.index && !geo.hasAttribute('normal');
+    const count = expanded ? geo.index.count : a.count;
+    for (let i = 0; i < count; i++) {
+      const j = expanded ? geo.index.getX(i) : i;
+      coordinates[offset++] = a.getComponent(j, (long + 1) % 3);
+      coordinates[offset++] = a.getComponent(j, (long + 2) % 3);
+      coordinates[offset++] = a.getComponent(j, long);
     }
-    if (geo !== p.geo) geo.dispose();
   }
-  const geometry = mergeParts(parts);
-  geometry.setAttribute('timberPoint', new THREE.Float32BufferAttribute(coordinates, 3));
+  geometry.setAttribute('timberPoint', new THREE.BufferAttribute(coordinates, 3));
   const material = detailedMaterial('timber');
   const mesh = new THREE.Mesh(geometry, material);
   mesh.castShadow = mesh.receiveShadow = true;

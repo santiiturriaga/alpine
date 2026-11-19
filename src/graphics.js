@@ -1,5 +1,7 @@
-import { ACESFilmicToneMapping, PCFSoftShadowMap, SRGBColorSpace, Vector3, WebGLRenderer } from 'three';
+import { ACESFilmicToneMapping, Frustum, Group, Matrix4, PCFSoftShadowMap, SRGBColorSpace, Vector2, Vector3, WebGLRenderer } from 'three';
 import { climateUniforms } from './climate-state.js';
+import { compactDevice } from './device-budget.js';
+import { watchRenderer } from './renderer-recovery.js';
 
 // All resorts keep the same shadow shader when changing detail. Resizing its
 // depth target costs one allocation; toggling shadows recompiles visible materials.
@@ -14,10 +16,11 @@ const preference = 'alpine.graphics';
 const realismPreference = 'alpine.realism';
 const shadowRight = new Vector3();
 const shadowUp = new Vector3();
+const viewportSize = new Vector2();
 
 export function createRenderer({ exposure = 1, shadows = false } = {}) {
   const renderer = new WebGLRenderer({
-    antialias: true,
+    antialias: !compactDevice,
     powerPreference: 'high-performance',
     alpha: false,
     stencil: false,
@@ -29,6 +32,7 @@ export function createRenderer({ exposure = 1, shadows = false } = {}) {
   renderer.shadowMap.enabled = shadows;
   renderer.shadowMap.autoUpdate = false;
   renderer.shadowMap.needsUpdate = shadows;
+  watchRenderer(renderer.domElement);
   return renderer;
 }
 
@@ -40,17 +44,45 @@ export function resizeViewport({ host, renderer, camera, quality, storm, tuckWin
     (window.devicePixelRatio || 1) * quality.samples,
     Math.sqrt(quality.maxPixels / (width * height)),
   );
-  if (renderer.getPixelRatio() !== ratio) renderer.setPixelRatio(ratio);
-  renderer.setSize(width, height, false);
+  renderer.getSize(viewportSize);
+  if (viewportSize.x !== width || viewportSize.y !== height || renderer.getPixelRatio() !== ratio) {
+    // Window resize and ResizeObserver can report the same dimensions.
+    renderer.setDrawingBufferSize(width, height, ratio);
+  }
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
   storm?.resize(renderer.domElement.height);
   tuckWind?.resize(width, height);
 }
 
+// Queue the first camera's material programs together. A synchronous first draw
+// waits for each program in turn and can stall WebKit while the loader is rolling.
+export async function prepareFirstFrame(renderer, scene, camera) {
+  if (!renderer.extensions.has('KHR_parallel_shader_compile')) return;
+  scene.updateMatrixWorld();
+  camera.updateMatrixWorld();
+  const frustum = new Frustum().setFromProjectionMatrix(
+    new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  const visible = new Group();
+  scene.traverseVisible(object => {
+    if (object.isLOD && object.autoUpdate) object.update(camera);
+    if (object.material && object.layers.test(camera.layers) &&
+        (!object.frustumCulled || frustum.intersectsObject(object))) {
+      // A temporary read-only render list; do not reparent live objects.
+      visible.children.push(object);
+    }
+  });
+  try {
+    await renderer.compileAsync(visible, camera, scene);
+  } finally {
+    visible.children.length = 0;
+  }
+}
+
 export function graphicsIndex(query, fallback) {
   let saved;
   try { saved = localStorage.getItem(preference); } catch {}
+  fallback = compactDevice ? 'LOW' : fallback;
   const name = (query.get('quality') || saved || fallback).toUpperCase();
   const index = graphicsProfiles.findIndex(profile => profile.name === name);
   return index < 0 ? graphicsProfiles.findIndex(profile => profile.name === fallback) : index;
@@ -102,6 +134,15 @@ export function bindRealism(button, query) {
     try { localStorage.setItem(realismPreference, enabled ? 'on' : 'off'); } catch {}
     update();
   });
+}
+
+export function sunShadowRefreshDue(elapsed, distanceSquared, interval) {
+  if (!compactDevice) return elapsed >= interval || distanceSquared >= 4;
+  // Recenter immediately after a jump to another view. During continuous
+  // motion, cap depth passes at 20 Hz and use a slower cadence at rest.
+  if (distanceSquared >= 24 ** 2) return true;
+  const moving = distanceSquared >= .5 ** 2;
+  return elapsed >= Math.max(interval, moving ? .05 : .12);
 }
 
 export function updateSunShadow(renderer, sun, direction, anchor, radius = sun.shadow.camera.right) {

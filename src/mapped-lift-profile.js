@@ -142,6 +142,7 @@ export function buildLiftProfile(def, ground, gauge, shoulder, surface, carpet, 
   const edges = supports.map(route.at);
   const heights = edges.map((frame, i) => {
     if (surface) return ground.heightAt(frame.x, frame.z) + (carpet ? .09 : 1.55);
+    if (i === edges.length - 1 && def.upperCableElevation != null) return def.upperCableElevation;
     if (i === 0 || i === edges.length - 1) return stationY(frame, ground, gauge, i > 0, stationDrop, shoulder);
     return ground.heightAt(frame.x, frame.z) + 6.65;
   });

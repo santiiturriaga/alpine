@@ -163,6 +163,15 @@ export function makeForestCrowns(region, species) {
   return mesh;
 }
 
+// The atlas cards and silhouette use the same fixed tree placements and tint.
+export function shareForestInstances(source, geometry, material) {
+  const mesh = new THREE.InstancedMesh(geometry, material, 0);
+  mesh.count = source.count;
+  mesh.instanceMatrix = source.instanceMatrix;
+  mesh.instanceColor = source.instanceColor;
+  return mesh;
+}
+
 export class ForestCell extends THREE.LOD {
   constructor(region, center, radius, near, far, proxy) {
     super();

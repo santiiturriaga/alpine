@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { compactDevice } from './device-budget.js';
 import { cameraClipper } from './camera-obstacles.js';
 import {
   clamp, lerp, smoothstep, noise2, mulberry32, makeTextTexture, makeCanvas,
@@ -14,7 +15,7 @@ import { surfaceMaterial } from './materials.js';
 import { coniferDepthMaterial, coniferGeometry, coniferMaterial } from './conifers.js';
 import { climateUniforms } from './climate-state.js';
 import { buildNeedleShoots } from './needle-shoots.js';
-import { ForestCell, forestDetailTiers, forestQuality, makeForestCrowns } from './forest-lod.js';
+import { ForestCell, forestDetailTiers, forestQuality, makeForestCrowns, shareForestInstances } from './forest-lod.js';
 import { part, box, beam, cacheStaticTransforms, mergeParts, mergedMesh } from './scenery.js';
 import { buildResortPeople } from './resort-people.js';
 import { buildRoundhouseArrival } from './roundhouse.js';
@@ -317,18 +318,18 @@ function buildForest(scene, grid, rand) {
     patchSizes[kind].push(trees.length);
   }
   for (const { near,trees } of stands.values()) {
-    const far = new THREE.InstancedMesh(silhouetteTemplate,silhouetteMaterial,trees.length);
     const proxy = makeForestCrowns('mapped',trees.map(tree=>tree.kind));
-    far.name = 'mature conifer silhouettes';
+    const instances = proxy ?? new THREE.InstancedMesh(silhouetteTemplate,silhouetteMaterial,trees.length);
     const center = new THREE.Vector3();
     for (const [i,tree] of trees.entries()) {
-      setTree(far,i,tree);
-      if (proxy) setTree(proxy,i,tree);
+      setTree(instances,i,tree);
       center.x += tree.x;
       center.y += tree.y + tree.apex*.5;
       center.z += tree.z;
     }
     center.multiplyScalar(1/trees.length);
+    const far = proxy ? shareForestInstances(proxy, silhouetteTemplate, silhouetteMaterial) : instances;
+    far.name = 'mature conifer silhouettes';
     far.computeBoundingSphere();
     proxy?.computeBoundingSphere();
     near.position.copy(center).negate();
@@ -431,6 +432,7 @@ function buildForest(scene, grid, rand) {
       mesh.instanceMatrix.needsUpdate = mesh.instanceColor.needsUpdate = true;
     }
   }
+  cacheStaticTransforms(group);
   return { group, count, updateDetail };
 }
 
@@ -1029,6 +1031,29 @@ function makeCabinGeometry(color = '#1d2529', accent = '#e7e1d3', big = false, c
   return shell.hull;
 }
 
+function distantChairGeometry(seats, modern) {
+  const width = seats * (modern ? .52 : .51) + .18;
+  const cushion = modern ? '#932431' : '#303d44';
+  return mergeParts([
+    box(.11, 1.75, .12, '#737f85', [-.1, -.88, -.09], [.13, 0, -.06]),
+    box(width, .10, .49, cushion, [0, -2.21, 0]),
+    box(width, .42, .08, cushion, [0, -1.95, -.20]),
+    box(width, .065, .08, '#737f85', [0, -1.80, .38]),
+    box(width * .72, .06, .10, '#3e4a51', [0, -2.66, .42]),
+  ]);
+}
+
+function distantCabinGeometry(color, big) {
+  const section = new THREE.CylinderGeometry(.54, .54, 1, 8, 1, false, Math.PI / 8);
+  const width = big ? 3.10 : 1.92, depth = big ? 3.88 : 2.02;
+  return mergeParts([
+    part(section, color, [0, big ? -3.04 : -2.89, 0], [0, 0, 0], [width, .70, depth]),
+    part(section, '#3a5362', [0, -2.10, 0], [0, 0, 0], [width, big ? 1.23 : 1.0, depth]),
+    part(section, '#ddd9cf', [0, -1.38, 0], [0, 0, 0], [width * .87, .37, depth * .87]),
+    box(big ? .65 : .15, 1.2, .14, '#879398', [0, -.64, 0]),
+  ]);
+}
+
 function towerShaftGeometry() {
   return mergeParts([
     part(new THREE.CylinderGeometry(.29, .49, 1, 10), '#74828b', [0, .5, 0]),
@@ -1262,9 +1287,12 @@ function buildLifts(scene, grid) {
   const carrierMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.65, metalness: 0.2 });
   const chairMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .54, metalness: .18 });
   const chairGeometries = new Map();
+  const distantGeometries = new Map();
   const lifts = [];
   const position = new THREE.Vector3();
   const tangent = new THREE.Vector3();
+  const view = new THREE.Frustum(), projection = new THREE.Matrix4();
+  const carrierBounds = new THREE.Sphere(position);
   let occupied = null;
 
   function liftCircuit(samplers, speed, { slowSpeed, turnDepth, approach, cabin }) {
@@ -1380,8 +1408,9 @@ function buildLifts(scene, grid) {
     if (chair && !chairGeometries.has(chairKey)) {
       chairGeometries.set(chairKey, makeChairGeometry(def.seats || 4,modernChair));
     }
+    const cabinColor = isP2P ? '#b81630' : /Excalibur/.test(def.name) ? '#e2e5de' : '#273840';
     const geometry = chair ? chairGeometries.get(chairKey)
-      : makeCabinGeometry(isP2P ? '#b81630' : /Excalibur/.test(def.name)?'#e2e5de':'#273840', '#ddd9cf', isP2P, def.name==='Creekside Gondola');
+      : makeCabinGeometry(cabinColor, '#ddd9cf', isP2P, def.name==='Creekside Gondola');
     const perSide = Math.max(3, Math.ceil(samplers[0].total / (isP2P ? 300 : chair ? 49 : 94)));
     const fixedChair = chair && ((def.seats || 2) <= 3 || def.name === 'Showcase Quad');
     const circulation = liftCircuit(samplers, def.speed, {
@@ -1413,20 +1442,39 @@ function buildLifts(scene, grid) {
       .getBoundingSphere(new THREE.Sphere());
     carriers.boundingSphere.radius += 14;
     group.add(carriers);
+    const layers = [];
     if(shell) {
       carriers.userData.gondolaCarrier=true;
       // Every display layer shares the hull matrices and reads the same
       // per-carrier door fraction. Seals and glass follow the metal leaves.
       for(const key of ['glass','frost','logo','snow']) {
-        const layer=new THREE.InstancedMesh(gondolaFleetGeometry(shell,key,doorOpen),shell.materials[key],perSide*2);
+        const layer=new THREE.InstancedMesh(gondolaFleetGeometry(shell,key,doorOpen),shell.materials[key],0);
         layer.name=def.name+' · '+key;layer.instanceMatrix=carriers.instanceMatrix;layer.userData.gondolaCarrier=true;
+        layer.count = carriers.count;
         if(key==='glass'&&def.name==='Creekside Gondola'){
           const origin=new THREE.Vector3();samplers[0].at(.04,origin,new THREE.Vector3());origin.y-=1.8;
           attachCreeksideReflection(layer,scene,origin);
         }
         layer.boundingSphere=carriers.boundingSphere;layer.renderOrder=key==='glass'?2:key==='frost'?3:1;
+        layers.push(layer);
         group.add(layer);
       }
+    }
+
+    let distantCarriers = null;
+    if (compactDevice) {
+      const distantKey = chair ? chairKey : cabinColor;
+      if (!distantGeometries.has(distantKey)) {
+        distantGeometries.set(distantKey, chair ? distantChairGeometry(def.seats || 4, modernChair)
+          : distantCabinGeometry(cabinColor, isP2P));
+      }
+      distantCarriers = new THREE.InstancedMesh(distantGeometries.get(distantKey), carrierMat, perSide * 2);
+      distantCarriers.name = def.name + ' · distant carriers';
+      distantCarriers.userData.gondolaCarrier = !!shell;
+      distantCarriers.boundingSphere = carriers.boundingSphere;
+      distantCarriers.count = 0;
+      distantCarriers.visible = false;
+      group.add(distantCarriers);
     }
 
     const passenger=shell?new THREE.Group():new THREE.Mesh(geometry,material);
@@ -1435,7 +1483,8 @@ function buildLifts(scene, grid) {
     passenger.visible = false;
     passenger.castShadow = true;
     group.add(passenger);
-    lifts.push({ def, samplers, supports, perSide, carriers, passenger, circulation, wheels, doorOpen, setPassengerDoors });
+    lifts.push({ def, samplers, supports, perSide, carriers, layers, distantCarriers,
+      passenger, circulation, wheels, doorOpen, setPassengerDoors });
   }
 
   const regular = towers.filter((t) => !t.isP2P);
@@ -1444,14 +1493,8 @@ function buildLifts(scene, grid) {
   const gondolas = towers.filter(t => !t.chair);
   const shafts = new THREE.InstancedMesh(towerShaftGeometry(), carrierMat, regular.length);
   const lattices = new THREE.InstancedMesh(latticeGeometry(), carrierMat, valley.length);
-  const heads = new THREE.InstancedMesh(towerHeadGeometry(), carrierMat, gondolas.length);
-  const chairHeads = new THREE.InstancedMesh(chairTowerHeadGeometry(), chairMat, chairs.length);
-  const chairSheaves = new THREE.InstancedMesh(chairSheaveGeometry(), chairMat, chairs.length * 4);
   shafts.name = 'Lift tower shafts';
   lattices.name = 'PEAK 2 PEAK lattice towers';
-  heads.name = 'Gondola tower heads';
-  chairHeads.name = 'Chairlift tower crossarms';
-  chairSheaves.name = 'Chairlift sheave groups';
   const setTower = (mesh, t, i, y, sx, sy) => {
     dummy.position.set(t.x, y, t.z);
     dummy.rotation.set(0, t.angle, 0);
@@ -1461,11 +1504,35 @@ function buildLifts(scene, grid) {
   };
   regular.forEach((t, i) => setTower(shafts, t, i, t.base, 1, t.y - t.base));
   valley.forEach((t, i) => setTower(lattices, t, i, t.base, 1, (t.y - t.base) / 45));
-  gondolas.forEach((t, i) => setTower(heads, t, i, t.y, t.lateral / 1.65, 1));
-  chairs.forEach((t, i) => setTower(chairHeads, t, i, t.y, t.lateral / 1.65, 1));
+  for (const mesh of [shafts, lattices]) {
+    mesh.castShadow = true;
+    group.add(mesh);
+  }
+
+  function addTowerBatches(geometry, material, family, name, fill, stride = 1) {
+    // Split off-screen sections without turning each support into its own draw.
+    const patchSize = 1200;
+    const batches = new Map();
+    for (const tower of family) {
+      const key = compactDevice ? `${Math.floor(tower.x / patchSize)},${Math.floor(tower.z / patchSize)}` : '';
+      if (!batches.has(key)) batches.set(key, []);
+      batches.get(key).push(tower);
+    }
+    for (const towers of batches.values()) {
+      const mesh = new THREE.InstancedMesh(geometry, material, towers.length * stride);
+      mesh.name = name;
+      mesh.castShadow = true;
+      towers.forEach((tower, i) => fill(mesh, tower, i * stride));
+      mesh.computeBoundingSphere();
+      group.add(mesh);
+    }
+  }
+
+  const placeTowerHead = (mesh, tower, index) => setTower(mesh, tower, index, tower.y, tower.lateral / 1.65, 1);
+  addTowerBatches(towerHeadGeometry(), carrierMat, gondolas, 'Gondola tower heads', placeTowerHead);
+  addTowerBatches(chairTowerHeadGeometry(), chairMat, chairs, 'Chairlift tower crossarms', placeTowerHead);
   const bankAxis = new THREE.Vector3(), bankUp = new THREE.Vector3(), bankBasis = new THREE.Matrix4();
-  let bankIndex = 0;
-  for (const tower of chairs) {
+  addTowerBatches(chairSheaveGeometry(), chairMat, chairs, 'Chairlift sheave groups', (mesh, tower, bankIndex) => {
     const { support, previous, next, lateral } = tower;
     for (const side of [-lateral, lateral]) {
       const origin = new THREE.Vector3(support.x + support.nx*side, support.y, support.z + support.nz*side);
@@ -1484,14 +1551,10 @@ function buildLifts(scene, grid) {
         dummy.quaternion.setFromRotationMatrix(bankBasis.makeBasis(bankAxis, bankUp, tangent));
         dummy.scale.setScalar(1);
         dummy.updateMatrix();
-        chairSheaves.setMatrixAt(bankIndex++, dummy.matrix);
+        mesh.setMatrixAt(bankIndex++, dummy.matrix);
       }
     }
-  }
-  for (const mesh of [shafts, lattices, heads, chairHeads, chairSheaves]) {
-    mesh.castShadow = true;
-    group.add(mesh);
-  }
+  }, 4);
 
   function setPassenger(lift, direction, t, doorOpening) {
     if (occupied && (!lift || occupied.lift !== lift)) occupied.lift.passenger.visible = false;
@@ -1509,28 +1572,58 @@ function buildLifts(scene, grid) {
     return doorOpening;
   }
 
-  function update(clock) {
+  function update(clock, camera) {
+    const useLod = compactDevice && !!camera;
+    let focalPixels = 0;
+    if (useLod) {
+      camera.updateMatrixWorld();
+      view.setFromProjectionMatrix(projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+      focalPixels = camera.projectionMatrix.elements[5] * window.innerHeight * .5;
+    }
     const state={};
     for (const lift of lifts) {
       if (!lift.def.aerial) { lift.surfaceUpdate?.(clock); continue; }
-      const { samplers, carriers, perSide, circulation, wheels, doorOpen } = lift;
+      const { samplers, carriers, layers, distantCarriers, perSide, circulation, wheels, doorOpen } = lift;
       for (const wheel of wheels) wheel(clock);
       const count = perSide * 2, headway = circulation.duration / count;
       const own = occupied?.lift === lift;
+      const size = lift.def.type === 'p2p' ? 4.2 : lift.def.type === 'chair' ? 2.75 : 3.3;
+      const detailedRangeSquared = Math.max(30, size * focalPixels / 12) ** 2;
+      carrierBounds.radius = size + .8;
+      let nearCount = 0, farCount = 0;
       for (let i = 0; i < count; i++) {
         circulation.at(clock + i * headway, position, tangent, state);
         const sameRope = own && state.direction === occupied.direction
           && Math.abs(state.t - occupied.t) * samplers[occupied.direction].total < 8;
         const intersectsRider = own && position.distanceToSquared(lift.passenger.position) < 2.8 ** 2;
+        if (useLod && (sameRope || intersectsRider || !view.intersectsSphere(carrierBounds))) continue;
         dummy.position.copy(position);
         dummy.rotation.set(0, Math.atan2(tangent.x, tangent.z), 0);
         dummy.scale.setScalar(sameRope || intersectsRider ? 0 : 1);
         dummy.updateMatrix();
-        carriers.setMatrixAt(i, dummy.matrix);
-        doorOpen?.setX(i, state.doorOpening);
+        if (useLod && camera.position.distanceToSquared(position) > detailedRangeSquared) {
+          distantCarriers.setMatrixAt(farCount++, dummy.matrix);
+          continue;
+        }
+        carriers.setMatrixAt(nearCount, dummy.matrix);
+        doorOpen?.setX(nearCount, state.doorOpening);
+        nearCount++;
       }
-      carriers.instanceMatrix.needsUpdate = true;
-      if (doorOpen) doorOpen.needsUpdate = true;
+      carriers.count = nearCount;
+      carriers.visible = nearCount > 0;
+      for (const layer of layers) {
+        layer.count = nearCount;
+        layer.visible = carriers.visible;
+      }
+      if (nearCount) {
+        carriers.instanceMatrix.needsUpdate = true;
+        if (doorOpen) doorOpen.needsUpdate = true;
+      }
+      if (distantCarriers) {
+        distantCarriers.count = farCount;
+        distantCarriers.visible = farCount > 0;
+        if (farCount) distantCarriers.instanceMatrix.needsUpdate = true;
+      }
     }
   }
 
@@ -1847,7 +1940,7 @@ function roofHalf(points, sign) {
   return side;
 }
 
-function buildVillage(scene, grid) {
+function buildVillage(scene, grid, district = null) {
   const data = new Map();
   const palette = [0x776659, 0x7c7771, 0x616b69, 0x887766, 0x777d72, 0x644f44];
   const frame = new THREE.Color(0x282c2b), glass = new THREE.Color(0x587582);
@@ -1855,7 +1948,7 @@ function buildVillage(scene, grid) {
   const bucket = () => ({ xyz: [], rgb: [] });
 
   for (const lot of buildingData) {
-    if (ENTERABLE_VILLAGE_IDS.has(lot.id) || REPLACED_STATION_BUILDING_IDS.has(lot.id) ||
+    if (district ? !district.has(lot.id) : ENTERABLE_VILLAGE_IDS.has(lot.id) || REPLACED_STATION_BUILDING_IDS.has(lot.id) ||
         FAIRMONT_REPLACED_IDS.has(lot.id) || CREEKSIDE_BUILDING_IDS.has(lot.id) || SKIERS_PLAZA_BUILDING_IDS.has(lot.id) || lot.id === '146628098') continue;
     const points = lot.points.filter((p, i, all) => {
       const previous = all[(i + all.length - 1) % all.length];
@@ -1901,7 +1994,7 @@ function buildVillage(scene, grid) {
     const clockwise = THREE.ShapeUtils.isClockWise(points.map(([x, z]) => new THREE.Vector2(x, z)));
     const roofY = (v) => top + section.pitch * Math.max(0, 1 - Math.abs(v) / width);
     const roofAt = (px, pz) => roofY((pz - z) * cos - (px - x) * sin) + .08;
-    grid.addBuilding({ id: lot.id, points, roofAt, upperGround, measured: !!measured, generic: true });
+    grid?.addBuilding({ id: lot.id, points, roofAt, upperGround, measured: !!measured, generic: true });
 
     for (const [i, a] of points.entries()) {
       const j = (i + 1) % points.length, b = points[j];
@@ -1925,9 +2018,9 @@ function buildVillage(scene, grid) {
         const [ax, az, va] = corners[k - 1], [bx, bz, vb] = corners[k];
         appendQuad(mesh.walls, [ax, base, az], [bx, base, bz], [bx, roofY(vb), bz], [ax, roofY(va), az], trim);
       }
-      grid.addBox((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, len / 2 + .08, .16,
+      grid?.addBox((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, len / 2 + .08, .16,
         Math.atan2(dz, dx), 'building-wall', { buildingId: lot.id, maxY: Math.max(roofY(v0), roofY(v1), v0 * v1 < 0 ? roofY(0) : -Infinity) });
-      if (len < 3.1) continue;
+      if (len < 3.1 || district) continue;
       const out = clockwise ? 1 : -1;
       const pane = (t0, t1, y, h, offset, material, seed=0, left=0, right=255) => {
         const nx = -dz / len * out * offset, nz = dx / len * out * offset;
@@ -1975,9 +2068,11 @@ function buildVillage(scene, grid) {
       if (!part.xyz.length) continue;
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(part.xyz, 3));
-      geometry.setAttribute('color', new THREE.Float32BufferAttribute(part.rgb, 3));
+      geometry.setAttribute('color', new THREE.BufferAttribute(Uint16Array.from(part.rgb, v => Math.round(v * 65535)), 3, true));
       if(part.pane)geometry.setAttribute('windowPane',new THREE.Uint8BufferAttribute(part.pane,3,true));
       geometry.computeVertexNormals();
+      part.xyz.length = part.rgb.length = 0;
+      if (part.pane) part.pane.length = 0;
       const mesh = new THREE.Mesh(geometry, materials[name]);
       mesh.name = 'Mapped village ' + name;
       mesh.castShadow = name !== 'windows';
@@ -1987,6 +2082,37 @@ function buildVillage(scene, grid) {
   }
   scene.add(village);
   cacheStaticTransforms(village);
+  return village;
+}
+
+// At summit distance the surveyed building envelopes occupy only a few pixels.
+// Construct their architectural details and walk surfaces on approach, before entry.
+function resortDistrict(scene, grid, ids, x, z, build) {
+  if (!compactDevice) return build(scene, { grid });
+  const outline = buildVillage(scene, null, ids);
+  let district;
+  function near(px, pz) {
+    if (!district && (px - x) ** 2 + (pz - z) ** 2 < 1200 ** 2) {
+      district = build(scene, { grid });
+      outline.removeFromParent();
+      const materials = new Set();
+      for (const mesh of outline.children) {
+        mesh.geometry.dispose();
+        materials.add(mesh.material);
+      }
+      for (const material of materials) material.dispose();
+      outline.clear();
+    }
+    return district;
+  }
+  return {
+    update(dt, time, camera) {
+      if (camera) near(camera.position.x, camera.position.z)?.update(dt, time, camera);
+    },
+    walkSurfaceAt(px, pz, y) {
+      return near(px, pz)?.walkSurfaceAt?.(px, pz, y);
+    },
+  };
 }
 
 function buildFitzTerminal(scene, grid, markers, def, pointIndex) {
@@ -2213,8 +2339,8 @@ export async function buildEnvironment(scene, { onProgress = () => {} } = {}) {
   const updateSummitSigns = buildSummitLandmarks(scene);
   roundhouseArrival.update(0);
   updateSummitSigns(0);
-  const fairmont=buildFairmont(scene,{grid});
-  const creeksideVillage=buildCreeksideVillage(scene,{grid});
+  const fairmont = resortDistrict(scene, grid, FAIRMONT_REPLACED_IDS, 523, -434, buildFairmont);
+  const creeksideVillage = resortDistrict(scene, grid, CREEKSIDE_BUILDING_IDS, -2549, 2071, buildCreeksideVillage);
   const interiors = buildLodgeInteriors(scene, grid);
 
   onProgress(0.65, 'Hanging the trail signs…');
@@ -2279,7 +2405,7 @@ export async function buildEnvironment(scene, { onProgress = () => {} } = {}) {
       if (!camera || Math.hypot(camera.position.x-488,camera.position.z-4844)<1050) roundhouseArrival.update(time);
       if (!camera || camera.position.z>4400 && camera.position.z<6250) updateSummitSigns(time);
       if (camera) forest.updateDetail(camera);
-      lifts.update(time);
+      lifts.update(time, camera);
       stationOperations.update(time, camera);
       flags.update(time);
     },
@@ -2300,7 +2426,7 @@ export async function buildEnvironment(scene, { onProgress = () => {} } = {}) {
     },
   };
 
-  onProgress(1, 'Ready.');
+  onProgress(1, 'Checking the snow…');
   return env;
 }
 

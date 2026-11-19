@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { internationalLandmarkSite } from './international-landmark-sites.js';
 import { pointInPolygon, segmentDistance } from './mapped-resort-ground.js';
 import { liftPoint } from './mapped-lift-profile.js';
 import { makeTextTexture, mulberry32 } from './util.js';
@@ -316,7 +317,9 @@ export function buildMappedLodges(scene, config, ground, env) {
   env.roofHeightNear = roofs.heightNear;
   const terminals = (config.lifts ?? []).filter(lift => lift.kind !== 'surface' && lift.points?.length > 1)
     .flatMap(lift => [liftPoint(lift.points[0]), liftPoint(lift.points.at(-1))]);
+  const customBuildings = internationalLandmarkSite(config.id)?.buildings;
   for (const building of config.buildings ?? []) {
+    if (customBuildings?.includes(building.osmId)) continue;
     const points = building.points.filter((point, i) => {
       const next = building.points[(i + 1) % building.points.length];
       return Math.hypot(point[0] - next[0], point[1] - next[1]) > .18;

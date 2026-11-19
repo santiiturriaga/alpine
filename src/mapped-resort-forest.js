@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { coniferDepthMaterial, coniferGeometry, coniferMaterial } from './conifers.js';
-import { ForestCell, forestDetailTiers, makeForestCrowns, preloadForestCrowns } from './forest-lod.js';
+import { ForestCell, forestDetailTiers, makeForestCrowns, preloadForestCrowns, shareForestInstances } from './forest-lod.js';
 import { pointInPolygon, runStyle, segmentDistance } from './mapped-resort-ground.js';
 import { stevensTraverseTrees, STEVENS_POWERLINE } from './stevens-pass-details.js';
 import { hash2, smoothstep } from './util.js';
+import { cacheStaticTransforms } from './scenery.js';
 
 const PATCH = 210;
 const TREE_SPACING = 12;
@@ -234,13 +235,11 @@ export async function buildMappedForest(scene, ground, config, env) {
       }
       proxy.material = proxyMaterial;
     }
-    const distant = new THREE.InstancedMesh(far, silhouette, trees.length);
-    for (let i = 0; i < trees.length; i++) {
-      setTree(distant, i, trees[i]);
-      if (proxy) setTree(proxy, i, trees[i]);
-    }
-    finalize(distant);
-    if (proxy) finalize(proxy);
+    const instances = proxy ?? new THREE.InstancedMesh(far, silhouette, trees.length);
+    for (let i = 0; i < trees.length; i++) setTree(instances, i, trees[i]);
+    finalize(instances);
+    const distant = proxy ? shareForestInstances(proxy, far, silhouette) : instances;
+    if (proxy) distant.computeBoundingSphere();
     near.position.copy(center).negate();
     distant.position.copy(near.position);
     proxy?.position.copy(near.position);
@@ -321,5 +320,6 @@ export async function buildMappedForest(scene, ground, config, env) {
       mesh.instanceMatrix.needsUpdate = mesh.instanceColor.needsUpdate = true;
     }
   }
+  cacheStaticTransforms(group);
   return { group, count, update, setQuality };
 }

@@ -205,7 +205,7 @@ export function buildVillageLighting(scene, { grid } = {}) {
     bay.name='Eagle Lodge · north corner turret';bay.position.set(cx,floor,cz);root.add(bay);
     const timber=[],panes=[],roofEdges=[],count=8,radius=10.45,apex=7.7,eave=2.62;
     const point=(i,r,h)=>[Math.sin((i+.5)*Math.PI/4)*r,h,Math.cos((i+.5)*Math.PI/4)*r];
-    const band=(r,h,depth,color)=>part(new THREE.CylinderGeometry(r,r,depth,count,Math.PI/8),color,[0,h,0]);
+    const band=(r,h,depth,color)=>part(new THREE.CylinderGeometry(r,r,depth,count,1,false,Math.PI/8),color,[0,h,0]);
     timber.push(band(radius,1.02,2.76,'#765f57'),band(radius+.49,eave,.22,'#9e8976'),
       band(radius+.45,-.16,.28,'#654f43'),band(radius+.23,-2.75,.22,'#7d685d'));
     for(let i=0;i<count;i++){

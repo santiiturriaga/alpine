@@ -6,7 +6,7 @@
 
 You start with your skis on, just outside the Whistler Village Gondola at Roundhouse Lodge. Push off toward Ego Bowl, walk over to the Olympic rings, or board the red PEAK 2 PEAK gondola and watch Blackcomb come into view. [Play in your browser](https://santiiturriaga.github.io/alpine/)
 
-Open **Mountain → Resort** to choose from 13 ski regions and seven summit areas. Ski the measured runs of Les 3 Vallées, Zermatt–Cervinia, Chamonix, Ski Arlberg, Verbier, Tignes–Val d’Isère, Vail, Jackson Hole, and Niseko. The summit areas start on foot and include viewpoints on Rainier, Mont Blanc, the Matterhorn, Eiger, Denali, Everest, and K2.
+Open **Destinations** to browse 13 ski regions and seven summit areas. On a phone, the game opens here. Swipe between mountains or rotate a relief to see where its lifts climb. Choose Whistler to start at Roundhouse. [Browse the mountains](https://santiiturriaga.github.io/alpine/?selector)
 
 ## Your first run
 
@@ -22,7 +22,9 @@ For company, have a friend open the same resort and drop in. You’ll join the s
 - The mountain runs on a 20-minute day. Under **G → Conditions**, choose **Golden Hour**, **Extreme Whiteout**, or **Peak crowds**. Mapped night-skiing zones light up after dark.
 - Open **G → Sled Run** to race White Fir Chute. Steer around the trees and rolling snowballs, then time your jumps off the ramps to cross the gaps.
 - Open **G** for the Blackcomb Glacier cave, Springboard race, Whiskey Jack slalom, or summer biking. **L** opens the outfitter. Your gear, coins, field photos, and profile save in your browser.
-- Press **Esc** for graphics quality, the separate **Realism** lighting toggle, and the Field Guide.
+- Visit the outfitter and barber in Whistler Village to try on a shell or change your hair. Traverse ski shoes cost eight mountain coins and make it easier to walk uphill through snow.
+- Ride Galzigbahn at St. Anton, climb the stairs at Mont Fort, or cross the footbridge at Aiguille du Midi. Each is marked on its resort map. [Landmark photos, plans and elevation sources](data/mountains/INTERNATIONAL-LANDMARKS.md)
+- Press **Esc** for graphics quality, **Realism**, and the Field Guide. Realism uses the terrain around each point to shade sheltered snow as the sun moves. Ice and gondola glass reflect the colour of the sky.
 
 ## Run it locally
 

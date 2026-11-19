@@ -10,12 +10,18 @@ import { regionBounds, blackTuskBounds } from '../data/geography.js';
 import { surfaceMaterial } from './materials.js';
 import { climateUniforms } from './climate-state.js';
 import { coniferGeometry, coniferMaterial } from './conifers.js';
-import { ForestCell, makeForestCrowns, preloadForestCrowns } from './forest-lod.js';
+import { ForestCell, makeForestCrowns, preloadForestCrowns, shareForestInstances } from './forest-lod.js';
 import { createSkiSnowSurface, SKI_SNOW_FOOTPRINT } from './ski-snow-surface.js';
 import { prepareValleyLakes } from './valley-scenery.js';
 import { createStationGrading } from './station-sites.js';
 import { gradeGlacierCave } from './glacier-cave.js';
 import { compressSnow } from './snow-traffic.js';
+import { compactDevice } from './device-budget.js';
+import { terrainHorizon } from './terrain-horizon.js';
+import { LODGE_FRAME, LODGE_ANNEX } from './roundhouse-site.js';
+import { triangleHeight, worldIndex, boxBlurGrid } from './terrain-grid.js';
+import { startSnowGeneration } from './terrain-snow-worker-client.js';
+import { cacheStaticTransforms } from './scenery.js';
 
 export const terrain = {
   heightAt,
@@ -50,24 +56,6 @@ async function loadGrid(file, bounds) {
   return { heights, cover };
 }
 
-// Keep the gameplay collision grid and the drawn triangles on the same surface.
-function triangleHeight(data, n, gx, gz) {
-  const ix = Math.min(n - 2, Math.floor(gx)), iz = Math.min(n - 2, Math.floor(gz));
-  const tx = gx - ix, tz = gz - iz;
-  const i = iz * n + ix;
-  if (tx + tz <= 1) {
-    return data[i] * (1 - tx - tz) + data[i + 1] * tx + data[i + n] * tz;
-  }
-  return data[i + n + 1] * (tx + tz - 1) + data[i + 1] * (1 - tz) + data[i + n] * (1 - tx);
-}
-
-function worldIndex(x, z, bounds) {
-  return [
-    clamp((x - bounds.minX) / (bounds.maxX - bounds.minX), 0, 1) * (bounds.grid - 1),
-    clamp((z - bounds.minZ) / (bounds.maxZ - bounds.minZ), 0, 1) * (bounds.grid - 1),
-  ];
-}
-
 export function landCoverAt(x, z) {
   if (!landCover) return 0;
   const [gx, gz] = worldIndex(x, z, WORLD);
@@ -81,111 +69,6 @@ export function treeCoverAt(x, z) {
     count += Number(landCoverAt(x + dx, z + dz) === 10);
   }
   return count / 5;
-}
-
-function buildSnowField() {
-  const data = new Uint8Array(maskN * maskN * 4);
-  // A land-cover cell spans about 17 metres. Feather mapped forest edges
-  // before packing coverage so a single cell cannot color an entire patch.
-  const woodland = boxBlurGrid(Float32Array.from(landCover, kind => Number(kind === 10)), 1, 2);
-  const gridScale = (n - 1) / maskN;
-  for (let j = 0; j < maskN; j++) {
-    const z = WORLD.minZ + (j + .5) * WORLD.sizeZ / maskN;
-    const gz = (j + .5) * gridScale;
-    const row = Math.floor(gz) * n, tz = gz % 1;
-    for (let i = 0; i < maskN; i++) {
-      const x = WORLD.minX + (i + .5) * WORLD.sizeX / maskN;
-      const gx = (i + .5) * gridScale;
-      const gridIndex = row + Math.floor(gx), tx = gx % 1;
-      const index = j * maskN + i, key = 4 * index;
-      const piste = mask[index];
-      const h = triangleHeight(heights, n, gx, gz);
-      const drift = .5 + .5 * noise.fbm(x * .034, z * .027, 3);
-      const scoured = noise2.fbm(x * .062 + z * .019, z * .024 - x * .009, 3);
-      const wind = .5 + .5 * noise.fbm(x * .012 + 12, z * .014, 2);
-      const crossing = Math.hypot(x - 481, z - 4855);
-      const pad = 1 - smoothstep(23, 99, crossing);
-      const powder = (.26 + .74 * smoothstep(.21, .78, drift)) * (1 - .88 * smoothstep(.18, .72, piste)) * (1 - pad);
-      const scale = smoothstep(745, 1210, h) * (1 - pad) * (1 - .61 * powder);
-      const ice = smoothstep(.285, .57, scoured + .205 * piste + .15 * wind)
-        * smoothstep(.06, .71, .55 * piste + .67 * wind) * scale;
-      data[key] = Math.round(255 * piste);
-      data[key + 1] = Math.round(255 * powder);
-      data[key + 2] = Math.round(255 * ice);
-      const forest = lerp(lerp(woodland[gridIndex], woodland[gridIndex + 1], tx),
-        lerp(woodland[gridIndex + n], woodland[gridIndex + n + 1], tx), tz);
-      data[key + 3] = Math.round(255 * forest);
-    }
-  }
-  return data;
-}
-
-function buildGroomingMap() {
-  const data = new Uint16Array(maskN * maskN);
-  const closest = new Float32Array(maskN * maskN).fill(Infinity);
-  const dx = WORLD.sizeX / maskN, dz = WORLD.sizeZ / maskN;
-  for (const run of RUNS) {
-    if (run.gladed) continue;
-    const reach = run.width * .5 + 2 * Math.max(dx, dz);
-    for (let k = 1; k < run.points.length; k++) {
-      const [ax, az] = run.points[k - 1], [bx, bz] = run.points[k];
-      const vx = bx - ax, vz = bz - az;
-      const length = Math.hypot(vx, vz);
-      if (length === 0) continue;
-      const inverseLength = 1 / length;
-      const inverseLengthSquared = inverseLength * inverseLength;
-      const reachSquared = reach * reach;
-      const ix0 = Math.max(0, Math.floor((Math.min(ax, bx) - reach - WORLD.minX) / dx));
-      const iz0 = Math.max(0, Math.floor((Math.min(az, bz) - reach - WORLD.minZ) / dz));
-      const ix1 = Math.min(maskN - 1, Math.floor((Math.max(ax, bx) + reach - WORLD.minX) / dx));
-      const iz1 = Math.min(maskN - 1, Math.floor((Math.max(az, bz) + reach - WORLD.minZ) / dz));
-      for (let iz = iz0; iz <= iz1; iz++) {
-        const z = WORLD.minZ + (iz + .5) * dz - az;
-        for (let ix = ix0; ix <= ix1; ix++) {
-          const index = iz * maskN + ix;
-          if (mask[index] < .24) continue;
-          const x = WORLD.minX + (ix + .5) * dx - ax;
-          const t = clamp((x * vx + z * vz) * inverseLengthSquared, 0, 1);
-          const distance = (x - t * vx) ** 2 + (z - t * vz) ** 2;
-          if (distance > reachSquared || distance >= closest[index]) continue;
-          closest[index] = distance;
-          const across = (z * vx - x * vz) * inverseLength;
-          data[index] = THREE.DataUtils.toHalfFloat(across);
-        }
-      }
-    }
-  }
-  const map = new THREE.DataTexture(data, maskN, maskN, THREE.RedFormat, THREE.HalfFloatType);
-  map.minFilter = map.magFilter = THREE.LinearFilter;
-  map.needsUpdate = true;
-  return map;
-}
-
-function buildMountainShade() {
-  const size = 385, shade = new Uint8Array(size * size);
-  // The sun vector's horizontal bearing in easting/southing coordinates.
-  const horizontal = Math.hypot(.56, .715);
-  const dx = -.56 / horizontal, dz = .715 / horizontal, slope = .415 / horizontal;
-  const distances = [28, 45, 70, 110, 165, 235, 335, 460, 625, 840, 1120, 1500, 1950, 2450, 3100];
-  const sample = (x, z) => triangleHeight(heights, n, ...worldIndex(x,z,WORLD));
-  for (let j = 0; j < size; j++) {
-    const z = WORLD.minZ + (j + .5) * WORLD.sizeZ / size;
-    for (let i = 0; i < size; i++) {
-      const x = WORLD.minX + (i + .5) * WORLD.sizeX / size;
-      const local = sample(x,z);
-      let obstruction = -1;
-      for (const distance of distances) {
-        const tx = x + distance * dx, tz = z + distance * dz;
-        if (tx < WORLD.minX || tx > WORLD.maxX || tz < WORLD.minZ || tz > WORLD.maxZ) break;
-        obstruction = Math.max(obstruction, (sample(tx,tz)-local)/distance - slope);
-      }
-      shade[j * size + i] = Math.round(255 * (1 - smoothstep(-.018, .041, obstruction)));
-    }
-  }
-  const map = new THREE.DataTexture(shade,size,size,THREE.RedFormat);
-  map.minFilter = map.magFilter = THREE.LinearFilter;
-  map.needsUpdate = true;
-  return map;
 }
 
 // Use the same linear interpolation as the shader's surface sampler.
@@ -432,13 +315,14 @@ function makeTerrainDetail(mesh, material) {
 function drawOldTracks(origin, span, seed, count, maxLength) {
   // A generated snow-compaction layer, projected onto the actual snow mesh.
   const random = mulberry32(seed);
-  const { canvas, ctx } = makeCanvas(2048, 2048);
+  const resolution = compactDevice ? 1024 : 2048;
+  const { canvas, ctx } = makeCanvas(resolution, resolution);
   const map = new THREE.CanvasTexture(canvas);
   map.generateMipmaps = true;
   map.minFilter = THREE.LinearMipmapLinearFilter;
-  const scale = 2048 / span;
+  const scale = resolution / span;
   ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, 2048, 2048);
+  ctx.fillRect(0, 0, resolution, resolution);
   ctx.lineCap = 'round';
   for (let route = 0; route < count; route++) {
     const x = random()*span, z = 8+random()*(span-16);
@@ -453,7 +337,7 @@ function drawOldTracks(origin, span, seed, count, maxLength) {
         const t = i/24;
         const lateral = Math.sin(t*(1.5+route%4)*Math.PI+route)*swing+edge*stride*.5;
         const xx = (x+Math.sin(heading)*t*length+Math.cos(heading)*lateral)*scale;
-        const zz = 2048-(z+Math.cos(heading)*t*length-Math.sin(heading)*lateral)*scale;
+        const zz = resolution-(z+Math.cos(heading)*t*length-Math.sin(heading)*lateral)*scale;
         if (i===0) ctx.moveTo(xx,zz); else ctx.lineTo(xx,zz);
       }
       ctx.lineWidth = width*scale;
@@ -468,7 +352,8 @@ function drawOldTracks(origin, span, seed, count, maxLength) {
 
 function villageFootpaths() {
   const origin=new THREE.Vector2(-157,-656),span=66;
-  const { canvas,ctx }=makeCanvas(1536,1536);
+  const resolution = compactDevice ? 768 : 1536;
+  const { canvas,ctx }=makeCanvas(resolution,resolution);
   const scale=canvas.width/span,rand=mulberry32(61843);
   ctx.fillStyle='#000';ctx.fillRect(0,0,canvas.width,canvas.height);
   // Intersecting walks through the square and along the photo rail. Each
@@ -655,22 +540,23 @@ export function buildCoastMountains({ heights, cover }, tusk) {
     for (const [x, y, z] of groves) center.add(new THREE.Vector3(x, y + 12, z));
     center.multiplyScalar(1 / groves.length);
     const near = new THREE.InstancedMesh(regionalNear, regionalMaterial, groves.length);
-    const far = new THREE.InstancedMesh(regionalFar, regionalFarMaterial, groves.length);
     const proxy = makeForestCrowns('regional',groves.map(() => 2));
+    const instances = proxy ?? new THREE.InstancedMesh(regionalFar, regionalFarMaterial, groves.length);
     for (const [index, [x, y, z, size, yaw]] of groves.entries()) {
       tree.position.set(x - center.x, y - center.y - .3, z - center.z);
       tree.scale.set(size * 1.12, size, size * 1.12);
       tree.rotation.set(0, yaw, 0);
       tree.updateMatrix();
       near.setMatrixAt(index, tree.matrix);
-      far.setMatrixAt(index, tree.matrix);
-      proxy?.setMatrixAt(index,tree.matrix);
+      instances.setMatrixAt(index, tree.matrix);
     }
+    const far = proxy ? shareForestInstances(proxy, regionalFar, regionalFarMaterial) : instances;
     near.computeBoundingSphere(); far.computeBoundingSphere();
     proxy?.computeBoundingSphere();
     const radius = near.boundingSphere.radius + near.boundingSphere.center.length();
     surrounding.add(new ForestCell('regional',center,radius,near,far,proxy));
   }
+  cacheStaticTransforms(surrounding);
   return surrounding;
 }
 
@@ -737,32 +623,6 @@ function sampleMask(x, z) {
   return lerp(lerp(a, b, tx), lerp(c, d, tx), tz);
 }
 
-function boxBlurGrid(src, radius, iterations = 2) {
-  const N = n;
-  let a = src, b = new Float32Array(src.length);
-  const w = radius * 2 + 1;
-  for (let it = 0; it < iterations; it++) {
-    for (let y = 0; y < N; y++) {
-      let sum = 0;
-      const row = y * N;
-      for (let x = -radius; x <= radius; x++) sum += a[row + clamp(x, 0, N - 1)];
-      for (let x = 0; x < N; x++) {
-        b[row + x] = sum / w;
-        sum += a[row + Math.min(N - 1, x + radius + 1)] - a[row + Math.max(0, x - radius)];
-      }
-    }
-    for (let x = 0; x < N; x++) {
-      let sum = 0;
-      for (let y = -radius; y <= radius; y++) sum += b[clamp(y, 0, N - 1) * N + x];
-      for (let y = 0; y < N; y++) {
-        a[y * N + x] = sum / w;
-        sum += b[Math.min(N - 1, y + radius + 1) * N + x] - b[Math.max(0, y - radius) * N + x];
-      }
-    }
-  }
-  return a;
-}
-
 export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Promise.resolve()) {
   initWorldData();
   onProgress(0.08, 'Sounding the snowpack…');
@@ -781,14 +641,24 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
   const dz = WORLD.sizeZ / (N - 1);
   const stationGrading = createStationGrading((x, z) => originalDetailVertex(...worldIndex(x, z, WORLD)));
   gradeStation = (x, z, y) => gradeGlacierCave(x, z, stationGrading(x, z, y));
-  gradedHeights = heights.map((elevation, i) =>
-    gradeStation(WORLD.minX + i % N * cell, WORLD.minZ + Math.floor(i / N) * dz, elevation));
+  gradedHeights = new Float32Array(heights.length);
+  for (let j = 0; j < N; j++) {
+    if (j && j % 16 === 0) await yieldFrame();
+    for (let i = 0; i < N; i++) {
+      const index = j * N + i;
+      gradedHeights[index] = gradeStation(WORLD.minX + i * cell, WORLD.minZ + j * dz, heights[index]);
+    }
+  }
 
   onProgress(0.2, 'Tracing mapped ski runs…');
   await yieldFrame();
   const m = buildMask(1536);
   mask = m.mask;
   maskN = m.res;
+  // The worker runs the expensive noise fields while this thread shades the
+  // base mesh. The document's own Canvas mask drives both paths unchanged.
+  const snowGeneration = startSnowGeneration(
+    { heights, cover: landCover, mask, bounds: WORLD, runs: RUNS }, yieldFrame);
 
   // Build mesh.
   const vcount = N * N;
@@ -802,14 +672,15 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
   const snowShade = new THREE.Color().setRGB(0.84, 0.895, 0.95, THREE.SRGBColorSpace);
   const snowWind = new THREE.Color().setRGB(0.83, 0.895, 0.945, THREE.SRGBColorSpace);
   const col = new THREE.Color();
-  const blurred = boxBlurGrid(gradedHeights.slice(), 3, 1);
+  const blurred = boxBlurGrid(gradedHeights.slice(), n, 3, 1);
   const winterShore = new THREE.Color(0x95aeba);
-  const waterEdge = boxBlurGrid(Float32Array.from(landCover, kind => Number(kind === 80)), 1, 2);
+  const waterEdge = boxBlurGrid(Float32Array.from(landCover, kind => Number(kind === 80)), n, 1, 2);
 
   onProgress(0.5, 'Shading the alpine…');
   await yieldFrame();
 
   for (let j = 0; j < N; j++) {
+    if (j && j % 16 === 0) await yieldFrame();
     const z = WORLD.minZ + j * dz;
     for (let i = 0; i < N; i++) {
       const k = j * N + i;
@@ -871,7 +742,8 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
   onProgress(0.66, 'Grooming corduroy…');
   await yieldFrame();
 
-  snowField = buildSnowField();
+  const generatedSnow = await snowGeneration;
+  snowField = generatedSnow.snowField;
   const pisteMap = new THREE.DataTexture(snowField, maskN, maskN, THREE.RGBAFormat);
   pisteMap.minFilter = pisteMap.magFilter = THREE.LinearFilter;
   pisteMap.needsUpdate = true;
@@ -880,10 +752,15 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     bowl: drawOldTracks(new THREE.Vector2(-24,4995),230,6529,625,81),
     village: villageFootpaths(),
   };
-  const roomCutout = new THREE.Vector4(), roomYaw = new THREE.Vector2(1, 0);
-  const mountainShade = buildMountainShade();
-  const groomingMap = buildGroomingMap();
-  const snowMaps = { pisteMap, tracks, roomCutout, roomYaw, mountainShade, groomingMap };
+  const roomCutout = new THREE.Vector4(), annexCutout = new THREE.Vector4(), roomYaw = new THREE.Vector2(1, 0);
+  const mountainShade = new THREE.DataTexture(generatedSnow.shade, 385, 385, THREE.RedFormat);
+  const groomingMap = new THREE.DataTexture(generatedSnow.grooming, maskN, maskN, THREE.RedFormat, THREE.HalfFloatType);
+  for (const map of [mountainShade, groomingMap]) {
+    map.minFilter = map.magFilter = THREE.LinearFilter;
+    map.needsUpdate = true;
+  }
+  const horizon = terrainHorizon(gradedHeights, N, N, WORLD);
+  const snowMaps = { pisteMap, tracks, roomCutout, annexCutout, roomYaw, mountainShade, groomingMap, horizon };
   const mat = surfaceMaterial('snow', { vertexColors: true }, snowMaps);
   const mesh = makePatches(N, [
     ['position', positions, 3], ['normal', normals, 3], ['color', colors, 3],
@@ -978,12 +855,17 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     if (!room) return;
     roomCutout.set(room.x, room.z, room.w / 2 - .07, room.d / 2 - .07);
     roomYaw.set(Math.cos(room.yaw), Math.sin(room.yaw));
+    const dx = LODGE_FRAME.x - room.x, dz = LODGE_FRAME.z - room.z;
+    annexCutout.set(LODGE_ANNEX.x + dx * roomYaw.x - dz * roomYaw.y,
+      LODGE_ANNEX.z + dx * roomYaw.y + dz * roomYaw.x,
+      LODGE_ANNEX.width / 2 - .06, LODGE_ANNEX.depth / 2 - .06);
   };
   terrain.heights = gradedHeights;
   terrain.n = N;
   terrain.cell = cell;
   terrain.mask = mask;
   terrain.maskN = maskN;
+  terrain.snowGeneration = generatedSnow.execution;
 
   onProgress(0.78, 'Snow is falling…');
   await yieldFrame();

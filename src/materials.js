@@ -3,6 +3,7 @@ import { WORLD } from './worlddata.js';
 import { climateUniforms } from './climate-state.js';
 import { bindSnowTraffic, snowTrafficGLSL } from './snow-traffic.js';
 import { bindSnowCrystals } from './snow-crystals.js';
+import { bindTerrainHorizon } from './terrain-horizon.js';
 
 const noise = /* glsl */ `
   varying vec3 surfacePoint;
@@ -46,11 +47,17 @@ const surfaces = {
       vec2 roomPoint = p.xz - roomCutout.xy;
       vec2 roomLocal = vec2(roomPoint.x*roomYaw.x-roomPoint.y*roomYaw.y,
         roomPoint.x*roomYaw.y+roomPoint.y*roomYaw.x);
-      if (all(lessThan(abs(roomLocal),roomCutout.zw))) discard;
+      if (all(lessThan(abs(roomLocal),roomCutout.zw)) || all(lessThan(abs(roomLocal-annexCutout.xy),annexCutout.zw))) discard;
       float distanceToEye = length(vViewPosition);
       vec2 pisteUv = (p.xz - pisteLimits.xy) / pisteLimits.zw;
       vec4 snowMix = texture2D(pisteCoverage, pisteUv);
       float sunFromTerrain = mix(1.0, mix(.24, 1.0, texture2D(mountainShade,pisteUv).r), climateTerrainSun);
+      float skyView = 1.;
+      if (climateRealism > .5) {
+        vec2 horizon = terrainLight(pisteUv);
+        sunFromTerrain = mix(.08, 1., horizon.x);
+        skyView = horizon.y;
+      }
       float groomed = smoothstep(.21,.63,snowMix.r);
       float ice = smoothstep(.22,.53,snowMix.b);
       float traffic = trackPressure(p.xz) * (1.0-ice);
@@ -223,6 +230,10 @@ const surfaces = {
       float veil=smoothstep(.38,.77,cloud+.27*surfaceNoise(vec3(rays*3.9,4.8)));
       vec3 sky=mix(vec3(.63,.74,.83),vec3(.10,.28,.51),gradient);
       sky=mix(sky,vec3(.71,.79,.84),veil*(.24+gradient*.50));
+      if (climateRealism > .5) {
+        sky=mix(surfaceHorizon,surfaceZenith,gradient);
+        sky=mix(sky,surfaceHorizon,veil*(.22+gradient*.42));
+      }
       vec3 ground=mix(vec3(.038,.063,.067),vec3(.48,.54,.59),smoothstep(-.49,-.045,reflection.y));
       vec3 reflected=mix(ground,sky,smoothstep(-.068,.035,reflection.y));
       float fresnel=pow(1.0-abs(dot(nWorld,toEye)),3.4);
@@ -300,8 +311,14 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
     shader.uniforms.climateSpring = climateUniforms.spring;
     shader.uniforms.climateWetness = climateUniforms.wetness;
     shader.uniforms.climateRealism = climateUniforms.realism;
+    if (kind === 'glass') {
+      shader.uniforms.surfaceHorizon = climateUniforms.reflectedHorizon;
+      shader.uniforms.surfaceZenith = climateUniforms.reflectedZenith;
+      shader.fragmentShader = shader.fragmentShader.replace('#include <common>',
+        '#include <common>\nuniform vec3 surfaceHorizon, surfaceZenith;');
+    }
     shader.uniforms.climateTerrainSun = climateUniforms.terrainSun;
-    const pisteUniforms = kind === 'snow' ? 'uniform sampler2D pisteCoverage; uniform sampler2D mountainShade; uniform sampler2D pisteGrooming; uniform vec4 pisteLimits; uniform sampler2D plazaSnow; uniform vec3 plazaLimits; uniform sampler2D bowlSnow; uniform vec3 bowlLimits; uniform sampler2D villageSnow; uniform vec3 villageLimits; uniform vec4 roomCutout; uniform vec2 roomYaw;\n' : '';
+    const pisteUniforms = kind === 'snow' ? 'uniform sampler2D pisteCoverage; uniform sampler2D mountainShade; uniform sampler2D pisteGrooming; uniform vec4 pisteLimits; uniform sampler2D plazaSnow; uniform vec3 plazaLimits; uniform sampler2D bowlSnow; uniform vec3 bowlLimits; uniform sampler2D villageSnow; uniform vec3 villageLimits; uniform vec4 roomCutout, annexCutout; uniform vec2 roomYaw;\n' : '';
     // Only the few terrain tiles under the skier compile this cutout. The rest
     // of the mountain keeps its original shader and does no ski-footprint work.
     const skiUniforms = skiSnow ? /* glsl */ `
@@ -322,6 +339,7 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
       shader.uniforms.mountainShade = { value: snowMaps.mountainShade };
       shader.uniforms.pisteGrooming = { value: snowMaps.groomingMap };
       shader.uniforms.roomCutout = { value: snowMaps.roomCutout };
+      shader.uniforms.annexCutout = { value: snowMaps.annexCutout };
       shader.uniforms.roomYaw = { value: snowMaps.roomYaw };
       for (const [place, layer] of Object.entries(snowMaps.tracks)) {
         shader.uniforms[place + 'Snow'] = { value: layer.map };
@@ -354,6 +372,7 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n' + surface.roughness);
     if (kind === 'snow') {
       bindSnowCrystals(shader);
+      bindTerrainHorizon(shader, snowMaps.horizon);
       // The sun shadow follows the rider. Fade before its finite rectangular
       // extent so an aerial view does not see the edge across a hillside.
       const shadowChunk = THREE.ShaderChunk.shadowmap_pars_fragment.replace('return shadow;', `
@@ -364,11 +383,16 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
         #include <lights_fragment_end>
         reflectedLight.directDiffuse *= sunFromTerrain;
         reflectedLight.directSpecular *= sunFromTerrain;
+        reflectedLight.indirectDiffuse *= skyView;
       `);
       shader.fragmentShader = shader.fragmentShader.replace('#include <opaque_fragment>', /* glsl */ `
         float flash = snowCrystalFlash(p, vNormal, distanceToEye,
           cover*(1.0-exposed*.94)*(1.0-forestExtent*.55)*(1.0-ice*.71)*(1.0-traffic*.35));
         outgoingLight += vec3(.73,.88,1.0) * flash * sunFromTerrain * mix(1.35,2.3,climateRealism);
+        if (climateRealism > .5) {
+          outgoingLight = shadeWinterSurface(outgoingLight, normal, vViewPosition,
+            cover*(1.-exposed)*(1.-forestExtent*distantWoods), polished, loose);
+        }
         #include <opaque_fragment>
       `);
     }
