@@ -33,6 +33,7 @@ const _pivot = new THREE.Vector3();
 const _tourLook = new THREE.Vector3();
 const _cameraAnchor = new THREE.Vector3();
 const _cameraArm = new THREE.Vector3();
+const _cameraTorso = new THREE.Vector3();
 const _cameraBranches = { fraction: 1 };
 const _stanceUp = new THREE.Vector3();
 const _axisY = new THREE.Vector3(0, 1, 0);
@@ -96,6 +97,7 @@ export class Player {
     this.ollieCooldown = 0;
     this.snowSink = 0;
     this.landingLoad = 0;
+    this.landingSpray = 0;
     this.tuning={grip:1,drag:1,speed:1,pop:1};
     this.walkFootwear = null;
     this.clearBoost();
@@ -106,6 +108,8 @@ export class Player {
     this.lookYaw = 0;
     this.camPos = new THREE.Vector3();
     this.camLook = new THREE.Vector3();
+    this.camHeight = null;
+    this.camPitchOffset = 0;
     this.cameraArmFraction = 1;
     this.switchStance = false;
     this.switchLookSide = 1;
@@ -217,9 +221,12 @@ export class Player {
     this.camYaw = this.heading;
     this.camPos.copy(this.pos);
     this.camLook.copy(this.pos);
+    this.camHeight = null;
+    this.camPitchOffset = 0;
     this.lastLanding = null;
     this.breakSnowContact();
     this.landingLoad = 0;
+    this.landingSpray = 0;
     this.refreshSurface();
     this.lastY = this.pos.y;
     this._lastX = this.pos.x;
@@ -455,6 +462,7 @@ export class Player {
 
     this.updateModel(dt, input);
     this.updateEffects(dt, time, !!input.brake);
+    this.landingLoad *= Math.exp(-7 * dt);
     this.updateCamera(dt, false);
     this.shake = Math.max(0, this.shake - dt * 2.6);
   }
@@ -710,8 +718,9 @@ export class Player {
 
     this.refreshSurface();
     this.landingLoad = clamp(impact / 9, 0, 1);
-    this.fx?.burst(this.pos, 'snow', Math.round(Math.min(65, 10 + impact * 3) * (.12 + this.powder)));
-    if (turns || flips) this.fx?.burst(this.pos, 'gold', Math.min(40, 12 + turns * 8 + flips * 12));
+    if (!this.footMode && this.powder > .30) this.landingSpray = impact;
+    else this.fx?.burst(this.pos, 'snow', Math.round(Math.min(45, 6 + impact * 2) * this.powder));
+    if (turns || flips) this.fx?.burst(this.pos, 'gold', Math.round(Math.min(7, 3 + turns * 2 + flips * 2)), .21);
     this.shake = Math.max(this.shake, clamp(impact * 0.014, 0.05, 0.42));
 
     if (air > minimumScoringAir) {
@@ -856,13 +865,18 @@ export class Player {
       this.lastFootfall = step;
     }
     if (this.crash || this.riding || this.footMode || !this.grounded) {
+      this.landingSpray = 0;
       this.breakSnowContact();
       return;
     }
     const { contactPoints, skiAxes, skiPlanted } = this.rig;
+    if (this.landingSpray > 0) {
+      this.fx?.skiLanding?.(contactPoints, this.vel, this.travelHeading, this.powder, this.landingSpray);
+      this.landingSpray = 0;
+    }
     const scraping = this.stopEdge > .15 && brake;
     this.fx?.skiWake(contactPoints[0], contactPoints[1], this.vel, this.heading,
-      this.powder, this.steer, brake, dt, this.surfaceType, skiPlanted);
+      this.powder, this.steer * (this.switchStance ? -1 : 1), brake, dt, this.surfaceType, skiPlanted, this.landingLoad);
     if (this.speed < .12) {
       this.breakSnowContact();
       return;
@@ -887,7 +901,6 @@ export class Player {
     const depth = compressible ? this.powder ** 1.45 * (.102 - .058 * planing
       + .018 * Math.abs(this.steer) * planing + .034 * this.landingLoad) : 0;
     this.snowSink = snap || !compressible ? depth : damp(this.snowSink, depth, 12, dt);
-    this.landingLoad *= Math.exp(-7 * dt);
     const upVec = onSnow && !this.footMode ? _stanceUp.copy(_up).lerp(_normal, .58).normalize() : _up;
     const bracing = onSnow && !this.footMode ? this.stopEdge : 0;
     const torsoYaw = bracing > .002
@@ -928,6 +941,8 @@ export class Player {
       stairTreadAt: this.footMode ? this.sampleTread : null,
       switchStance: this.switchStance,
       switchSide: this.switchLookSide,
+      powder: this.powder,
+      landingLoad: this.landingLoad,
       snowSink: this.snowSink,
       steer: this.steer,
       stop: bracing,
@@ -1036,24 +1051,31 @@ export class Player {
       return;
     }
     const wide = this.cameraMode === 1;
-    const yaw = this.stopEdge > .12
+    const walking = this.footMode;
+    let yaw = this.stopEdge > .12
       ? this.travelHeading + shortestAngle(this.travelHeading, this.stopApproach) * this.stopEdge : this.travelHeading;
+    // Follow the skier's path through a spin and when the ski tips point uphill.
+    // At walking speeds the skier can still turn the camera by facing a new way.
+    if (!walking && !this.riding) {
+      yaw += shortestAngle(yaw, Math.atan2(this.vel.x, this.vel.z)) * smoothstep(1.3, 5.5, this.speed);
+    }
     this.camYaw = snap ? yaw
       : wrapAngle(this.camYaw + shortestAngle(this.camYaw, yaw) * (1 - Math.exp(-4.4 * dt)));
     const fx = Math.sin(this.camYaw+this.lookYaw), fz = Math.cos(this.camYaw+this.lookYaw);
-    const walking = this.footMode;
-    const distance = walking ? (wide ? 5.2 : 3.4) : wide ? 9.5 : this.holdAtUnload ? 6.9 : 4.5 + speed * 1.65;
+    const distance = (walking ? (wide ? 5.2 : 3.4) : wide ? 9.5 : this.holdAtUnload ? 6.9 : 4.5 + speed * 1.65)
+      * Math.sqrt(Math.max(1, this.camera.aspect / 2.65));
     const height = (wide ? 3.4 : 1.95 + speed * .35) + this.lookPitch*distance*.65;
     const lookAhead = wide ? 13 : 8 + speed * 4;
     const ground = this.groundHeight(this.pos.x, this.pos.z);
-    const airGap = Math.max(0, this.pos.y - ground);
     const px = this.pos.x - fx * distance, pz = this.pos.z - fz * distance;
-    const follow = snap ? 1 : 1 - Math.exp(-9.2 * dt);
-    _cameraArm.set(px, Math.max(this.groundHeight(px, pz) + height * .84, ground + height) + airGap, pz);
-    this.camPos.lerp(_cameraArm, follow);
+    // Keep the boom attached to the moving rider. Spring the yaw and height
+    // independently so their lag cannot move the eye across the skier.
+    const boomHeight = Math.max(this.groundHeight(px, pz) - ground + height * .84, height);
+    this.camHeight = snap || this.camHeight === null ? boomHeight : damp(this.camHeight, boomHeight, 9.2, dt);
+    this.camPos.set(px, this.pos.y + this.camHeight, pz);
     const lx = this.pos.x + fx * lookAhead, lz = this.pos.z + fz * lookAhead;
     const forwardGround = this.groundHeight(lx, lz);
-    _tourLook.set(lx, lerp(ground, forwardGround, .71) + .99 + airGap * .6 - this.lookPitch*2.7, lz);
+    _tourLook.set(lx, this.pos.y + (forwardGround - ground) * .71 + .99 - this.lookPitch*2.7, lz);
 
     _cameraArm.copy(this.camPos);
     const cameraGround = this.groundHeight(_cameraArm.x, _cameraArm.z);
@@ -1090,14 +1112,37 @@ export class Player {
       return;
     }
     this.camera.position.copy(_cameraAnchor).lerp(_cameraArm, this.cameraArmFraction);
-    this.camLook.lerp(_tourLook, follow);
-    this.camera.up.copy(_up);
-    this.camera.lookAt(this.camLook);
     const verticalFov = wide ? 51 : 54 + speed * 7;
     // Preserve the chase framing without stretching the view on a wide display.
     const maxVertical = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(53)) / this.camera.aspect));
     this.camera.fov = snap ? Math.min(verticalFov, maxVertical)
       : damp(this.camera.fov, Math.min(verticalFov, maxVertical), 7, dt);
+    if (this.riding) {
+      this.camLook.copy(_tourLook);
+    } else {
+      const eye = this.camera.position;
+      this.rig.torso.updateWorldMatrix(true, false);
+      _cameraTorso.set(0, .19, .025).applyMatrix4(this.rig.torso.matrixWorld);
+      const dx = _cameraTorso.x - eye.x, dz = _cameraTorso.z - eye.z;
+      const riderDistance = Math.hypot(dx, dz);
+      const riderPitch = Math.atan2(_cameraTorso.y - eye.y, riderDistance);
+      const desiredPitch = Math.atan2(_tourLook.y - eye.y, Math.hypot(lx - eye.x, lz - eye.z));
+      const halfFov = THREE.MathUtils.degToRad(this.camera.fov * .5);
+      // Reserve space for the skier's skis and head before including the slope
+      // ahead. This still allows orbiting and pitching the boom with the mouse.
+      const pitchRoom = Math.max(0, halfFov - Math.atan2(1.16, riderDistance) - .035);
+      const minOffset = -Math.min(pitchRoom, halfFov * .40);
+      const maxOffset = Math.min(pitchRoom, halfFov * .46);
+      const pitchOffset = clamp(desiredPitch - riderPitch, minOffset, maxOffset);
+      this.camPitchOffset = snap ? pitchOffset
+        : clamp(damp(this.camPitchOffset, pitchOffset, 8, dt), minOffset, maxOffset);
+      const yaw = riderDistance > .15 ? Math.atan2(dx, dz) : this.camYaw + this.lookYaw;
+      const pitch = clamp(riderPitch + this.camPitchOffset, -1.53, 1.53);
+      this.camLook.copy(eye).add(_tourLook.set(
+        Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)));
+    }
+    this.camera.up.copy(_up);
+    this.camera.lookAt(this.camLook);
     this.camera.updateProjectionMatrix();
   }
 }

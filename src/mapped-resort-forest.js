@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { coniferDepthMaterial, coniferGeometry, coniferMaterial } from './conifers.js';
+import { coniferGeometry, coniferMaterial } from './conifers.js';
+import { forestShadowTiles } from './forest-shadows.js';
 import { batchMaxForestCrowns, forestDetailTiers, makeForestCrowns, preloadForestCrowns } from './forest-lod.js';
 import { coniferInView, crownDistanceSquared, forestView, setConiferBounds } from './forest-culling.js';
 import { makeForestUndergrowth } from './forest-undergrowth.js';
@@ -11,7 +12,8 @@ import { cacheStaticTransforms } from './scenery.js';
 const PATCH = 210;
 const TREE_SPACING = 12;
 const FOREST_TILE = 240;
-const species = ['fir', 'spruce', 'hemlock'];
+const species = ['fir', 'spruce', 'hemlock', 'fir', 'spruce', 'hemlock'];
+const variantAt = index => Math.floor(index / 3);
 const detailProfiles = {
   BUDGET: [67, 118, 3500, .64],
   LOW: [90, 158, 3500, .74],
@@ -118,7 +120,7 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
   const patches = new Map(), deciduousPatches = new Map();
   const standSample = [0, 0];
   const normal = new THREE.Vector3();
-  const coniferCounts = [0, 0, 0];
+  const coniferCounts = new Uint32Array(species.length);
   let count = 0;
   function plant(tree) {
     const { x, y, z, height } = tree;
@@ -130,6 +132,7 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
     env.addCircle(x, z, .19 + height * .012, 'tree', { maxY: y + height, minY: y - .7, tree });
     count++;
   }
+  const youngSites = [];
   if (config.id === 'stevens-pass') for (const [x, z, height] of stevensTraverseTrees()) {
     const y = ground.heightAt(x, z);
     if (!env.isOpen(x, y + .4, z, 2.6)) continue;
@@ -140,7 +143,7 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
     const z = (iz + .12 + .76 * hash2(ix, iz, 519)) * TREE_SPACING;
     if (regional ? x >= minX && x < maxX && z >= minZ && z < maxZ : x > maxX - 2 || z > maxZ - 2) return;
     const cover = ground.forestAt(x, z);
-    const patchiness = .73 + .27 * Math.sin(x * .009 - z * .014 + Math.sin(z * .035) * .9) ** 2;
+    const patchiness = .60 + .40 * Math.sin(x * .009 - z * .014 + Math.sin(z * .035) * .9) ** 2;
     const edge = Math.max(minX-x, x-maxX, minZ-z, z-maxZ);
     const fringe = regional ? 1 - smoothstep(beyond*.29, beyond, edge) : 1;
     if (hash2(ix, iz, 1291) > smoothstep(.10, .84, cover) * patchiness * fringe || excluded(x, z)) return;
@@ -162,7 +165,10 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
     if (hash2(ix, iz, 7331) * 100 < standSample[1]) {
       plant({ x, y, z, height, kind: 'deciduous', rotation: yaw, width: spread });
     } else {
-      plant({ x, y, z, height, kind, yaw, spread, tint });
+      plant({ x, y, z, height, kind: kind + (height < 13 ? 3 : 0), yaw, spread, tint });
+      if (!regional && height > 18 && cover > .68 && hash2(ix, iz, 8407) < .13) {
+        youngSites.push({ x, z, height, kind, yaw });
+      }
     }
   }
   const lastX = maxX / TREE_SPACING, lastZ = maxZ / TREE_SPACING;
@@ -188,6 +194,20 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
       }
     }
   }
+  for (const parent of youngSites) {
+    for (let i = 0; i < 2; i++) {
+      const angle = parent.yaw + i * 1.74;
+      const reach = 4.5 + 3 * hash2(parent.x, parent.z, 381 + i);
+      const x = parent.x + Math.cos(angle) * reach, z = parent.z + Math.sin(angle) * reach;
+      if (x <= minX || x >= maxX || z <= minZ || z >= maxZ || excluded(x, z) || ground.forestAt(x, z) < .53) continue;
+      if (env.queryColliders(x, z, 3).some(({ tree }) => tree && Math.hypot(tree.x - x, tree.z - z) < 3)) continue;
+      const y = ground.heightAt(x, z, normal, true);
+      if (normal.y < .65 || (config.id === 'stevens-pass' && !env.isOpen(x, y + .4, z, 1.4))) continue;
+      const age = hash2(x, z, 802);
+      plant({ x, y, z, height: 3.4 + Math.min(8, parent.height * .3) * age,
+        kind: parent.kind + 3, yaw: angle, spread: 1.02 + .12 * age, tint: hash2(x, z, 389) });
+    }
+  }
   const range = { value: new THREE.Vector2() };
   const farRange = { value: 4400 };
   const branchRange = { value: 0 }, sprayRange = { value: 0 }, twigRange = { value: 0 };
@@ -200,10 +220,11 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
       && ground.forestAt(x, z) > .24 && !excluded(x, z),
   }) : null;
   let hardwoods = null;
+  const shadows = forestShadowTiles(group);
   if (deciduousPatches.size) {
     const forest = await import('./deciduous-forest.js');
     await forest.preloadDeciduousCrowns();
-    hardwoods = forest.buildDeciduousForest(group, deciduousPatches, config.id);
+    hardwoods = forest.buildDeciduousForest(group, deciduousPatches, config.id, shadows);
   }
   let quality = 1, qualityName;
   function setQuality(name) {
@@ -218,15 +239,15 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
   }
   setQuality(initialQuality);
   if (!patches.size) {
+    shadows.finish();
     cacheStaticTransforms(group);
-    return { group, count, setQuality, update(camera) {
+    return { group, count, setQuality, updateShadows: shadows.update, update(camera) {
       hardwoods?.update(camera, qualityName);
       updateUndergrowth?.(camera, qualityName);
     } };
   }
   await crownAtlas;
   const mapped = bindCascadeRange(coniferMaterial(-1, 'mapped'), range);
-  const shadowMaterial = coniferDepthMaterial();
   let proxyMaterial = null;
   let silhouette = null, far = null;
   const stand = new THREE.Object3D(), color = new THREE.Color();
@@ -275,8 +296,10 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
     }
     const instances = proxy ?? new THREE.InstancedMesh(far, silhouette, trees.length);
     for (let i = 0; i < trees.length; i++) {
-      prepareTree(trees[i]);
+      const tree = trees[i];
+      prepareTree(tree);
       setTree(instances, i);
+      shadows.add(tree.x, tree.z, coniferGeometry(species[tree.kind], -2, variantAt(tree.kind)), stand.matrix);
     }
     finalize(instances);
     // Crown cards rotate toward the viewer, so leave room beyond their baked plane.
@@ -284,6 +307,7 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
     farBatches.push({ mesh: instances, proxy: !!proxy, inRange: false });
     group.add(instances);
   }
+  shadows.finish();
   batchMaxForestCrowns(group, farBatches.filter(batch => batch.proxy), () => qualityName === 'MAX');
 
   function dynamicMesh(geometry, material, capacity) {
@@ -299,15 +323,13 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
   }
 
   const maxRadius = detailProfiles.MAX[1] + 8;
-  const latticeCapacity = (Math.ceil(maxRadius * 2 / TREE_SPACING) + 2) ** 2;
+  const latticeCapacity = (Math.ceil(maxRadius * 2 / TREE_SPACING) + 4) ** 2 * 3;
   const traverseTreeCount = config.id === 'stevens-pass' ? stevensTraverseTrees().length : 0;
   const crowns = species.map((kind, i) => {
     const capacity = Math.min(coniferCounts[i], latticeCapacity + traverseTreeCount);
     if (!capacity) return null;
-    const mesh = dynamicMesh(coniferGeometry(kind, -1), mapped, capacity);
+    const mesh = dynamicMesh(coniferGeometry(kind, -1, variantAt(i)), mapped, capacity);
     mesh.name = kind + ' crowns';
-    mesh.customDepthMaterial = shadowMaterial;
-    mesh.castShadow = true;
     return mesh;
   });
 
@@ -322,7 +344,7 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
     material.customProgramCacheKey = () => `${cacheKey}-cascade`;
     return species.map((kind, i) => {
       if (!coniferCounts[i]) return null;
-      const mesh = dynamicMesh(coniferGeometry(kind, level), material, Math.min(coniferCounts[i], max));
+      const mesh = dynamicMesh(coniferGeometry(kind, level, variantAt(i)), material, Math.min(coniferCounts[i], max));
       mesh.name = level < 0 ? `${kind} · boughs and bark` : `${kind} · needles and snow deposits`;
       return mesh;
     });
@@ -335,7 +357,8 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
   const lastFacing = new THREE.Quaternion();
   const lastProjection = new THREE.Matrix4();
   const crown = new THREE.Sphere(), treeFootprint = new Float64Array(6);
-  const boughSlots = new Uint16Array(3), spraySlots = new Uint16Array(3), twigSlots = new Uint16Array(3);
+  const boughSlots = new Uint16Array(species.length);
+  const spraySlots = new Uint16Array(species.length), twigSlots = new Uint16Array(species.length);
   let oldQuality = -1;
   function addDetail(mesh, slots, kind, maxDistance, view, distanceSquared) {
     if (slots[kind] >= mesh.instanceMatrix.count) return;
@@ -385,8 +408,7 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
       crown.center.set(x, y + height * .5, z);
       crown.radius = height * .58 + 13 + d * .088;
       const inView = d < 47 || view.frustum.intersectsSphere(crown);
-      // Off-camera crowns close to the skier still contribute to the sun shadow.
-      if (inView || d < 112) {
+      if (inView) {
         prepareTree(tree);
         setTree(crowns[kind], crowns[kind].count++);
       }
@@ -408,5 +430,5 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
     }
   }
   cacheStaticTransforms(group);
-  return { group, count, update, setQuality };
+  return { group, count, update, setQuality, updateShadows: shadows.update };
 }

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { createSkier } from './skier.js';
+import { buildSkiGoggles } from './ski-goggles.js';
 import { canvasTexture, makeCanvas } from './util.js';
 
 export function createGearPreview(renderer, canvas) {
@@ -9,7 +10,7 @@ export function createGearPreview(renderer, canvas) {
   const pixels = new Uint8Array(width * height * 4);
   const target = new THREE.WebGLRenderTarget(width, height, { samples: 4, colorSpace: THREE.SRGBColorSpace });
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color('#1d3037');
+  const showroom = new THREE.Color('#1d3037'), goggleBackdrop = new THREE.Color('#3a4b52');
   scene.add(new THREE.HemisphereLight('#fff7e8', '#596c73', 2.25));
   for (const [color, strength, position] of [
     ['#fff0d6', 2.9, [-3, 5, 4]], ['#ade1ff', 1.95, [3, 2, -3]], ['#e4f1f7', .6, [2, 2, 4]],
@@ -38,13 +39,28 @@ export function createGearPreview(renderer, canvas) {
   const pose = { speed: 0, steer: 0, tuck: 0, brake: 0, grab: 0, footMode: true, display: true };
   scene.add(rig.group);
   rig.animate(.35, pose, null);
+  const goggles = buildSkiGoggles();
+  goggles.group.position.y = -.140;
+  scene.add(goggles.group);
 
-  return function draw(appearance, angle, barber) {
-    rig.setAppearance(appearance);
-    rig.group.rotation.y = angle;
-    rig.animate(0, pose, null);
-    camera.position.set(0, barber ? 1.64 : 1.28, barber ? 1.16 : 4.17);
-    camera.lookAt(0, barber ? 1.51 : .86, 0);
+  return function draw(appearance, angle, mode) {
+    const closeUp = mode === 'goggles';
+    scene.background = closeUp ? goggleBackdrop : showroom;
+    rig.group.visible = plinth.visible = shadow.visible = !closeUp;
+    goggles.group.visible = closeUp;
+    if (closeUp) {
+      goggles.setColor(appearance.goggles);
+      goggles.group.rotation.y = angle;
+      camera.position.set(0, .15, .85);
+      camera.lookAt(0, 0, .015);
+    } else {
+      const barber = mode === 'hair';
+      rig.setAppearance(appearance);
+      rig.group.rotation.y = angle;
+      rig.animate(0, pose, null);
+      camera.position.set(0, barber ? 1.64 : 1.28, barber ? 1.16 : 4.17);
+      camera.lookAt(0, barber ? 1.51 : .86, 0);
+    }
     const previous = renderer.getRenderTarget();
     const shadowUpdate = renderer.shadowMap.needsUpdate;
     try {

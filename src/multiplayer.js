@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { checkSkierName, onProfileChange, skierName, skiUnits } from './skier-profile.js';
 import { shellForColor } from './garment-marks.js';
 import { createSkier } from './skier.js';
+import { DEFAULT_GOGGLES, isGoggleColor } from './ski-goggles.js';
 import { readWinchPacket } from './patrol-winch-link.js';
 
 // A shared WSS broker works from a static Pages origin. Rooms outlive the
@@ -129,6 +130,7 @@ export function createMultiplayer(scene, resort, getPlayer) {
   const radioPrefix=channel+'/patrol/';
   const winchPrefix=channel+'/winch/';
   const namePrefix = channel + '/name/';
+  const gearPrefix = channel + '/gear/';
   let patrol='idle', assist='', radioAt=-Infinity, lastRadio='';
   let winch='', winchAt=-Infinity, lastWinch='';
   const peers = new Map(), pool = [];
@@ -137,6 +139,7 @@ export function createMultiplayer(scene, resort, getPlayer) {
   let client, loading = false, connected = false, enabled = true, generation = 0;
   let sentAt = -Infinity, lastTable = 0, sequence = 0, recentPose, fastest = 0;
   let nameAt = -Infinity, sentName;
+  let gearAt = -Infinity, sentGoggles;
   let idle = false, lastInput;
   let packetSecond = -1, packets = 0, joins = 0;
   try { enabled = localStorage.getItem('alpine.multiplayer') !== 'off'; } catch {}
@@ -196,6 +199,13 @@ export function createMultiplayer(scene, resort, getPlayer) {
       member.name = checkSkierName(bytes.toString()) ?? '';
       return;
     }
+    if (path === gearPrefix + sender) {
+      if (known && bytes.length <= 11) {
+        const color = bytes.toString();
+        if (isGoggleColor(color)) known.goggles = color;
+      }
+      return;
+    }
     if(path.startsWith(radioPrefix)){
       const sender=path.slice(radioPrefix.length),member=peers.get(sender);
       if(!member || bytes.length>72)return;
@@ -220,7 +230,7 @@ export function createMultiplayer(scene, resort, getPlayer) {
     if (!validPose(pose)) return;
     const prev = peers.get(key);
     if (prev && prev.pose[16] >= pose[16]) return;
-    if (!prev) sentAt = nameAt = -Infinity;
+    if (!prev) sentAt = nameAt = gearAt = -Infinity;
     const remote = prev ?? {};
     recordSnapshot(remote, pose, now());
     if (!prev) peers.set(key, remote);
@@ -238,9 +248,9 @@ export function createMultiplayer(scene, resort, getPlayer) {
       });
       const c = client;
       c.on('connect', () => {
-        c.subscribe([channel + '/+',radioPrefix+'+',namePrefix+'+',winchPrefix+'+'], {qos:0}, err => {
+        c.subscribe([channel + '/+',radioPrefix+'+',namePrefix+'+',winchPrefix+'+',gearPrefix+'+'], {qos:0}, err => {
           if (c !== client) return;
-          connected = !err; sentAt = nameAt = winchAt = -Infinity; lastRadio = lastWinch = ''; updateTable();
+          connected = !err; sentAt = nameAt = winchAt = gearAt = -Infinity; lastRadio = lastWinch = ''; updateTable();
         });
       });
       c.on('message', (path, bytes) => { if (client === c) onMessage(path, bytes); });
@@ -336,6 +346,12 @@ export function createMultiplayer(scene, resort, getPlayer) {
       client.publish(namePrefix + id, name, {qos:0,retain:false});
       nameAt = time; sentName = name;
     }
+    const goggles = isGoggleColor(outfit.goggles) ? outfit.goggles : DEFAULT_GOGGLES;
+    if (connected && (goggles !== sentGoggles || time - gearAt >= nameRefreshInterval)) {
+      // Gear travels separately so older clients still receive a standard pose.
+      client.publish(gearPrefix + id, goggles, {qos:0,retain:false});
+      gearAt = time; sentGoggles = goggles;
+    }
     let visible = 0;
     for (const [key, remote] of peers) {
       if (time-remote.heard > 14000) { remove(key); continue; }
@@ -394,9 +410,11 @@ export function createMultiplayer(scene, resort, getPlayer) {
         }
       }
       remote.dx=predicting?undefined:dx;remote.dz=dz;
-      if (fresh || remote.color !== s[15]) {
+      const goggleColor = remote.goggles ?? DEFAULT_GOGGLES;
+      if (fresh || remote.color !== s[15] || remote.renderedGoggles !== goggleColor) {
         remote.color = s[15];
-        rig.setAppearance({ jacket: remote.color, apparel: shellForColor(remote.color) });
+        remote.renderedGoggles = goggleColor;
+        rig.setAppearance({ jacket: remote.color, apparel: shellForColor(remote.color), goggles: goggleColor });
       }
       const phase = Math.atan2(Math.sin(next[11] - s[11]), Math.cos(next[11] - s[11]));
       rig.animate(dt,{speed:remoteSpeed,steer:lerp(s[8],next[8],mix),tuck:lerp(s[9],next[9],mix),brake:0,grab:0,crash:!!(s[10]&4),crashTime:0,

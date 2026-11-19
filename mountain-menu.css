@@ -1,5 +1,5 @@
 /* Mountain menus use the cool colors and plain lettering of trail signs. */
-:is(#mountain-panel, .guide, .pause) {
+#mountain-panel, .guide, .pause {
   --menu-bg: #11252e;
   --menu-rail: #162f39;
   --menu-control: #203d48;
@@ -459,76 +459,97 @@
 }
 
 .pause-screen .pause {
-  width: min(28rem, 100%);
-  max-height: calc(100dvh - 2rem);
-  padding: 0 1rem .75rem;
+  --pause-pad: clamp(1rem, 3vw, 1.5rem);
+  --menu-bg: #192226;
+  --menu-control: #293339;
+  --menu-edge: #46535a;
+  --menu-accent: #e4eeeb;
+  width: min(28.5rem, 100%);
+  max-height: 100%;
+  padding: 0 var(--pause-pad);
   background: var(--menu-bg);
   border-color: var(--menu-edge);
   border-radius: 14px;
-  box-shadow: 0 1.25rem 3rem #0c172969;
   overscroll-behavior: contain;
   scroll-padding-block: 4.5rem 1rem;
 }
 
 .pause-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
   position: sticky;
   top: 0;
   z-index: 1;
-  margin: 0 -1rem .75rem;
-  padding: .625rem 1rem;
-  background: var(--menu-rail);
+  margin: 0 calc(-1 * var(--pause-pad));
+  padding: .875rem var(--pause-pad);
+  background: var(--menu-bg);
+  border-bottom: 1px solid var(--menu-edge);
 }
 
 .pause-actions {
   display: grid;
-  grid-template-columns: repeat(2,minmax(0,1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: .5rem;
+  padding: 1rem 0;
 }
+.pause-actions:has(#pause-lifts[hidden]) #pause-guide { grid-column: 1 / -1; }
 
 .pause-actions :is(.ghost-btn, .btn-primary) {
-  padding: .5rem .625rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  padding: .625rem .75rem;
   min-width: 0;
   min-height: 44px;
-  font: 600 .9375rem/1.15 var(--font-body);
+  font: 600 .9375rem/1.2 var(--font-body);
   letter-spacing: 0;
   text-transform: none;
   text-align: start;
   gap: .375rem;
   border-radius: 6px;
+  box-shadow: none;
 }
 
 .pause-actions .btn-primary {
   grid-column: 1 / -1;
-  justify-content: space-between;
   background: var(--menu-accent);
   color: var(--menu-bg);
 }
-
 .pause-actions .ghost-btn {
   color: var(--menu-text);
   background: var(--menu-control);
   border-color: var(--menu-edge);
 }
+.pause-actions .btn-primary:hover { background: #f5faf7; transform: none; }
+.pause-actions .btn-primary::before { content: none; }
+.pause-actions .btn-primary kbd { color: var(--menu-bg); border-color: #9caeac; }
+.pause kbd { flex: none; padding-inline: .25rem; font-size: .75rem; }
 
-.pause-actions .btn-primary:hover { background: #d1f0ef; }
-
-.pause-actions .btn-primary kbd { color: var(--menu-bg); background: #98c7c6; }
-
-.pause-actions kbd {
-  flex: none;
-  padding-inline: .25rem;
-  font-size: .75rem;
-}
-
-.pause-settings {
-  display: block;
-  margin: .75rem 0;
-  border-top: 0;
-}
-
+.pause-settings { margin: 0; }
 .pause-group { border-top: 1px solid var(--menu-edge); }
-
-.pause-group summary { min-height: 44px; }
+.pause-group summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  min-height: 46px;
+  padding: .625rem 0;
+  list-style: none;
+}
+.pause-group summary::-webkit-details-marker { display: none; }
+.pause-group summary::after {
+  content: "";
+  width: .48rem;
+  height: .48rem;
+  border: solid var(--menu-muted);
+  border-width: 0 1.5px 1.5px 0;
+  transform: translateY(-2px) rotate(45deg);
+  margin-right: .375rem;
+}
+.pause-group[open] summary::after { transform: translateY(2px) rotate(225deg); }
 
 .pause-settings .setting-row {
   min-height: 44px;
@@ -562,18 +583,24 @@
 
 .pause-foot {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  column-gap: .75rem;
   border-top: 1px solid var(--menu-edge);
+  padding: .375rem 0;
 }
-
-.pause-foot .text-btn {
+.pause-foot button {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
   min-height: 44px;
-  padding: 0;
+  padding: .375rem 0;
   color: var(--menu-muted);
-  font-size: .9375rem;
-  text-transform: none;
-  letter-spacing: 0;
+  font: 600 .875rem/1.25 var(--font-body);
+  text-align: start;
 }
+.pause-foot button:hover { color: var(--menu-text); }
 
 @media (max-width: 640px) {
   .mountain-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
@@ -605,10 +632,12 @@
 @media (min-width: 660px) and (max-height: 620px) {
   .pause-screen .pause {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+    grid-template-columns: minmax(0, 1.13fr) minmax(0, 1fr);
+    column-gap: 1.25rem;
     width: min(43rem,100%);
   }
   .pause-head, .pause-foot { grid-column: 1 / -1; }
   .pause-actions { align-self: start; }
-  .pause-settings { margin-top: 0; }
+  .pause-settings { padding: 1rem 0; }
+  .pause-group:first-child { border-top: 0; }
 }

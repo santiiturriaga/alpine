@@ -4,6 +4,7 @@ import { createSkier } from './skier.js';
 import { buildSnowShoe, SNOW_SHOES } from './snow-shoes.js';
 import { skiDeck } from './skier-equipment.js';
 import { addWoolCarpet } from './interior-floors.js';
+import { buildSkiGoggles, GOGGLES } from './ski-goggles.js';
 
 const brass = '#c5a078', walnut = '#72513b', steel = '#323f42';
 
@@ -131,6 +132,20 @@ export function furnishShop(room, group, collide, label) {
       shoe.rotation.y = side * .17 - .30;
       shoe.scale.setScalar(1.42);
       group.add(shoe);
+    }
+    const goggleShelfY = 1.54, goggleShelfZ = -.57;
+    shelf(boothX, goggleShelfY, goggleShelfZ, 2.42, .60);
+    timber.push(box(2.42, .85, .10, '#4f645f', [boothX, 1.66, goggleShelfZ - .29]));
+    glow.push(box(2.29, .032, .043, '#ffeac5', [boothX, 2.03, goggleShelfZ + .20]));
+    label(group, 'SMITH × SUPREME', '', boothX, 1.93, goggleShelfZ - .227, 1.57);
+    for (const [i, [id, finish]] of Object.entries(GOGGLES).entries()) {
+      const { group: goggles } = buildSkiGoggles(id);
+      const x = boothX + (i - 1) * .73;
+      goggles.position.set(x, goggleShelfY - .076, goggleShelfZ + .015);
+      goggles.scale.setScalar(1.44);
+      goggles.rotation.y = -.56 + i * .16;
+      group.add(goggles);
+      label(group, finish.name.toUpperCase(), '', x, goggleShelfY - .01, goggleShelfZ + .307, .60);
     }
     const rackX = -hw + 1.10;
     for (const [i, style] of ['powder','carver','park'].entries()) {

@@ -12,7 +12,8 @@ import {
 import { heightAt, normalAt, slopeAt, pisteAt, landCoverAt, treeAnchorHeightAt } from './terrain.js';
 import { createFlag } from './effects.js';
 import { surfaceMaterial } from './materials.js';
-import { coniferDepthMaterial, coniferGeometry, coniferMaterial } from './conifers.js';
+import { coniferGeometry, coniferMaterial } from './conifers.js';
+import { forestShadowTiles } from './forest-shadows.js';
 import { climateUniforms } from './climate-state.js';
 import { buildNeedleShoots } from './needle-shoots.js';
 import { ForestCell, batchBudgetForestCrowns, forestDetailTiers, forestQuality, makeForestCrowns, shareForestInstances } from './forest-lod.js';
@@ -209,7 +210,7 @@ function buildForest(scene, grid, rand, detail) {
   const distantTemplates = variants.map((kind, i) => geometry(kind, i, -1));
   const silhouetteTemplate = geometry('hemlock',2,-2);
   const silhouetteMaterial = coniferMaterial(-2, 'mapped');
-  const shadowMaterial = coniferDepthMaterial();
+  const shadows = forestShadowTiles(group);
   const setTree = (mesh, index, tree) => {
     dummy.position.set(tree.x, tree.y, tree.z);
     dummy.scale.set(tree.apex * tree.stretch, tree.apex, tree.apex * tree.stretch);
@@ -244,7 +245,7 @@ function buildForest(scene, grid, rand, detail) {
     const family = y > 1550 ? Math.round(source()) : Math.floor(source() * 3);
     const yaw = source() * Math.PI * 2;
     const stretch = .96 + source() * .29;
-    const kind = family + (Math.sin(x * .051 + z * .023 + family * 2) > .1 ? species.length : 0);
+    const kind = family + (young || apex < 14 ? species.length : 0);
     const cell = `${Math.floor(x / patchSize)},${Math.floor(z / patchSize)},${kind}`;
     if (!buckets.has(cell)) buckets.set(cell, { kind, trees: [] });
     const tree = { x, y: treeAnchorHeightAt(x,z,y), z, apex, yaw, stretch, kind };
@@ -305,9 +306,10 @@ function buildForest(scene, grid, rand, detail) {
   const patchSizes = variants.map(() => []), stands = new Map();
   for (const { kind, trees } of buckets.values()) {
     const mesh = new THREE.InstancedMesh(distantTemplates[kind], needleMaterial, trees.length);
-    mesh.customDepthMaterial = shadowMaterial;
+    const caster = geometry(variants[kind], kind, -2);
     for (const [i, tree] of trees.entries()) {
       setTree(mesh, i, tree);
+      shadows.add(tree.x, tree.z, caster, dummy.matrix);
       tree.batch = mesh;
       tree.index = i;
     }
@@ -320,6 +322,7 @@ function buildForest(scene, grid, rand, detail) {
     cell.trees.push(...trees);
     patchSizes[kind].push(trees.length);
   }
+  shadows.finish();
   for (const { near,trees } of stands.values()) {
     const proxy = makeForestCrowns('mapped',trees.map(tree=>tree.kind));
     const instances = proxy ?? new THREE.InstancedMesh(silhouetteTemplate,silhouetteMaterial,trees.length);
@@ -375,7 +378,7 @@ function buildForest(scene, grid, rand, detail) {
   const lastEye = new THREE.Vector3(Infinity,Infinity,Infinity);
   const footprint = new Float64Array(6);
   let candidates = [], lastView, viewRevision;
-  let detailScale = 0, shadowPatches = new Set();
+  let detailScale = 0;
   function include(mesh, tree) {
     const dst = mesh.count++;
     const previous = mesh.userData.trees;
@@ -408,18 +411,7 @@ function buildForest(scene, grid, rand, detail) {
     if (moved) {
       detailScale = scale;
       lastEye.copy(eye);
-      // The wider query also keeps the original shadow batch selection.
       candidates = grid.query(eye.x,eye.z,baseDistance+12-.08).filter(c => c.type === 'tree');
-      const current = new Set();
-      for (const {tree} of candidates) {
-        const mesh = tree.batch;
-        if (current.has(mesh)) continue;
-        const bounds = mesh.boundingSphere;
-        if (bounds.center.distanceTo(eye) - bounds.radius < 140) current.add(mesh);
-      }
-      for (const mesh of shadowPatches) if (!current.has(mesh)) mesh.castShadow = false;
-      for (const mesh of current) mesh.castShadow = true;
-      shadowPatches = current;
     }
     for (const mesh of detailMeshes) {
       mesh.count = 0;
@@ -447,7 +439,7 @@ function buildForest(scene, grid, rand, detail) {
     }
   }
   cacheStaticTransforms(group);
-  return { group, count, updateDetail };
+  return { group, count, updateDetail, updateShadows: shadows.update };
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2241,6 +2233,7 @@ function resortDistrict(scene, grid, ids, x, z, build, detail) {
   const distanceSquared = (px, pz) => (px - x) ** 2 + (pz - z) ** 2;
   return {
     get group() { return district?.group; },
+    prepare: assemble,
     update(dt, time, camera) {
       const distance = camera ? distanceSquared(camera.position.x, camera.position.z) : 0;
       if (!district && (distance < 2100 ** 2 || (!detail.budget && !compactDevice))) {

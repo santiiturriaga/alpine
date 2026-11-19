@@ -14,8 +14,6 @@
   --destination-muted: #adc4cf;
   --destination-lift: #ffc27f;
   --destination-rule: #7795a850;
-  --tile: min(52vw, 66dvh, 796px);
-  --step: min(24vw, 330px);
   color: var(--destination-ice);
   width: 100%;
   height: 100%;
@@ -108,47 +106,28 @@
 .destination-stage.is-dragging { cursor: grabbing; }
 #destination-selector .destination-stage:focus-visible { outline-offset: -5px; }
 .destination-models { position: absolute; inset: 0; pointer-events: none; }
-.destination-tile {
-  --tile-x: 0;
-  --tile-y: 0;
-  --tile-scale: 1;
+.destination-view {
   position: absolute;
-  top: 46%;
-  left: 50%;
-  width: var(--tile);
-  aspect-ratio: 700 / 470;
-  transform: translate3d(calc(-50% + var(--step) * var(--tile-x)), calc(-50% + var(--tile) * var(--tile-y)), 0) scale(var(--tile-scale));
-  opacity: var(--tile-opacity, 0);
-  transition: transform 560ms cubic-bezier(.2,.77,.24,1), opacity 340ms, filter 220ms;
-  filter: brightness(.82) saturate(.74);
-  pointer-events: none;
-  -webkit-tap-highlight-color: transparent;
-}
-.destination-tile:hover, .destination-tile[aria-current="true"] { filter: none; }
-.is-dragging .destination-tile { cursor: grabbing; transition: none; }
-.destination-tile canvas {
+  inset: 0;
   width: 100%;
   height: 100%;
   display: block;
-  pointer-events: none;
-  filter: drop-shadow(0 12px 11px #0716207d);
 }
-.destination-tile span {
+.destination-tile {
   position: absolute;
-  top: 96%;
-  left: 50%;
+  inset: 0 auto auto 0;
   width: max-content;
-  max-width: 94%;
-  transform: translateX(-50%);
+  max-width: min(25vw, 220px);
+  padding: 4px 8px;
   color: var(--destination-muted);
-  opacity: .91;
-  font: 600 23px/1.1 var(--font-body);
+  font: 600 clamp(12px, 1.2vw, 17px)/1.1 var(--font-body);
   text-shadow: 0 2px 5px #0b1721;
   text-wrap: balance;
+  -webkit-tap-highlight-color: transparent;
 }
-.destination-tile:hover span { color: var(--destination-ice); }
-.destination-tile[aria-hidden="false"][aria-current="false"] span { pointer-events: auto; cursor: pointer; }
-.destination-tile[aria-current="true"] span { visibility: hidden; }
+.destination-tile:hover { color: var(--destination-ice); }
+.destination-tile[aria-current="false"]:not([hidden]) { pointer-events: auto; cursor: pointer; }
+.destination-tile[hidden], .destination-tile[aria-current="true"] { display: none; }
 #destination-preview-status {
   position: absolute;
   z-index: 10;
@@ -232,13 +211,12 @@
   .destination-touch-help { display: inline; }
 }
 @media (max-width: 620px) {
-  #destination-selector { --tile: min(95vw, 64dvh); --step: 57vw; }
   .destination-layout { padding-right: max(16px, env(safe-area-inset-right)); padding-left: max(16px, env(safe-area-inset-left)); }
   .destination-header { gap: 8px; padding-bottom: 12px; }
   .destination-controls { gap: 6px; }
   .destination-list { gap: 6px; padding: 0 7px; font-size: 13px; }
   .destination-stage { margin: 0 -16px; }
-  .destination-tile span { visibility: hidden; }
+  .destination-tile[aria-current="false"] { display: none; }
   .destination-route-key { gap: 3px 13px; }
   #destination-name { font-size: clamp(29px, 8.7vw, 55px); }
   .destination-details { gap: 7px; }

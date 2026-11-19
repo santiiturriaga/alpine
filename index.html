@@ -158,19 +158,7 @@
       <p id="patrol-winch-controls"></p>
     </aside>
     <div class="floater-layer" id="floater-layer" aria-hidden="true"></div>
-    <aside id="trick-combo" class="trick-combo" aria-label="Trick score" hidden>
-      <header class="trick-heading">
-        <span data-trick-value></span>
-        <strong class="trick-score" data-trick-value></strong>
-        <b class="trick-multiplier" data-trick-value></b>
-      </header>
-      <s class="trick-row trick-scratch" data-trick-row hidden><span></span><span></span></s>
-      <div class="trick-row" data-trick-row hidden><span></span><span></span></div>
-      <div class="trick-row" data-trick-row hidden><span></span><span></span></div>
-      <div class="trick-row" data-trick-row hidden><span></span><span></span></div>
-      <div class="trick-row" data-trick-row hidden><span></span><span></span></div>
-      <small class="trick-bonus" data-trick-value hidden></small>
-    </aside>
+    <span id="trick-combo" class="trick-combo" aria-hidden="true" hidden></span>
     <span class="trick-announcement" id="trick-announcement" role="status"></span>
 
     <div class="interaction-prompt hidden" id="interaction-prompt">
@@ -366,10 +354,18 @@
     <div class="shop-layout">
       <figure class="shop-preview">
         <canvas width="440" height="530" data-gear-preview role="img" aria-label="3D preview of your skier and equipped outfit"></canvas>
-        <figcaption><button type="button" data-turn="-.45" aria-label="Turn skier left">↶</button><span>Your skier</span><button type="button" data-turn=".45" aria-label="Turn skier right">↷</button></figcaption>
+        <figcaption><button type="button" data-turn="-.45" aria-label="Rotate preview left">↶</button><span data-preview-caption>Your skier</span><button type="button" data-turn=".45" aria-label="Rotate preview right">↷</button></figcaption>
       </figure>
       <section data-shop-gear aria-label="Equipment and apparel">
         <h3>Outerwear</h3><div class="gear-swatches" data-apparel></div>
+        <h3>Goggles</h3>
+        <article class="gear-card" data-goggles>
+          <strong>Smith × Supreme</strong>
+          <div class="gear-swatches">
+            <label>Color <select data-slot="goggles"></select></label>
+            <button type="button" data-goggle-preview aria-pressed="false">Goggle close-up</button>
+          </div>
+        </article>
         <h3>Footwear</h3><article class="gear-card snow-shoe-card" data-footwear></article>
         <h3>Skis</h3><div class="ski-catalog" data-skis></div>
         <h3>Field notes</h3><ul data-finds></ul>
@@ -538,7 +534,6 @@
         <button class="ghost-btn" id="pause-lifts" hidden>Go to a lift</button>
         <button class="ghost-btn" id="pause-map">Trail map <kbd>M</kbd></button>
         <button class="ghost-btn" id="pause-guide">Field Guide</button>
-        <button class="ghost-btn" id="pause-reset">Return to Roundhouse <kbd>R</kbd></button>
       </div>
       <div class="pause-settings">
         <details class="pause-group"><summary>Audio</summary>
@@ -563,7 +558,10 @@
         <div class="setting-row benchmark-setting"><div><p id="benchmark-status" role="status">Benchmark queued.</p><small id="benchmark-device"></small></div><button class="seg" id="pause-benchmark" type="button">Run benchmark</button></div>
         </details>
       </div>
-      <div class="pause-foot"><button class="text-btn" id="restart-session">Restart session</button></div>
+      <div class="pause-foot">
+        <button id="pause-reset">Return to Roundhouse <kbd>R</kbd></button>
+        <button id="restart-session">Restart session</button>
+      </div>
     </div>
   </section>
 

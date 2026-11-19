@@ -17,13 +17,13 @@ class QuietHandler(SimpleHTTPRequestHandler):
 
 
 @contextmanager
-def bake_page():
+def bake_page(**launch_options):
     with ThreadingHTTPServer(("127.0.0.1", 0), partial(QuietHandler, directory=ROOT)) as server:
         worker = Thread(target=server.serve_forever, daemon=True)
         worker.start()
         try:
             with sync_playwright() as playwright:
-                browser = playwright.chromium.launch(channel="chrome")
+                browser = playwright.chromium.launch(channel="chrome", **launch_options)
                 page = browser.new_page()
                 page.route("**/bake.html", lambda route: route.fulfill(content_type="text/html", body=
                            '<script type="importmap">{"imports":{"three":"/vendor/three.module.js"}}</script>'))

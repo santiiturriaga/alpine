@@ -485,7 +485,11 @@ class ParticlePool {
       this.normal[i*3+2]=this.sampleNormal.z;
       // Advected powder retains the ski surface's downhill/uphill velocity,
       // then receives its extra lift; it does not float level over a drop.
-      if (!airborne) this.vel[i*3+1]+=clamp(-(this.sampleNormal.x*vx+this.sampleNormal.z*vz)/Math.max(.4,this.sampleNormal.y),-2.8,2.8);
+      if (!airborne) {
+        const slopeLimit = Math.max(2.8, Math.hypot(vx, vz) * .67);
+        this.vel[i*3+1] += clamp(-(this.sampleNormal.x * vx + this.sampleNormal.z * vz)
+          / Math.max(.4, this.sampleNormal.y), -slopeLimit, slopeLimit);
+      }
       const map=this.ground.mountainShade?.image;
       if(map?.data) {
         const { minX, minZ, maxX, maxZ } = this.ground.bounds ?? WORLD;
@@ -1030,22 +1034,27 @@ export class ParticleFX {
 
   breakVehicleTrack() { this.vehicleTrail = null; }
 
-  skiWake(left, right, velocity, heading, powderAmount, steer, brake, dt, surface = 'packed', planted = [true, true]) {
+  skiWake(left, right, velocity, heading, powderAmount, steer, brake, dt, surface = 'packed',
+    planted = [true, true], landing = 0) {
     const speed = Math.hypot(velocity.x, velocity.z);
-    const soft = surface === 'ice' ? 0 : clamp(powderAmount, 0, 1);
+    const soft = surface === 'ice' || surface === 'ground' ? 0 : clamp(powderAmount, 0, 1);
+    const deep = clamp((soft - .30) / .57, 0, 1);
     const carving = clamp(Math.abs(steer), 0, 1);
     const braking = clamp(Number(brake), 0, 1);
     const sideX = Math.cos(heading), sideZ = -Math.sin(heading);
-    const forwardX = Math.sin(heading), forwardZ = Math.cos(heading);
+    const pathX = velocity.x / Math.max(speed, .8), pathZ = velocity.z / Math.max(speed, .8);
     // Slip across an edged ski lifts more snow than simply pointing downhill.
-    const slip = Math.abs(velocity.x * sideX + velocity.z * sideZ) / Math.max(speed, 1);
+    const across = pathX * sideX + pathZ * sideZ;
+    const slip = Math.abs(across);
     const load = clamp(carving * .65 + slip * 1.3 + braking * .95, 0, 1.6);
+    const roll = deep * clamp((speed - 2) / 9, 0, 1) * clamp(.17 + load * .77 + landing * .83, 0, 1);
+    const loadedSide = braking && slip > .32 ? Math.sign(across) : carving > .05 ? Math.sign(steer) : 0;
     const rand = this.rand;
     const sources = [left, right];
     for (let ski = 0; ski < 2; ski++) {
       const p = sources[ski];
       const last = this.wakeLast[ski];
-      if (!planted[ski] || speed < .8) {
+      if (!planted[ski] || speed < .8 || surface === 'ground') {
         this.wakeAccum[ski] = 0;
         this.wakeLast[ski] = null;
         continue;
@@ -1053,10 +1062,10 @@ export class ParticleFX {
       const connected = last && Math.hypot(p.x-last.x, p.z-last.z) < 8;
       // Packed piste produces a low edge scratch. Ice only sheds a few grains.
       const side = ski === 0 ? -1 : 1;
-      const outside = Math.abs(steer)<.05 ? 1 : (Math.sign(steer) === side ? 1.48 : .38);
+      const outside = !loadedSide ? 1 : loadedSide === side ? 1.44 : .54;
       const rate = (surface === 'ice'
         ? (1.4 + speed * .12) * load
-        : speed * (.12 + soft * 6.4) * (.62 + load * 2.6))*outside;
+        : speed * (.12 + soft * 6.4) * (.62 + load * 2.4 + roll * 1.95)) * outside;
       this.wakeAccum[ski] += Math.min(dt, .12) * Math.min(720, rate);
       const count = Math.min(86, Math.floor(this.wakeAccum[ski]));
       this.wakeAccum[ski] -= count;
@@ -1066,26 +1075,61 @@ export class ParticleFX {
         const z = connected ? last.z + (p.z-last.z)*fraction : p.z;
         const y = connected ? last.y + (p.y-last.y)*fraction : p.y;
         const grain = this.spray.seed[this.spray.cursor] < .18;
-        const toss = (.35 + rand()*.9) * (.12 + soft * 1.15) * (1 + load*3.4) * outside;
-        const aft = .34 + rand()*.45;
-        const lateral = side * (.075 + rand() * .035);
-        const px = x - forwardX * aft + sideX * lateral;
-        const pz = z - forwardZ * aft + sideZ * lateral;
-        const py = Math.max(y, this.sampleHeight(px, pz)) + .035 + rand() * .035;
-        const trailing = .12 + rand()*.13;
-        const lift = Math.min(3.9,(.35 + rand()*.95) * (.08 + soft*.95) * (1 + load*2.1) * outside);
+        // The shovels carry a low, dense wave beside the boots. Snow released
+        // along the edges moves out and back in a wider, slower fan.
+        const shoveling = rand() < roll * (grain ? .40 : .68);
+        const toss = shoveling ? (.35 + rand() * 1.25) * roll
+          : (.35 + rand() * .9) * (.12 + soft * 1.15) * (1 + load * 3.1) * outside;
+        const along = shoveling ? .16 + rand() * .61 : -.24 - rand() * .46;
+        const lateral = side * (.063 + rand() * (shoveling ? .14 : .085));
+        const px = x + pathX * along + sideX * lateral;
+        const pz = z + pathZ * along + sideZ * lateral;
+        const py = Math.max(y, this.sampleHeight(px, pz)) + .035 + rand() * (shoveling ? .11 : .035);
+        const momentum = shoveling ? .81 + rand() * .22 : .19 + rand() * (.14 + .17 * deep);
+        const lift = shoveling ? 1.45 + (1.05 + rand() * 2.5) * roll
+          : Math.min(4.5, (.35 + rand() * 1.04) * (.08 + soft * .95) * (1 + load * 2.5) * outside);
+        const size = grain ? .015 + rand() * .036
+          : shoveling ? (.40 + rand() * .52) * (.70 + roll * .53)
+            : (.18 + rand() * .31) * (.22 + soft * .95) * (1 + load * .35);
+        const life = grain ? .28 + rand() * .33
+          : shoveling ? .43 + rand() * .32 : .65 + soft * .58 + rand() * .51;
         this.spray.spawn(
           px, py, pz,
-          velocity.x*trailing + sideX*side*toss + (rand()-.5)*.22,
+          velocity.x * momentum + sideX * side * toss + (rand() - .5) * .22,
           lift,
-          velocity.z*trailing + sideZ*side*toss + (rand()-.5)*.22,
-          grain ? .009 + rand()*.026 : (.18 + rand()*.26) * (.22 + soft*.95) * (1+load*.25),
-          grain ? .28 + rand()*.30 : .65 + soft*.50 + rand()*.48,
-          soft > .45 ? powder : white,
+          velocity.z * momentum + sideZ * side * toss + (rand() - .5) * .22,
+          size, life, soft > .45 ? powder : white,
         );
       }
       if (last) { last.x=p.x; last.y=p.y; last.z=p.z; }
       else this.wakeLast[ski] = { x: p.x, y: p.y, z: p.z };
+    }
+  }
+
+  skiLanding(contacts, velocity, heading, softness, impact) {
+    const rand = this.rand;
+    const deep = clamp((softness - .29) / .57, 0, 1);
+    const load = clamp(impact / 10, 0, 1);
+    const speed = Math.hypot(velocity.x, velocity.z);
+    const pathX = speed > 1 ? velocity.x / speed : Math.sin(heading);
+    const pathZ = speed > 1 ? velocity.z / speed : Math.cos(heading);
+    const count = Math.round((7 + 24 * load) * deep);
+    for (const [ski, point] of contacts.entries()) {
+      const side = ski ? 1 : -1;
+      for (let i = 0; i < count; i++) {
+        const grain = this.spray.seed[this.spray.cursor] < .18;
+        const ahead = rand() * .84 - .23;
+        const across = side * rand() * .37;
+        const x = point.x + pathX * ahead + pathZ * across;
+        const z = point.z + pathZ * ahead - pathX * across;
+        const momentum = .40 + rand() * .54;
+        const kick = side * (.7 + rand() * 2.8) * load;
+        this.spray.spawn(x, this.sampleHeight(x, z) + .055 + rand() * .14, z,
+          velocity.x * momentum + pathZ * kick, 1 + rand() * 1.6 + load * 2.1,
+          velocity.z * momentum - pathX * kick,
+          grain ? .016 + rand() * .055 : (.37 + rand() * .67) * (.67 + deep * .42),
+          grain ? .30 + rand() * .32 : .55 + rand() * .46, powder);
+      }
     }
   }
 
@@ -1131,7 +1175,7 @@ export class ParticleFX {
     }
   }
 
-  burst(point, kind = 'snow', count = 24) {
+  burst(point, kind = 'snow', count = 24, scale = 1) {
     const rand = this.rand;
     for (let i = 0; i < count; i++) {
       const a = rand() * Math.PI * 2;
@@ -1146,7 +1190,7 @@ export class ParticleFX {
         point.y + 0.35,
         point.z + (rand() - 0.5) * 0.8,
         Math.cos(a) * r, up, Math.sin(a) * r,
-        kind === 'snow' ? .10 + rand()*.26 : 0.35 + rand() * 0.6,
+        (kind === 'snow' ? .10 + rand()*.26 : 0.35 + rand() * 0.6) * scale,
         kind === 'snow' ? 0.9 + rand() * 0.8 : 0.6 + rand() * 0.8,
         col,
       );

@@ -1,6 +1,7 @@
 import { jacketFinishes } from './garment-marks.js';
 import { createGearPreview } from './gear-preview.js';
 import { SNOW_SHOES } from './snow-shoes.js';
+import { DEFAULT_GOGGLES, GOGGLES, isGoggleColor } from './ski-goggles.js';
 
 // A local player's inventory. Race rewards, finds and slope coins all use
 // the same currency. Purchases and the resulting equipped pair save together.
@@ -30,6 +31,7 @@ const stickers={none:'No decal',peak:'Peak contour',maple:'Maple leaf',snowflake
 const haircuts={helmet:'Keep helmet on',crop:'Short crop',part:'Side part',curls:'Curls'};
 const hairColors=[['Dark brown','#382923'],['Chestnut','#814f32'],['Sandy blond','#bda36b']];
 const defaultOutfit=Object.fromEntries(Object.entries(colors).map(([slot,palette])=>[slot,palette[0][1]]));
+defaultOutfit.goggles=DEFAULT_GOGGLES;
 const money=n=>Number.isSafeInteger(n)&&n>=0?n:0;
 function read() {
   let data={};try{data=JSON.parse(localStorage.getItem(key)||'{}')||{};}catch{}
@@ -37,6 +39,7 @@ function read() {
   const outfit={...defaultOutfit};
   const finds=Array.isArray(data.finds)?[...new Set(data.finds.filter(s=>typeof s==='string'))]:[];
   for(const [slot,palette] of Object.entries(colors))if((slot==='jacket'?jacketPalette(finds):palette).some(([,hex])=>hex===data.outfit?.[slot]))outfit[slot]=data.outfit[slot];
+  if(isGoggleColor(data.outfit?.goggles))outfit.goggles=data.outfit.goggles;
   const ownsSnowShoes=data.ownsSnowShoes===true;
   return {balance:money(data.balance),owned:[...owned],skis:owned.has(data.skis)?data.skis:'all-mountain',outfit,
     sticker:Object.hasOwn(stickers,data.sticker)?data.sticker:'none',finds,ownsSnowShoes,
@@ -53,6 +56,8 @@ export class Outfitter {
     this.dialog.addEventListener('cancel',e=>{e.preventDefault();close();});
     this.notices=this.dialog.querySelector('output');
     this.previewCanvas=this.dialog.querySelector('[data-gear-preview]');
+    this.previewCaption=this.dialog.querySelector('[data-preview-caption]');
+    this.goggleButton=this.dialog.querySelector('[data-goggle-preview]');
     this.renderer=renderer;
     for (const button of this.dialog.querySelectorAll('[data-turn]')) button.onclick=()=>{
       this.angle+=Number(button.dataset.turn);
@@ -97,9 +102,8 @@ export class Outfitter {
   find(id,reward) {if(this.state.finds.includes(id))return false;this.state.finds.push(id);this.credit(reward);return true;}
   open(shop={}){
     this.barber=shop.kind==='barber';
-    this.angle=this.barber ? .13 : -.48;
     this.dialog.querySelector('#outfitter-name').textContent=shop.name||'Mountain outfitter';
-    this.previewCanvas.setAttribute('aria-label',this.barber?'3D preview of your skier’s haircut':'3D preview of your skier and equipped outfit');
+    this.setPreviewMode(this.barber?'hair':'outfit');
     this.dialog.querySelector('[data-shop-gear]').hidden=this.barber;
     this.dialog.querySelector('[data-shop-barber]').hidden=!this.barber;
     this.notices.textContent='';
@@ -111,7 +115,36 @@ export class Outfitter {
   drawPreview(){
     if(!this.renderer)return;
     this.preview ??= createGearPreview(this.renderer,this.previewCanvas);
-    this.preview(this.appearance,this.angle,this.barber);
+    this.preview(this.appearance,this.angle,this.previewMode);
+  }
+  setPreviewMode(mode) {
+    if(this.previewMode===mode && this.dialog.open)return;
+    this.previewMode=mode;
+    this.angle=mode==='hair'?.13:mode==='goggles'?-.77:-.48;
+    const caption=mode==='goggles'?'Smith × Supreme':'Your skier';
+    this.previewCaption.textContent=caption;
+    this.previewCanvas.setAttribute('aria-label',mode==='goggles'?'3D close-up of your Smith × Supreme goggles':
+      mode==='hair'?'3D preview of your skier’s haircut':'3D preview of your skier and equipped outfit');
+    this.goggleButton.setAttribute('aria-pressed',String(mode==='goggles'));
+  }
+  renderGoggles() {
+    const s=this.state, card=this.dialog.querySelector('[data-goggles]');
+    const color=card.querySelector('select');
+    color.replaceChildren(...Object.entries(GOGGLES).map(([id, finish])=>new Option(finish.name,id)));
+    color.value=s.outfit.goggles;
+    card.style.setProperty('--topsheet',GOGGLES[color.value].frame);
+    color.onchange=()=>{
+      s.outfit.goggles=color.value;
+      const finish=GOGGLES[color.value];
+      card.style.setProperty('--topsheet',finish.frame);
+      this.setPreviewMode('goggles');
+      this.equip();this.save();
+      this.notices.textContent=`${finish.name} goggles equipped.`;
+    };
+    this.goggleButton.onclick=()=>{
+      this.setPreviewMode(this.previewMode==='goggles'?'outfit':'goggles');
+      this.drawPreview();
+    };
   }
   renderBarber(){
     const fields=this.dialog.querySelector('[data-shop-barber]');
@@ -154,6 +187,7 @@ export class Outfitter {
     const s=this.state,dialog=this.dialog;
     dialog.querySelector('[data-balance]').textContent=`${s.balance} mountain coins`;
     if(this.barber){this.renderBarber();return;}
+    this.renderGoggles();
     this.renderFootwear();
     const list=dialog.querySelector('[data-skis]');list.replaceChildren();
     for(const [id,item] of Object.entries(SKIS)){

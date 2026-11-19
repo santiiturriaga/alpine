@@ -68,16 +68,17 @@ export function attachForestFade(shader, region, near) {
     `);
 }
 
-let atlasPromise, atlas, proxyMaterials = new Map();
+let atlasPromise, atlas, winterAtlas, proxyMaterials = new Map();
 
 export function preloadForestCrowns() {
-  atlasPromise ||= new THREE.TextureLoader().loadAsync(new URL('../assets/forest/crowns.png', import.meta.url).href)
+  const load = name => new THREE.TextureLoader().loadAsync(new URL(`../assets/forest/${name}`, import.meta.url).href)
     .then(texture => {
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.anisotropy = 4;
-      atlas = texture;
-    })
-    .catch(() => undefined);
+      return texture;
+    });
+  atlasPromise ||= Promise.all([load('crowns.png'), load('crowns-snow.png').catch(() => null)])
+    .then(([dry, snow]) => { atlas = dry; winterAtlas = snow ?? dry; }).catch(() => undefined);
   return atlasPromise;
 }
 
@@ -90,6 +91,7 @@ function crownMaterial(region, cascade) {
     shader.uniforms.snowline = climateUniforms.snowline;
     shader.uniforms.snowpack = climateUniforms.snowpack;
     shader.uniforms.night = climateUniforms.night;
+    shader.uniforms.winterCrownAtlas = { value: winterAtlas };
     bindTreeSnow(shader);
     shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
       attribute float crownSpecies;
@@ -114,7 +116,7 @@ function crownMaterial(region, cascade) {
       float distantCrown = smoothstep(700.,2450.,crownDistance);
       float snow = smoothstep(snowline-180.,snowline+410.,origin.y) * snowpack;
       crownSnow = snow * attachedTreeSnow(origin.xz)
-        * ${region === 'regional' ? 'smoothstep(1110.,1580.,origin.y)' : 'smoothstep(1370.,1820.,origin.y)'};
+        * mix(.68,1.,${region === 'regional' ? 'smoothstep(1110.,1580.,origin.y)' : 'smoothstep(1370.,1820.,origin.y)'});
       float rootedY = position.y * height - (1. - smoothstep(-.063,.014,position.y)) * 1.55;
       vec3 world = origin + right * position.x * length(instanceMatrix[0].xyz) * (1. + .10*distantCrown)
         + vec3(0.,rootedY,0.);
@@ -123,6 +125,7 @@ function crownMaterial(region, cascade) {
       .replace('#include <worldpos_vertex>', 'vec4 worldPosition = vec4(world,1.);');
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
       uniform float night;
+      uniform sampler2D winterCrownAtlas;
       varying float crownDirection;
       varying float crownRow;
       varying float crownSnow;
@@ -131,14 +134,12 @@ function crownMaterial(region, cascade) {
     `).replace('#include <map_fragment>', `
       vec2 frameUV = vec2((vMapUv.x + crownDirection)*.25, (vMapUv.y + 5.0 - crownRow) / 6.0);
       float bias = ${cascade ? 'mix(-.28,.56,smoothstep(1050.,3700.,crownDistance))' : '-.28'};
-      vec4 sampleCrown = texture2D(map,frameUV,bias);
-      vec3 crown = sampleCrown.rgb;
-      float exposedNeedles = smoothstep(.032,.22,crown.g);
-      const vec3 dimmer = vec3(.65,.76,.84);
-      crown *= mix(dimmer,vec3(.84,.91,1.0),smoothstep(700.,2450.,crownDistance));
-      float snowContrast = ${cascade ? 'mix(.23,.072,smoothstep(540.,2000.,crownDistance))' : '.23'};
-      crown = mix(crown,vec3(.34,.41,.46), crownSnow * exposedNeedles * snowContrast);
-      float opacity = smoothstep(.038, .49, sampleCrown.a);
+      vec4 dryCrown = texture2D(map,frameUV,bias);
+      vec4 snowCrown = texture2D(winterCrownAtlas,frameUV,bias);
+      float alpha = mix(dryCrown.a,snowCrown.a,crownSnow);
+      vec3 crown = mix(dryCrown.rgb*dryCrown.a,snowCrown.rgb*snowCrown.a,crownSnow) / max(alpha,.001);
+      crown *= mix(vec3(.78,.85,.92),vec3(.90,.95,1.0),smoothstep(700.,2450.,crownDistance));
+      float opacity = smoothstep(.038, .49, alpha);
       diffuseColor *= vec4(crown * mix(vec3(1.),vec3(.18,.25,.36),night),opacity);
     `).replace('#include <alphatest_fragment>', `
       #include <alphatest_fragment>
@@ -146,7 +147,7 @@ function crownMaterial(region, cascade) {
       if (forestFade < 1.0 && forestFade <= forestThreshold) discard;
     `).replace('#include <opaque_fragment>', '#undef OPAQUE\n#include <opaque_fragment>');
   };
-  material.customProgramCacheKey = () => `forest-crown-atlas-${profile}-v3`;
+  material.customProgramCacheKey = () => `forest-crown-atlas-${profile}-v4`;
   proxyMaterials.set(profile,material);
   return material;
 }

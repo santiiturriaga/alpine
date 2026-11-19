@@ -9,7 +9,7 @@ import { createTravelTracker } from './skier-profile.js';
 import { createSnowTraffic } from './snow-traffic.js';
 import {
   graphicsProfiles, bindRealism, createRenderer, resizeViewport, renderMountainFrame,
-  applyShadowResolution, sunShadowRefreshDue, updateSunShadow,
+  applyShadowResolution, groundShadowWindow, sunShadowRefreshDue, updateSunShadow,
 } from './graphics.js';
 import { createPerformanceCalibration } from './performance-calibration.js';
 import { compactDevice } from './device-budget.js';
@@ -131,7 +131,8 @@ function prepareTitle(mountain, config, startName, base, baseHeight, vertical, l
     liftCount > 1 ? 'Board here or find another lift or trail under Mountain.' : 'Board here to ride up the mountain.');
   label('#village-start span', terrainOnly ? 'Start on foot' : 'Start at the base');
   document.querySelector('.hero-tags').classList.add('hidden');
-  $('pause-reset').firstChild.textContent = `Return to ${startName ?? 'the start'} `;
+  $('pause-reset').firstChild.textContent = terrainOnly ? 'Return to camp ' : 'Return to trailhead ';
+  if (startName) $('pause-reset').title = startName;
 }
 
 function prepareExploration(sections, travel) {
@@ -429,7 +430,7 @@ export async function startMappedResort(mountain) {
   sledButton.onclick = async () => {
     releaseLook();
     const { openSledGame } = await import('./sled-game.js');
-    openSledGame();
+    openSledGame({ resortRenderer: renderer, audio });
   };
 
   function resize() {
@@ -722,15 +723,21 @@ export async function startMappedResort(mountain) {
     camera.lookAt(menuCenter);
   }
 
+  const shadowGroundAnchor = new THREE.Vector3();
   function updateShadow() {
     if (!lighting.sun.castShadow) return;
-    const anchor = playing ? player.pos : menuCenter;
+    const helicopter = expeditions.active?.id === 'helicopter';
+    const airborne = liftSystem.active || helicopter || player.airborne;
+    if (playing && airborne) groundShadowWindow(shadowGroundAnchor, player.pos, ground.heightAt(player.pos.x, player.pos.z));
+    const radius = helicopter ? 185 : liftSystem.active ? 132 : 73;
+    const anchor = playing ? airborne ? shadowGroundAnchor : player.pos : menuCenter;
     const { name, shadowInterval } = graphicsProfiles[qualityIndex];
-    if (!renderer.shadowMap.needsUpdate &&
+    if (!renderer.shadowMap.needsUpdate && lighting.sun.shadow.camera.right === radius &&
         !sunShadowRefreshDue(present - lastShadow, anchor.distanceToSquared(lastShadowAnchor), shadowInterval, name === 'BUDGET')) return;
     lastShadow = present;
     lastShadowAnchor.copy(anchor);
-    updateSunShadow(renderer, lighting.sun, SUN_DIR, anchor);
+    updateSunShadow(renderer, lighting.sun, SUN_DIR, anchor, radius);
+    world.forest.updateShadows(renderer, lighting.sun);
   }
 
   function draw(now) {

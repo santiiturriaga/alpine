@@ -12,6 +12,7 @@ import { createMappedTerrainDetail } from './mapped-terrain-detail.js';
 import { createBackcountry, createSurveyTerrain, insideTerrain } from './backcountry.js';
 import { compactDevice } from './device-budget.js';
 import { clamp, lerp, smoothstep } from './util.js';
+import { softenShadowBoundary } from './forest-shadows.js';
 
 const TILE = 48;
 const detailNormal = new THREE.Vector3();
@@ -317,6 +318,7 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
   `;
   material.customProgramCacheKey = () => `mapped-resort-snow-${regional}-${summerTrails}-${!!nightLight}-${!!forest}-${!!regionalForest}-${!!cascade}-${!!village}`;
   material.onBeforeCompile = (shader) => {
+    softenShadowBoundary(shader);
     shader.uniforms.resortField = { value: field.texture };
     if (forest && !regional) {
       shader.uniforms.standMap = { value: forest.texture };

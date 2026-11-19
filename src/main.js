@@ -9,7 +9,7 @@ import { createTravelTracker } from './skier-profile.js';
 import { createSnowTraffic } from './snow-traffic.js';
 import {
   graphicsProfiles, bindRealism, createRenderer, resizeViewport, prepareFirstFrame, renderMountainFrame,
-  applyShadowResolution, sunShadowRefreshDue, updateSunShadow,
+  applyShadowResolution, groundShadowWindow, sunShadowRefreshDue, updateSunShadow,
 } from './graphics.js';
 import { createPerformanceCalibration } from './performance-calibration.js';
 import { setTerrainSamplingBudget } from './materials.js';
@@ -35,7 +35,7 @@ import { buildFieldNotes } from './field-notes.js';
 import { buildWildlife,WILDLIFE_START } from './wildlife.js';
 import { Expeditions } from './expeditions.js';
 import { SKIERS_PLAZA_START,SKIERS_PLAZA_VIEW } from './skiers-plaza.js';
-import { introShot, INTRO_SECONDS } from './intro-sequence.js';
+import { frameIntroShot, introFrame, nextIntroDistrict, INTRO_SECONDS } from './intro-sequence.js';
 import { createIntroRiders } from './intro-riders.js';
 import { MountainChallenges } from './mountain-challenges.js';
 import { LIFTS, mountainAt } from './worlddata.js';
@@ -151,6 +151,7 @@ const _rideView = new THREE.Vector3();
 const _rideAnchor = new THREE.Vector3();
 const shadowAnchor = new THREE.Vector3(200, 1450, 200);
 const lastShadowAnchor = new THREE.Vector3(Infinity, Infinity, Infinity);
+const shadowGroundAnchor = new THREE.Vector3();
 let lastShadowTime = -Infinity;
 
 /* ── boot ───────────────────────────────────────────────────── */
@@ -287,9 +288,10 @@ async function boot() {
     shadowAnchor.copy(player.pos);
   } else {
     updateIntroCamera(0);
+    climate.update(0, camera);
   }
   env.update(0, 0, camera);
-  villageLights.update(0, 0, climate.state, camera);
+  if (directArrival) villageLights.update(0, 0, climate.state, camera);
   terrain.streamDetail(directArrival ? player.pos : camera.position, camera.position);
   expeditions.drawNear(camera.position);
   valley?.update(0, camera);
@@ -765,7 +767,7 @@ function bindMountainPanel() {
   dialog.querySelector('[data-minigame="sled"]').onclick = async () => {
     releaseMouseLook();
     const { openSledGame } = await import('./sled-game.js');
-    openSledGame();
+    openSledGame({ resortRenderer: renderer, audio });
   };
   $('course-retry').onclick=()=>{if(challenges.state)startCourse(challenges.state.id);};
   $('course-explore').onclick=()=>challenges.clear();
@@ -1144,7 +1146,6 @@ function onPlayerEvent(event) {
     trickScore += event.points;
     audio.land(event.impact, event.points);
     if (event.airTime > .55 && event.boost) {
-      ui.toast(event.label, `${event.boost.toFixed(1)}s boost · +${formatNumber(event.points)}`, 'gold', 'star');
       audio.tone(880, { dur: 0.18, type: 'triangle', gain: 0.02, when: 0.08 });
     }
   } else if (event.type === 'crash') {
@@ -1607,8 +1608,22 @@ function onResize() {
 /* ── frame ──────────────────────────────────────────────────── */
 
 function updateIntroCamera(dt) {
-  introTime += dt;
-  const shot=introShot(camera,introTime,()=>introRiders??=createIntroRiders(scene),env.lifts,dt,shadowAnchor);
+  let nextTime = introTime + dt;
+  let { shot, time } = introFrame(nextTime);
+  if (shot !== previousShot && shot.district) {
+    const district = env[shot.district];
+    // Hold the outgoing camera until the live loop has prepared the next building.
+    if (!district.group) {
+      if (!capturingIntro) return;
+      district.prepare(Infinity);
+    }
+    if (!capturingIntro) {
+      nextTime -= time;
+      time = 0;
+    }
+  }
+  introTime = nextTime;
+  frameIntroShot(camera,shot,time,()=>introRiders??=createIntroRiders(scene),env.lifts,dt,shadowAnchor);
   if(shot!==previousShot){
     if(!shot.action)introRiders?.hide();
     if(!shot.lift&&previousShot?.lift)env.lifts.setPassenger(null);
@@ -1620,16 +1635,19 @@ function updateIntroCamera(dt) {
 
 function updateSun(force = false) {
   if (!lighting?.sun?.castShadow || paused) return;
-  const anchor = scenicPose ? scenicTarget : playing && player ? player.pos : shadowAnchor;
+  const helicopter = expeditions.active?.id === 'helicopter';
+  const airborne = playing && player && (ride || helicopter || player.airborne);
+  if (airborne) groundShadowWindow(shadowGroundAnchor, player.pos, heightAt(player.pos.x, player.pos.z));
+  const radius = scenicPose ? 73 : helicopter ? 185 : ride ? 132 : 73;
+  const anchor = scenicPose ? scenicTarget : airborne ? shadowGroundAnchor : playing && player ? player.pos : shadowAnchor;
   const change = anchor.distanceToSquared(lastShadowAnchor);
   const { name, shadowInterval } = graphicsProfiles[qualityIndex];
-  if (!force && !renderer.shadowMap.needsUpdate &&
+  if (!force && !renderer.shadowMap.needsUpdate && lighting.sun.shadow.camera.right === radius &&
       !sunShadowRefreshDue(displayTime - lastShadowTime, change, shadowInterval, name === 'BUDGET')) return;
   lastShadowTime = displayTime;
   lastShadowAnchor.copy(anchor);
-  const flightHeight = expeditions.active?.id === 'helicopter' ? expeditions.active.clearance : 0;
-  const radius = Math.round(73 + 126 * clamp((flightHeight - 20) / 105, 0, 1));
   updateSunShadow(renderer, lighting.sun, SUN_DIR, anchor, radius);
+  env.forest.updateShadows(renderer, lighting.sun);
 }
 
 /* rAF stalls when the tab is not painting. Keep a slow timer fallback so
@@ -1689,6 +1707,7 @@ function frame(now, vsync) {
   }
   lastFrame = now;
   frameObserver?.(callbackStart, vsync);
+  if (!playing) updateIntroCamera(dt);
   climate.update(dt,camera, playing && !paused && !transitioning ? Math.min(.5, Math.max(0, raw)) : 0);
   const conditionsNow = climate.state;
   env.people.setDensity(conditionsNow.crowd);
@@ -1699,7 +1718,6 @@ function frame(now, vsync) {
 
   if (!playing) {
     skiPatrol?.update(0, null, camera, climate.state.season);
-    updateIntroCamera(dt);
     updatePassGates(dt,null,camera);
     env?.update(dt, displayTime, camera);
     terrain.updateDetail(camera.position);
@@ -1709,6 +1727,9 @@ function frame(now, vsync) {
     collectibles.prepareRender(camera);
     renderTerrainFrame();
     performanceCalibration.didRender(now);
+    // Prepare the next featured district in small slices after drawing the current view.
+    const district = env[nextIntroDistrict(previousShot)];
+    if (district && !district.group) district.prepare(performance.now() + 2);
     scheduleFrame();
     return;
   }

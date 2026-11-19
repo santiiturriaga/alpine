@@ -18,6 +18,8 @@
   color: var(--sled-ink);
   font: 500 1rem Barlow, sans-serif;
   color-scheme: dark;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .sled-game::backdrop { background: #0a1b23; }
@@ -69,6 +71,7 @@
 .sled-stats div { display: grid; gap: 2px; min-width: 0; padding: 0 6px; }
 .sled-stats div + div { border-inline-start: 1px solid #c4e0f03d; }
 .sled-stats b { font: 700 2.15rem/.9 'Barlow Condensed', 'Arial Narrow', sans-serif; }
+.sled-stats .marker-scored { color: var(--sled-amber); }
 .sled-stats span { color: var(--sled-muted); }
 .sled-actions { display: flex; justify-self: end; gap: 8px; }
 .sled-secondary, .sled-primary, .sled-touch button {
@@ -139,7 +142,6 @@
   min-width: min(194px, 48vw);
   gap: 11px;
   padding: 7px 12px 8px 9px;
-  border-left: 3px solid var(--sled-amber);
   background: #112a36ea;
 }
 .sled-callout em { font-style: normal; color: var(--sled-amber); font-size: 1.5rem; line-height: 1; }
@@ -162,8 +164,7 @@
   width: min(380px, calc(100% - 46px));
   padding: 21px 23px 24px;
   border: 1px solid #a9cad27d;
-  border-top: 3px solid var(--sled-amber);
-  background: linear-gradient(135deg, #102630f5, #102b36e9);
+  background: #19262bef;
   box-shadow: 0 12px 35px #0b243a4d;
 }
 .sled-card h2 { font-size: clamp(2.75rem, 5.8vw, 4.05rem); margin: .03em 0 .18em; }
@@ -217,7 +218,7 @@
     pointer-events: none;
   }
   .sled-touch div { display: flex; gap: 7px; }
-  .sled-touch button { min-width: 48px; min-height: 48px; touch-action: none; pointer-events: auto; }
+  .sled-touch button { background: #182c33; min-width: 48px; min-height: 48px; touch-action: none; pointer-events: auto; }
   .sled-touch [data-sled-input="left"], .sled-touch [data-sled-input="right"] { font-size: 1.35rem; }
 }
 

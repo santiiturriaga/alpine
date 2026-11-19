@@ -7,11 +7,11 @@ import { bindTreeSnow } from './tree-snow.js';
 
 const TAU=Math.PI*2, variants=3, geometryCache=new Map();
 const profiles={
-  BUDGET:{start:14,end:30,budget:19,far:1900},
-  LOW:{start:17,end:35,budget:28,far:2100},
-  BALANCED:{start:23,end:51,budget:72,far:2900},
-  HIGH:{start:29,end:65,budget:112,far:3600},
-  MAX:{start:42,end:94,budget:192,far:4800},
+  BUDGET:{start:52,end:83,budget:96,far:1900},
+  LOW:{start:59,end:91,budget:128,far:2100},
+  BALANCED:{start:65,end:102,budget:166,far:2900},
+  HIGH:{start:71,end:112,budget:208,far:3600},
+  MAX:{start:82,end:136,budget:288,far:4800},
 };
 const species={
   birch:{seed:6193,spread:.26,bark:0xe0ded0,twig:0x51413f,leaf:0x718349,fall:0xc6a34b},
@@ -160,8 +160,8 @@ function treeSeed(tree) {
 
 // This unit-height 3D graph supplies both nearby meshes and the generated far
 // atlas. Its tapered tubes and folded leaves need no photographs or stock art.
-function treeGeometry(kind,variant,leaves) {
-  const key=`${kind}:${variant}:${leaves}`;
+function treeGeometry(kind,variant,leaves,shadow=false) {
+  const key=`${kind}:${variant}:${leaves}:${shadow}`;
   if (geometryCache.has(key)) return geometryCache.get(key);
   const spec=species[kind],rand=mulberry32(spec.seed+variant*7919);
   const positions=[],normals=[],colors=[],uvs=[],ages=[],indices=[];
@@ -200,12 +200,12 @@ function treeGeometry(kind,variant,leaves) {
     for(let i=0;i<points.length;i++)vertex(points[i],normal,i===1?0:i===3?1:.5,i===0?0:i===2?1:.5,0);
     indices.push(first,first+1,first+4,first+1,first+2,first+4,first+2,first+3,first+4,first+3,first,first+4);
   }
-  const trunkLevels=[-.097,-.012,.022,.081,.16,.26,.38,.49,.61,.74,.86,.94,1];
+  const trunkLevels=shadow?[-.18,.14,.37,.65,.87,1]:[-.18,-.025,.022,.081,.16,.26,.38,.49,.61,.74,.86,.94,1];
   const boleScale=kind==='birch'?.86+variant*.08:1;
   const boleRadius=y=>boleScale*(.0101*Math.pow(1-Math.max(0,y),.76)+.0005+.005*Math.exp(-Math.max(0,y)*83));
   if(!leaves)for(let i=1;i<trunkLevels.length;i++){
     const a=trunkLevels[i-1],b=trunkLevels[i];
-    tube(trunk(a),trunk(b),boleRadius(a),boleRadius(b),11,Math.max(0,a)*.24);
+    tube(trunk(a),trunk(b),boleRadius(a),boleRadius(b),shadow?5:11,Math.max(0,a)*.24);
   }
   for(let i=0;i<12;i++){
     const y=.24+i*.051+rand()*.037,angle=i*2.39996+phase+(rand()-.5)*.84;
@@ -216,21 +216,21 @@ function treeGeometry(kind,variant,leaves) {
     const elbowY=.015+rand()*.016;
     if(!leaves){
       const elbow=root.clone().lerp(mid,.48).add(new THREE.Vector3(0,elbowY,0));
-      tube(root,elbow,.0045*(1-y*.66),.0022,7,.30);
-      tube(elbow,mid,.0022,.0014,5,.52);
-      tube(mid,end,.0014,.00036,4,.78);
+      tube(root,elbow,.0045*(1-y*.66),.0022,shadow?3:7,.30);
+      tube(elbow,mid,.0022,.0014,shadow?3:5,.52);
+      tube(mid,end,.0014,.00036,shadow?3:4,.78);
     }
     for(let j=0;j<5;j++){
       const t=.15+j*.16+rand()*.06,side=j%2?1:-1,turn=angle+side*(.56+rand()*.58);
       const attach=mid.clone().lerp(end,t),reach=spread*(.26+rand()*.23)*(1-t*.32);
       const tip=attach.clone().add(new THREE.Vector3(Math.cos(turn)*reach,.039+rand()*.055,Math.sin(turn)*reach));
       const elbow=attach.clone().lerp(tip,.56).add(new THREE.Vector3(0,.007,0));
-      if(!leaves){tube(attach,elbow,.00078,.00046,4,.79);tube(elbow,tip,.00046,.00012,3,.95);}
+      if(!leaves&&!shadow){tube(attach,elbow,.00132,.00073,4,.75);tube(elbow,tip,.00073,.00023,3,.91);}
       tips.push({tip,axis:tip.clone().sub(attach).normalize()});
       for(let k=0;k<2;k++){
         const base=elbow.clone().lerp(tip,.22+k*.47),fork=turn+(k?1:-1)*(.49+rand()*.45);
         const twigEnd=base.clone().add(new THREE.Vector3(Math.cos(fork)*reach*.58,.018+rand()*.039,Math.sin(fork)*reach*.58));
-        if(!leaves)tube(base,twigEnd,.00032,.00006,3,.99);
+        if(!leaves&&!shadow)tube(base,twigEnd,.00045,.00009,3,.95);
         tips.push({tip:twigEnd,axis:twigEnd.clone().sub(base).normalize()});
       }
     }
@@ -241,11 +241,11 @@ function treeGeometry(kind,variant,leaves) {
     const angle=phase+i*2.39996,y=.27+i*.11,root=trunk(y),reach=.085+rand()*.073;
     const mid=root.clone().add(new THREE.Vector3(Math.cos(angle)*reach*.7,.23+rand()*.13,Math.sin(angle)*reach*.7));
     const top=new THREE.Vector3(Math.cos(angle+.2)*reach,1.015-i*.037+rand()*.056,Math.sin(angle+.2)*reach);
-    if(!leaves){tube(root,mid,.0044-i*.00065,.0017,7,.27);tube(mid,top,.0017,.00016,4,.70);}
+    if(!leaves){tube(root,mid,.0044-i*.00065,.0017,shadow?4:7,.27);tube(mid,top,.0017,.00016,4,.70);}
     for(let j=0;j<6;j++){
       const t=.13+j*.13,attach=mid.clone().lerp(top,t),turn=angle+j*2.39996;
       const end=attach.clone().add(new THREE.Vector3(Math.cos(turn)*(.055+rand()*.055),.032+rand()*.04,Math.sin(turn)*(.055+rand()*.055)));
-      if(!leaves)tube(attach,end,.00063,.00008,3,.92);
+      if(!leaves&&!shadow)tube(attach,end,.00063,.00008,3,.92);
       tips.push({tip:end,axis:end.clone().sub(attach).normalize()});
     }
   }
@@ -274,7 +274,7 @@ function forestMaterial(kind,near,leaves,uniforms) {
   });
   if(!near){getBranchAtlases();material.map=leaves?leafAtlas:branchAtlas;material.alphaTest=branchCard?.011:.06;}
   material.forceSinglePass=true;
-  material.customProgramCacheKey=()=>`winter-deciduous-${kind}-${near}-${leaves}-v4`;
+  material.customProgramCacheKey=()=>`winter-deciduous-${kind}-${near}-${leaves}-v5`;
   material.onBeforeCompile=(shader,renderer)=>{
     const multisample=renderer.getContext().getContextAttributes().antialias;
     const showBark=near&&!leaves;
@@ -290,20 +290,22 @@ function forestMaterial(kind,near,leaves,uniforms) {
       varying float decCoverage;varying vec3 decWorld;varying vec3 decFacing;
       ${showBark?'varying float decAttachedSnow;':''}
       ${near?'':'varying float decFrame;'}
-      ${branchCard?'varying float decWoodDistance;':''}
+      ${!leaves?'varying float decWoodDistance;':''}
       uniform vec2 decNear;uniform vec2 decFar;
     `).replace('#include <begin_vertex>',`#include <begin_vertex>
       vec3 decRoot=(modelMatrix*instanceMatrix*vec4(0.,0.,0.,1.)).xyz;
       float decHeight=length(instanceMatrix[1].xyz);
       float decRise=max(0.,max(decRoot.y-cameraPosition.y,cameraPosition.y-decRoot.y-decHeight));
       float decDistance=length(vec3(cameraPosition.xz-decRoot.xz,decRise));
-      ${branchCard?'decWoodDistance=decDistance;':''}
+      ${!leaves?'decWoodDistance=decDistance;':''}
       float decJitter=fract(sin(dot(decRoot.xz,vec2(.1271,.2293)))*3375.73);
-      float decStart=mix(decNear.x,decNear.y,.79*decJitter);
-      float decBlend=1.-smoothstep(decStart,decStart+.21*(decNear.y-decNear.x),decDistance);
+      float decStart=mix(decNear.x,decNear.y,.66*decJitter);
+      float decBlend=1.-smoothstep(decStart,decStart+.34*(decNear.y-decNear.x),decDistance/clamp(decHeight*.083,1.,1.45));
       float decHorizon=mix(decFar.x,decFar.y,decJitter);
       decCoverage=${near?'decBlend':'(1.-detailWeight*decBlend)*step(decDistance,decHorizon)'};
-      decWorld=(modelMatrix*instanceMatrix*vec4(position,1.)).xyz;
+      float rootExtension = 2.4 * (1.-smoothstep(-.080,.0,position.y));
+      transformed.y -= rootExtension / decHeight;
+      decWorld=(modelMatrix*instanceMatrix*vec4(transformed,1.)).xyz;
       decFacing=normalize(mat3(modelMatrix)*mat3(instanceMatrix)*normal);
       decAge=woodAge;decBark=vec2(uv.x,uv.y*decHeight);
       ${showBark?'decAttachedSnow=attachedTreeSnow(decRoot.xz);':''}
@@ -318,7 +320,7 @@ function forestMaterial(kind,near,leaves,uniforms) {
         vec3 decRight=vec3(decToward.y,0.,-decToward.x);
         float decRotation=atan(instanceMatrix[2].x,instanceMatrix[2].z);
         decFrame=mod(floor((atan(decToward.x,decToward.y)-decRotation)*.6366197724+4.5),4.);
-        vec3 decBillboard=decRoot+decRight*position.x*length(instanceMatrix[0].xyz)+vec3(0.,position.y*decHeight,0.);
+        vec3 decBillboard=decRoot+decRight*position.x*length(instanceMatrix[0].xyz)+vec3(0.,transformed.y*decHeight,0.);
         if(decCoverage<=0.)decBillboard=decRoot;
         decWorld=decBillboard;
         vec4 mvPosition=viewMatrix*vec4(decBillboard,1.);gl_Position=projectionMatrix*mvPosition;
@@ -330,7 +332,7 @@ function forestMaterial(kind,near,leaves,uniforms) {
       uniform float decSnow;uniform float decLine;uniform float decAutumn;uniform float decSpring;
       uniform float decLeafCover;uniform vec3 decFall;uniform vec3 decGreen;
       ${near?'':'varying float decFrame;'}
-      ${branchCard?'varying float decWoodDistance;':''}
+      ${!leaves?'varying float decWoodDistance;':''}
       float decHash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
     `).replace('#include <color_fragment>',`#include <color_fragment>
       ${leaves?`
@@ -338,20 +340,26 @@ function forestMaterial(kind,near,leaves,uniforms) {
         diffuseColor.rgb=mix(decGreen,decFall,decAutumn*(.72+.28*variation));
         diffuseColor.rgb*=.82+.24*variation;
       `:near?`
-        vec2 barkCell=vec2(decBark.x*9.,decBark.y*5.4);
+        vec2 barkCell=vec2(decBark.x*8.,decBark.y*3.3);
         vec2 barkLocal=fract(barkCell);float mark=decHash(floor(barkCell));
         float antialias=max(.027,fwidth(barkCell.y));
         float ends=1.-smoothstep(.22+mark*.13,.48,abs(barkLocal.x-.5));
         float center=.22+mark*.54+sin(barkLocal.x*6.+mark*2.)*.041;
         float lenticel=(1.-smoothstep(.036,.057+antialias,abs(barkLocal.y-center)))
-          *ends*step(.37,mark)*(1.-smoothstep(.27,1.,antialias));
+          *ends*step(.48,mark)*(1.-smoothstep(.27,1.,antialias));
         float rolls=.92+.08*sin(decBark.x*45.+sin(decBark.y*4.8)*1.38);
+        float plates = sin(decBark.y*3.7+sin(decBark.x*31.))
+          * sin(decBark.x*19.+sin(decBark.y*1.8)*1.8);
         float basal=(1.-smoothstep(.10,1.7,decBark.y))*(.27+.73*decHash(floor(decBark*vec2(24.,11.))));
-        diffuseColor.rgb*=rolls*(1.-lenticel*(1.-decAge)*${kind==='neutral'?'.35':'.79'});
+        diffuseColor.rgb*=rolls*(1.+plates*.079*(1.-decAge))
+          *(1.-lenticel*(1.-decAge)*${kind==='neutral'?'.35':'.74'});
         diffuseColor.rgb=mix(diffuseColor.rgb,vec3(.13,.099,.083),basal*(1.-decAge)*${kind==='neutral'?'.25':'.63'});
         float snowDust=decSnow*decAttachedSnow*smoothstep(decLine-230.,decLine+130.,decWorld.y)
           *smoothstep(.36,.84,decFacing.y)*(.18+.48*decAge);
         diffuseColor.rgb=mix(diffuseColor.rgb,vec3(.82,.88,.92),snowDust);
+        // Fine twigs scatter more skylight as they approach pixel scale.
+        float fineWood=smoothstep(.72,.98,decAge)*smoothstep(12.,57.,decWoodDistance);
+        diffuseColor.rgb=mix(diffuseColor.rgb,vec3(.27,.26,.24),fineWood*.57);
       `:'diffuseColor.rgb*=.94;'}
     `).replace('#include <alphatest_fragment>',`#include <alphatest_fragment>
       ${branchCard?'':`
@@ -385,8 +393,8 @@ function forestMaterial(kind,near,leaves,uniforms) {
 }
 
 /** Patch-instanced bare woods with a bounded nearby 3D twig/leaf tier. */
-export function buildDeciduousForest(group,patches,region='') {
-  const uniforms={decNear:{value:new THREE.Vector2(29,65)},decFar:{value:new THREE.Vector2(2600,3600)},decLeafCover:{value:0}};
+export function buildDeciduousForest(group,patches,region='',shadows=null) {
+  const uniforms={decNear:{value:new THREE.Vector2()},decFar:{value:new THREE.Vector2(2600,3600)},decLeafCover:{value:0}};
   const farCells=[],allLeaves=[],nearBuckets=new Map(),materials=new Map(),plantedKinds=new Set();
   let currentQuality='',lastLeafVisible=null,lastX=Infinity,lastY=Infinity,lastZ=Infinity,selected=[];
   const material=(kind,near,leaf)=>{
@@ -417,20 +425,22 @@ export function buildDeciduousForest(group,patches,region='') {
       const leaves=new THREE.InstancedMesh(leafGeo,material(kind,false,true),0);
       wood.name=`${region} ${kind} winter branches · ${key}`;leaves.name=`${kind} seasonal canopy · ${key}`;
       for(let i=0;i<trees.length;i++){
-        const tree=trees[i];wood.setMatrixAt(i,matrixFor(tree));
+        const tree=trees[i], matrix=matrixFor(tree);
+        wood.setMatrixAt(i,matrix);
+        if(shadows)shadows.add(tree.x,tree.z,treeGeometry(kind,Math.floor(treeSeed(tree)*variants),false,true),matrix);
       }
       leaves.instanceMatrix=wood.instanceMatrix;
       leaves.count=wood.count;
       wood.receiveShadow=true;leaves.receiveShadow=true;leaves.visible=false;
-      wood.computeBoundingSphere();leaves.computeBoundingSphere();
+      wood.computeBoundingSphere();wood.boundingSphere.radius+=2.4;leaves.computeBoundingSphere();
       group.add(wood,leaves);allLeaves.push(leaves);
       const cellBounds=wood.boundingSphere.clone().union(leaves.boundingSphere);
       farCells.push({wood,leaves,trees,kind,weight,center:cellBounds.center,radius:cellBounds.radius});
     }
   }
-  const mobileBudget=compactDevice?32:192;
+  const capacity=compactDevice?profiles.BUDGET.budget:profiles.MAX.budget;
   for(const kind of plantedKinds)for(let variant=0;variant<variants;variant++){
-    const wood=new THREE.InstancedMesh(treeGeometry(kind,variant,false),material(kind,true,false),mobileBudget);
+    const wood=new THREE.InstancedMesh(treeGeometry(kind,variant,false),material(kind,true,false),capacity);
     const leaves=new THREE.InstancedMesh(treeGeometry(kind,variant,true),material(kind,true,true),0);
     wood.name=`Nearby ${kind} tapered trunks and twigs ${variant+1}`;leaves.name=`Nearby ${kind} individual leaves ${variant+1}`;
     wood.instanceMatrix.setUsage(THREE.DynamicDrawUsage);leaves.instanceMatrix=wood.instanceMatrix;
@@ -443,8 +453,8 @@ export function buildDeciduousForest(group,patches,region='') {
   return {
     update(camera,qualityName='HIGH') {
       const quality=String(qualityName).toUpperCase(),base=profiles[quality]||profiles.HIGH;
-      const budget=compactDevice?Math.min(quality==='LOW'?12:quality==='BALANCED'?20:32,base.budget):base.budget;
-      const end=compactDevice?Math.min(base.end,47):base.end,start=Math.min(base.start,end*.61);
+      const budget=compactDevice?Math.min(profiles.BUDGET.budget,base.budget):base.budget;
+      const end=compactDevice?Math.min(base.end,91):base.end,start=Math.min(base.start,end-24);
       const far=compactDevice?Math.min(base.far,1900):base.far;
       uniforms.decNear.value.set(start,end);uniforms.decFar.value.set(far*.72,far);
       uniforms.decLeafCover.value=(1-smoothstep(.68,.96,climateUniforms.snowpack.value))
@@ -461,12 +471,12 @@ export function buildDeciduousForest(group,patches,region='') {
       for(const cell of farCells){
         const distance=eye.distanceTo(cell.center);
         cell.wood.visible=distance<far+cell.radius;cell.leaves.visible=cell.wood.visible&&leafVisible;
-        if(distance>end+cell.radius)continue;
+        if(distance>end*1.45+cell.radius+4)continue;
         for(let index=0;index<cell.trees.length;index++){
           const tree=cell.trees[index];
           const rise=Math.max(0,tree.y-eye.y,eye.y-tree.y-tree.height);
-          const distanceSq=(tree.x-eye.x)**2+(tree.z-eye.z)**2+rise*rise;
-          if(distanceSq<end*end)candidates.push({tree,distanceSq,index,weight:cell.weight,
+          const distanceSq=((tree.x-eye.x)**2+(tree.z-eye.z)**2+rise*rise)/Math.min(1.45,Math.max(1,tree.height*.083))**2;
+          if(distanceSq<(end+4)**2)candidates.push({tree,distanceSq,index,weight:cell.weight,
             kind:cell.kind,variant:Math.floor(treeSeed(tree)*variants)});
         }
       }
@@ -482,7 +492,6 @@ export function buildDeciduousForest(group,patches,region='') {
       for(const weight of changed)weight.needsUpdate=true;
       for(const {wood,leaves} of nearBuckets.values()){
         wood.visible=wood.count>0;leaves.visible=wood.visible&&leafVisible;
-        wood.castShadow=leaves.castShadow=!compactDevice&&quality!=='LOW'&&quality!=='BUDGET';
         if(wood.count){wood.instanceMatrix.needsUpdate=true;wood.computeBoundingSphere();leaves.computeBoundingSphere();}
       }
       selected=next;group.userData.deciduous.nearBudget=budget;group.userData.deciduous.nearTrees=next.length;

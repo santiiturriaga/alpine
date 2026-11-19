@@ -19,7 +19,7 @@ export class TrickCombo {
     this.points = 0;
     this.multiplier = 1;
     this.bonus = 1;
-    this.scratchedSpin = 0;
+    this.previousPoints = 0;
     this.scratchTime = 0;
     this.resultTime = 0;
   }
@@ -39,8 +39,8 @@ export class TrickCombo {
     const tolerance = landing ? landingTolerance : 0;
     const nextSpin = Math.floor((Math.abs(spin) + tolerance) / halfTurn) * 180;
     if (this.spin && nextSpin > this.spin) {
-      this.scratchedSpin = this.spin;
-      this.scratchTime = .72;
+      this.previousPoints = this.points;
+      this.scratchTime = .16;
     }
     this.spin = nextSpin;
     this.flips = Math.floor((Math.abs(flip) + tolerance) / fullTurn);
@@ -67,7 +67,7 @@ export class TrickCombo {
 
   bail() {
     if (this.phase !== 'air') return;
-    if (this.multiplier === 1) {
+    if (this.points === 0) {
       this.reset();
       return;
     }

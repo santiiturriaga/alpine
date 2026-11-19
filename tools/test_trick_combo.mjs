@@ -31,8 +31,9 @@ test('a larger spin scratches and replaces the previous value', () => {
   combo.begin();
   combo.update(pose({ spin: -180 }));
   assert.equal(combo.points, (144 + 95) * 2);
+  const previous = combo.points;
   combo.update(pose({ spin: -360 }));
-  assert.equal(combo.scratchedSpin, 180);
+  assert.equal(combo.previousPoints, previous);
   assert.ok(combo.scratchTime > 0);
   assert.equal(combo.spin, 360);
   assert.equal(combo.multiplier, 2);

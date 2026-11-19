@@ -180,3 +180,10 @@ export function updateSunShadow(renderer, sun, direction, anchor, radius = sun.s
   sun.target.updateMatrixWorld();
   renderer.shadowMap.needsUpdate = true;
 }
+
+export function groundShadowWindow(anchor, rider, groundY) {
+  const clearance = Math.max(0, rider.y - groundY);
+  anchor.copy(rider);
+  // Keep the projected window over the ground while a lift climbs.
+  anchor.y = groundY + Math.min(clearance, 6);
+}
