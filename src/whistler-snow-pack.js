@@ -5,6 +5,20 @@ const fieldSize = 1536, shadeSize = 385, headerBytes = 40;
 const fieldCells = fieldSize * fieldSize;
 const shadeCells = shadeSize * shadeSize;
 const channelOffset = headerBytes + 2 * fieldCells + shadeCells;
+const packUrl = new URL('../data/whistler-snow.bin.gz?v=3', import.meta.url);
+const cacheName = 'alpine-whistler-snow';
+const downloadedPacks = new WeakMap();
+
+async function cachedPack() {
+  try { return await globalThis.caches?.match(packUrl, { cacheName }); } catch { return null; }
+}
+
+async function cachePack(bytes) {
+  try {
+    const cache = await globalThis.caches?.open(cacheName);
+    await cache?.put(packUrl, new Response(bytes));
+  } catch { /* The pack remains usable if storage is unavailable or full. */ }
+}
 
 export async function snowInputDigest({ heights, cover, mask, bounds, runs }) {
   const layout = JSON.stringify([bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ, bounds.grid,
@@ -30,17 +44,23 @@ export function whistlerSnowPackCacheMode(terrainUrl) {
 
 export async function loadWhistlerSnowPack(signal, cache = 'default') {
   try {
-    const url = new URL('../data/whistler-snow.bin.gz?v=3', import.meta.url);
-    const response = await fetch(url, { signal, cache, mode: 'same-origin', priority: 'low' });
+    const cached = await cachedPack();
+    // CacheStorage misses resolve locally. HTTP cache-only fetches produce a
+    // failed resource request in Chrome even when the generator handles it.
+    if (signal?.aborted || (!cached && cache === 'only-if-cached')) return null;
+    const response = cached ?? await fetch(packUrl, { signal, mode: 'same-origin', priority: 'low' });
     if (!response.ok) return null;
     let buffer = await response.arrayBuffer();
+    let compressed;
     if (new DataView(buffer).getUint16(0) === 0x1f8b) {
-      buffer = await new Response(new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+      compressed = new Blob([buffer]);
+      buffer = await new Response(compressed.stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
     }
     if (signal?.aborted || buffer.byteLength !== channelOffset + 3 * fieldCells) return null;
     const header = new DataView(buffer);
     if (header.getUint32(0) !== 0x57425333 || header.getUint16(4, true) !== fieldSize
       || header.getUint16(6, true) !== shadeSize) return null;
+    if (!cached && compressed) downloadedPacks.set(buffer, compressed);
     return buffer;
   } catch {
     return null;
@@ -50,6 +70,8 @@ export async function loadWhistlerSnowPack(signal, cache = 'default') {
 export async function unpackWhistlerSnowPack(buffer, inputs) {
   const signature = new Uint8Array(buffer, 8, 32);
   const digest = await snowInputDigest(inputs).catch(() => null);
+  const compressed = downloadedPacks.get(buffer);
+  downloadedPacks.delete(buffer);
   if (!digest?.every((byte, index) => byte === signature[index])) return null;
   const { mask } = inputs;
   const powder = new Uint8Array(buffer, channelOffset, fieldCells);
@@ -72,6 +94,7 @@ export async function unpackWhistlerSnowPack(buffer, inputs) {
       snowField[k + 3] = forestDelta + (y ? snowField[above + 3] : 0);
     }
   }
+  if (compressed) void cachePack(compressed);
   return { snowField,
     grooming: new Uint16Array(buffer, headerBytes, fieldCells).slice(),
     shade: new Uint8Array(buffer, headerBytes + 2 * fieldCells, shadeCells).slice(), execution: 'pack' };
