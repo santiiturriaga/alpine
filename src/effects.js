@@ -299,6 +299,24 @@ const softTexture = makeRadialTexture(64, [
   [1, 'rgba(255,255,255,0)'],
 ]);
 
+// Changes can queue across several frames while a mesh is outside the view.
+// Merge adjacent writes until Three uploads them; preserve the gap at a ring wrap.
+function queueVertexRange(attribute, start, count) {
+  if (!count) return;
+  let first = start * attribute.itemSize;
+  let end = first + count * attribute.itemSize;
+  const pending = attribute.updateRanges;
+  for (let i = pending.length - 1; i >= 0; i--) {
+    const range = pending[i];
+    if (first > range.start + range.count || end < range.start) continue;
+    first = Math.min(first, range.start);
+    end = Math.max(end, range.start + range.count);
+    pending.splice(i, 1);
+  }
+  attribute.addUpdateRange(first, end - first);
+  attribute.needsUpdate = true;
+}
+
 class ParticlePool {
   constructor(scene, count, { additive = false, snow = false, ground = terrain, sampleHeight = heightAt } = {}) {
     this.count = count;
@@ -318,6 +336,8 @@ class ParticlePool {
     this.alpha = new Float32Array(count);
     this.color = new Float32Array(count * 3);
     this.cursor = 0;
+    this.liveSlots = 0;
+    this.spawned = 0;
     this.snow = snow;
     this.ground = ground;
     this.sampleHeight = sampleHeight;
@@ -326,15 +346,17 @@ class ParticlePool {
     geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3));
     geo.setAttribute('aSize', new THREE.BufferAttribute(this.size, 1));
     geo.setAttribute('aAlpha', new THREE.BufferAttribute(this.alpha, 1));
-    geo.setAttribute('aColor', new THREE.BufferAttribute(this.color, 3));
-    geo.setAttribute('aSeed', new THREE.BufferAttribute(this.seed, 1));
+    geo.setAttribute(snow ? 'color' : 'aColor', new THREE.BufferAttribute(this.color, 3));
     if (snow) {
-      geo.setAttribute('color',new THREE.BufferAttribute(this.color,3));
+      geo.setAttribute('aSeed', new THREE.BufferAttribute(this.seed, 1));
       geo.setAttribute('normal',new THREE.BufferAttribute(this.normal,3));
       geo.setAttribute('aSunExposure',new THREE.BufferAttribute(this.sunExposure,1));
     }
-    for (const attribute of Object.values(geo.attributes)) attribute.setUsage(THREE.DynamicDrawUsage);
-    geo.setDrawRange(0, count);
+    for (const [name, attribute] of Object.entries(geo.attributes)) {
+      if (name !== 'aSeed') attribute.setUsage(THREE.DynamicDrawUsage);
+      attribute.onUpload(() => attribute.clearUpdateRanges());
+    }
+    geo.setDrawRange(0, 0);
 
     this.material = snow ? this.makeSnowMaterial() : new THREE.ShaderMaterial({
       transparent: true, depthWrite: false, fog: false,
@@ -439,12 +461,13 @@ class ParticlePool {
   spawn(x, y, z, vx, vy, vz, size, life, color) {
     const i = this.cursor;
     this.cursor = (this.cursor + 1) % this.count;
+    this.liveSlots = Math.min(this.count, this.liveSlots + 1);
+    this.spawned = Math.min(this.count, this.spawned + 1);
     this.pos[i * 3] = x; this.pos[i * 3 + 1] = y; this.pos[i * 3 + 2] = z;
     this.vel[i * 3] = vx; this.vel[i * 3 + 1] = vy; this.vel[i * 3 + 2] = vz;
     this.life[i] = life; this.maxLife[i] = life;
     this.size[i] = size;
     this.startSize[i] = size;
-    this.seed[i] = ((i * .6180339887) % 1);
     if (this.snow) {
       this.floor[i] = this.sampleHeight(x,z);
       this.sampleColor.setRGB(.88,.93,.98);
@@ -474,14 +497,17 @@ class ParticlePool {
   }
 
   update(dt, gravity = -2.2, drag = 1.4) {
+    if (this.liveSlots === 0) return;
     const lifeArr = this.life;
     const alphaArr = this.alpha;
     const pos = this.pos, vel = this.vel;
-    for (let i = 0; i < this.count; i++) {
-      if (lifeArr[i] <= 0) { alphaArr[i] = 0; continue; }
+    const start = (this.cursor - this.liveSlots + this.count) % this.count;
+    const d = Math.exp(-drag * dt);
+    for (let slot = 0; slot < this.liveSlots; slot++) {
+      const i = (start + slot) % this.count;
+      if (lifeArr[i] <= 0) continue;
       lifeArr[i] -= dt;
       const k = Math.max(0, lifeArr[i] / this.maxLife[i]);
-      const d = Math.exp(-drag * dt);
       vel[i * 3] *= d; vel[i * 3 + 2] *= d;
       vel[i * 3 + 1] += gravity * dt;
       pos[i * 3] += vel[i * 3] * dt;
@@ -510,22 +536,41 @@ class ParticlePool {
       }
       alphaArr[i] = (age < .065 ? age / .065 : 1) * Math.pow(k, .85) * (this.snow ? (grain ? .52 : .68) : .62);
     }
-    this.geo.attributes.position.needsUpdate = true;
-    this.geo.attributes.aAlpha.needsUpdate = true;
-    this.geo.attributes.aSize.needsUpdate = true;
-    this.geo.attributes.aColor.needsUpdate = true;
-    this.geo.attributes.aSeed.needsUpdate = true;
-    if(this.snow) {
-      this.geo.attributes.color.needsUpdate=true;
-      this.geo.attributes.normal.needsUpdate=true;
-      this.geo.attributes.aSunExposure.needsUpdate=true;
+    const attributes = this.geo.attributes;
+    this.uploadSlots(attributes.position, this.liveSlots);
+    this.uploadSlots(attributes.aAlpha, this.liveSlots);
+    this.uploadSlots(attributes.aSize, this.snow ? this.liveSlots : this.spawned);
+    this.uploadSlots(this.snow ? attributes.color : attributes.aColor, this.spawned);
+    if (this.snow) {
+      this.uploadSlots(attributes.normal, this.spawned);
+      this.uploadSlots(attributes.aSunExposure, this.spawned);
     }
+    this.spawned = 0;
+    let oldest = start;
+    while (this.liveSlots > 0 && lifeArr[oldest] <= 0) {
+      oldest = (oldest + 1) % this.count;
+      this.liveSlots--;
+    }
+    // Preserve the original vertex/blend order across a wrap. Any intervening
+    // retired slots have zero alpha, including their last queued GPU write.
+    if (oldest + this.liveSlots <= this.count) this.geo.setDrawRange(oldest, this.liveSlots);
+    else this.geo.setDrawRange(0, this.count);
+  }
+
+  uploadSlots(attribute, slots) {
+    if (!slots) return;
+    const start = (this.cursor - slots + this.count) % this.count;
+    const first = Math.min(slots, this.count - start);
+    queueVertexRange(attribute, start, first);
+    if (slots > first) queueVertexRange(attribute, 0, slots - first);
   }
 
   clear() {
     this.life.fill(0);
     this.alpha.fill(0);
-    this.geo.attributes.aAlpha.needsUpdate = true;
+    this.liveSlots = this.spawned = 0;
+    this.geo.setDrawRange(0, 0);
+    queueVertexRange(this.geo.attributes.aAlpha, 0, this.count);
   }
 }
 
@@ -1217,14 +1262,9 @@ export class SkiTracks {
   build() {
     const max = this.maxSegments;
     const cols = this.columns.length;
-    const verts = max * cols * 2;
-    const pos = new Float32Array(verts * 3);
-    const birth = new Float32Array(verts);
-    const across = new Float32Array(verts);
-    const soft = new Float32Array(verts);
-    const color=new Float32Array(verts*3),normal=new Float32Array(verts*3);
-    const idx = new Uint32Array(max * (cols-1) * 6);
-    for (let s = 0; s < max; s++) {
+    const spanSize = Math.min(this.chunkSize, max);
+    const idx = new Uint16Array(spanSize * (cols-1) * 6);
+    for (let s = 0; s < spanSize; s++) {
       const base = s * cols * 2;
       for (let column = 0; column < cols-1; column++) {
         const i = s*(cols-1)*6 + column*6;
@@ -1232,36 +1272,26 @@ export class SkiTracks {
         idx.set([a,c,b,b,c,d],i);
       }
     }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute('aBirth', new THREE.BufferAttribute(birth, 1));
-    geo.setAttribute('aAcross', new THREE.BufferAttribute(across, 1));
-    geo.setAttribute('aSoft', new THREE.BufferAttribute(soft, 1));
-    geo.setAttribute('color',new THREE.BufferAttribute(color,3));
-    geo.setAttribute('normal',new THREE.BufferAttribute(normal,3));
-    for (const attribute of Object.values(geo.attributes)) attribute.setUsage(THREE.DynamicDrawUsage);
-    geo.setIndex(new THREE.BufferAttribute(idx, 1));
-    geo.setDrawRange(0, 0);
+    const index = new THREE.BufferAttribute(idx, 1);
     const mat = this.createMaterial();
     this.mesh = new THREE.Group();
     this.material=mat;
     this.mesh.name = 'Continuous pressed ski tracks and powder berms';
-    // Child spans share the ribbon buffers/material and have their own live
-    // bounds so a wake behind the camera can be skipped.
+    // A new ribbon uploads only its own vertices. All spans reuse the same
+    // local index pattern, including the shorter span at the end of the ring.
     this.mesh.frustumCulled = false;
     this.scene.add(this.mesh);
-    this.geo = geo;
-    this.posAttr = geo.attributes.position;
-    this.birthAttr = geo.attributes.aBirth;
-    this.acrossAttr = geo.attributes.aAcross;
-    this.softAttr = geo.attributes.aSoft;
-    this.colorAttr=geo.attributes.color;
-    this.normalAttr=geo.attributes.normal;
     this.chunks=[];
     for (let start=0;start<max;start+=this.chunkSize) {
       const geometry=new THREE.BufferGeometry();
-      for (const [name,attribute] of Object.entries(geo.attributes)) geometry.setAttribute(name,attribute);
-      geometry.setIndex(geo.index);
+      const end = Math.min(max, start + this.chunkSize);
+      const verts = (end - start) * cols * 2;
+      for (const [name, size] of Object.entries({position:3, aBirth:1, aAcross:1, aSoft:1, color:3, normal:3})) {
+        const attribute = new THREE.BufferAttribute(new Float32Array(verts * size), size).setUsage(THREE.DynamicDrawUsage);
+        attribute.onUpload(() => attribute.clearUpdateRanges());
+        geometry.setAttribute(name, attribute);
+      }
+      geometry.setIndex(index);
       geometry.setDrawRange(0,0);
       geometry.boundingBox=new THREE.Box3();
       geometry.boundingSphere=new THREE.Sphere();
@@ -1271,7 +1301,22 @@ export class SkiTracks {
       mesh.renderOrder=1;
       mesh.visible=false;
       this.mesh.add(mesh);
-      this.chunks.push({start,end:Math.min(max,start+this.chunkSize),geometry,mesh,dirty:false});
+      this.chunks.push({start,end,geometry,mesh,dirty:false});
+      if (start === 0) {
+        // Prepare the actual trail shader and the first span during the loader's
+        // first scene draw. Zero indices leave the framebuffer untouched.
+        geometry.addGroup(0, 0, 0);
+        mesh.visible = true;
+        mesh.frustumCulled = false;
+        mesh.onAfterRender = () => {
+          mesh.frustumCulled = true;
+          if (geometry.drawRange.count === 0) {
+            geometry.clearGroups();
+            mesh.visible = false;
+          }
+          delete mesh.onAfterRender;
+        };
+      }
     }
   }
 
@@ -1332,7 +1377,9 @@ export class SkiTracks {
   }
 
   writeSegment(a,b) {
-    const cols=this.columns.length, base=this.segmentCursor*cols*2;
+    const chunk = this.chunks[Math.floor(this.segmentCursor / this.chunkSize)];
+    const {position, aBirth, aAcross, aSoft, color, normal} = chunk.geometry.attributes;
+    const cols=this.columns.length, base=(this.segmentCursor - chunk.start)*cols*2;
     for (let row=0;row<2;row++) {
       const p=row === 0 ? a : b;
       const skim = Math.sin(p.x*1.6+p.z*.92 + 1.2*Math.sin(p.z*.81-p.x*.4));
@@ -1349,23 +1396,23 @@ export class SkiTracks {
         const x=p.x+p.rx*offset,z=p.z+p.rz*offset;
         const lift=this.profile[c]*berm*rough;
         const vertex=base+row*cols+c;
-        this.posAttr.setXYZ(vertex,x,this.ground.heightAt(x,z)+.009+lift,z);
-        this.birthAttr.setX(vertex,p.time);
-        this.acrossAttr.setX(vertex,across);
-        this.softAttr.setX(vertex,p.soft);
+        position.setXYZ(vertex,x,this.ground.heightAt(x,z)+.009+lift,z);
+        aBirth.setX(vertex,p.time);
+        aAcross.setX(vertex,across);
+        aSoft.setX(vertex,p.soft);
         const bed=1-clamp((Math.abs(across)-.30)/.18,0,1);
         const pressed=1-bed*(.05+p.soft*(.112+.027*brokenSnow));
-        this.colorAttr.setXYZ(vertex,this.sampleColor.r*pressed,this.sampleColor.g*pressed,this.sampleColor.b*pressed);
+        color.setXYZ(vertex,this.sampleColor.r*pressed,this.sampleColor.g*pressed,this.sampleColor.b*pressed);
         const before=Math.max(0,c-1),after=Math.min(cols-1,c+1);
         const slope=(this.profile[after]-this.profile[before])*berm*rough/
           ((this.columns[after]-this.columns[before])*width);
         const nx=this.sampleNormal.x-p.rx*slope*.65,ny=this.sampleNormal.y,nz=this.sampleNormal.z-p.rz*slope*.65;
         const length=Math.hypot(nx,ny,nz);
-        this.normalAttr.setXYZ(vertex,nx/length,ny/length,nz/length);
+        normal.setXYZ(vertex,nx/length,ny/length,nz/length);
       }
     }
     this.segmentBirth[this.segmentCursor]=Math.max(a.time,b.time);
-    this.chunks[Math.floor(this.segmentCursor/this.chunkSize)].dirty=true;
+    chunk.dirty=true;
     if (this.uploadCount === 0) this.uploadStart = this.segmentCursor;
     this.uploadCount = Math.min(this.maxSegments, this.uploadCount + 1);
     this.segmentCursor = (this.segmentCursor + 1) % this.maxSegments;
@@ -1381,10 +1428,9 @@ export class SkiTracks {
     this.breakTrack();
     this.segmentCount = 0;
     this.segmentCursor = 0;
-    this.geo.setDrawRange(0, 0);
     this.uploadCount=0;
-    for (const attribute of Object.values(this.geo.attributes)) attribute.clearUpdateRanges();
     for (const chunk of this.chunks) {
+      for (const attribute of Object.values(chunk.geometry.attributes)) attribute.clearUpdateRanges();
       chunk.mesh.visible=false;
       chunk.geometry.clearGroups();
       chunk.geometry.setDrawRange(0,0);
@@ -1406,11 +1452,12 @@ export class SkiTracks {
     const indices=(this.columns.length-1)*6,vertices=this.columns.length*2;
     for (const chunk of this.chunks) {
       if (!chunk.dirty) continue;
+      chunk.mesh.frustumCulled = true;
       const geometry=chunk.geometry;
       geometry.clearGroups();
       const addSpan=(start,end)=>{
         start=Math.max(chunk.start,start);end=Math.min(chunk.end,end);
-        if (end>start) geometry.addGroup(start*indices,(end-start)*indices,0);
+        if (end>start) geometry.addGroup((start-chunk.start)*indices,(end-start)*indices,0);
       };
       if (full) addSpan(0,this.maxSegments);
       else if (this.segmentCount) {
@@ -1424,11 +1471,12 @@ export class SkiTracks {
         // Bounds follow the live rows, including both sides of a partially
         // overwritten chunk. Endpoints are unchanged across chunk boundaries.
         const bounds=geometry.boundingBox;
+        const position=geometry.attributes.position;
         bounds.makeEmpty();
         for (const group of geometry.groups) {
           const begin=group.start/indices*vertices,end=begin+group.count/indices*vertices;
           for (let i=begin;i<end;i++) {
-            const x=this.posAttr.getX(i),y=this.posAttr.getY(i),z=this.posAttr.getZ(i);
+            const x=position.getX(i),y=position.getY(i),z=position.getZ(i);
             bounds.min.x=Math.min(bounds.min.x,x);bounds.max.x=Math.max(bounds.max.x,x);
             bounds.min.y=Math.min(bounds.min.y,y);bounds.max.y=Math.max(bounds.max.y,y);
             bounds.min.z=Math.min(bounds.min.z,z);bounds.max.z=Math.max(bounds.max.z,z);
@@ -1455,16 +1503,17 @@ export class SkiTracks {
       }
     }
     if (this.uploadCount > 0) {
-      const first = Math.min(this.uploadCount, this.maxSegments - this.uploadStart);
-      const wrapped = this.uploadCount - first;
       const span = this.columns.length * 2;
-      for (const attribute of Object.values(this.geo.attributes)) {
-        const width = span * attribute.itemSize;
-        attribute.addUpdateRange(this.uploadStart * width, first * width);
-        if (wrapped) attribute.addUpdateRange(0, wrapped * width);
-        attribute.needsUpdate=true;
+      let start = this.uploadStart;
+      while (this.uploadCount > 0) {
+        const chunk = this.chunks[Math.floor(start / this.chunkSize)];
+        const count = Math.min(this.uploadCount, chunk.end - start);
+        for (const attribute of Object.values(chunk.geometry.attributes)) {
+          queueVertexRange(attribute, (start - chunk.start) * span, count * span);
+        }
+        this.uploadCount -= count;
+        start = chunk.end % this.maxSegments;
       }
-      this.uploadCount=0;
     }
   }
 }

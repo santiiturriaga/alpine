@@ -136,6 +136,41 @@ test('stopping a run restores input, leaves no timer, and cannot pass', async ()
   assert.equal(summary.frames.length, 1);
 });
 
+test('GPU timing skips unfinished and disjoint samples and releases outstanding queries', async () => {
+  const fixture = rig(), { game, targetWindow } = fixture;
+  const ext = { TIME_ELAPSED_EXT: 1, QUERY_COUNTER_BITS_EXT: 2, GPU_DISJOINT_EXT: 3 };
+  let next = 0, active = null, ready = false, disjoint = false;
+  const deleted = [];
+  const gl = Object.assign(game.renderer.getContext(), {
+    CURRENT_QUERY: 4, QUERY_RESULT_AVAILABLE: 5, QUERY_RESULT: 6,
+    getExtension: () => ext, getQuery: (_, type) => type === 2 ? 64 : active,
+    createQuery: () => ++next, beginQuery: (_, q) => { assert.equal(active, null); active = q; },
+    endQuery: () => { assert.ok(active); active = null; },
+    getParameter: () => disjoint,
+    getQueryParameter(q, type) {
+      if (type === this.QUERY_RESULT_AVAILABLE) return ready;
+      assert.equal(type, this.QUERY_RESULT);
+      assert.ok(ready && !disjoint, 'a GPU timing read must never wait for a result');
+      return q * 2000000;
+    },
+    deleteQuery: q => deleted.push(q),
+  });
+  game.renderer.getContext = () => gl;
+  const op = await driveSkiRun({ targetWindow });
+  fixture.submit(3, 1100); // First timed draw.
+  fixture.submit(4, 1100); // Still pending.
+  assert.equal(next, 1);
+  disjoint = true;
+  fixture.submit(5, 1100); // Discard first sample.
+  disjoint = false;
+  ready = true;
+  fixture.submit(6, 1100); // Second sample took 4 ms.
+  ready = false;
+  op.stop();
+  assert.deepEqual(op.state.gpu, {samples:1, medianMs:4});
+  assert.deepEqual(deleted, [1,2,3]);
+});
+
 test('a teleport after staging invalidates a run even if it lands at the ending', async () => {
   const fixture = rig();
   const { targetWindow, game } = fixture;

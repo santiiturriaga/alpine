@@ -163,6 +163,9 @@ function showReport(ui, report, hardware, boot, issue) {
     ['P95 frame time', number(fullRun?.p95FrameMs, ' ms')],
     ['Game update before draw · median', number(fullRun?.beforeRenderMedianMs, ' ms')],
     ['WebGL submission · median', number(fullRun?.renderCpuMedianMs, ' ms')],
+    ['GPU draw time · sampled median', report.run.gpu?.samples
+      ? number(report.run.gpu.medianMs, ' ms') + ' (' + report.run.gpu.samples + ' frames)'
+      : 'Unavailable'],
     ['Timer fallback frames', number(fullRun?.timerFrames, '', 0)],
     ['Gaps >50 / >100 ms', fullRun ? fullRun.framesOver50ms + ' / ' + fullRun.framesOver100ms : '—'],
     ['Route covered', number(result.coverage * 100, '%', 0)],

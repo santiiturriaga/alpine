@@ -182,7 +182,17 @@ function foliageTexture(pixels) {
 // -.5 adds only its base crown detail.
 // 0 combines those for standalone trees. 1 and 2 are further additive tiers.
 // Use the same variant on every tier to preserve all branch attachments.
+const treeTemplates = new Map();
+
 export function coniferGeometry(kind, detail = 0, variant = 0) {
+  // Trees of this species, detail level and seed have identical mesh data.
+  // Each stand keeps its own placement, colour and visibility.
+  const key = `${kind}/${detail}/${variant}`;
+  if (!treeTemplates.has(key)) treeTemplates.set(key, buildConifer(kind, detail, variant));
+  return treeTemplates.get(key);
+}
+
+function buildConifer(kind, detail, variant) {
   const spec = species[kind] || species.fir, rand = mulberry32(spec.seed + variant * 7919);
   const positions = [], normals = [], colors = [], anchors = [], uvs = [], deposits = [], indices = [];
   const vertices = new WeakMap();

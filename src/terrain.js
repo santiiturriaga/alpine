@@ -178,6 +178,21 @@ function makePatches(n, attributes, material, patch = 64, detail = null) {
 const terrainTile = 32;
 const detailStep = 4;
 let detailTiles = new Map();
+// Offscreen collision and tree placement repeatedly sample the same fine-grid
+// corners. Keep exact doubles until a streamed tile supplies its own samples.
+const vertexCacheSize = 16384;
+const vertexKeys = new Uint32Array(vertexCacheSize);
+const vertexHeights = new Float64Array(vertexCacheSize);
+
+function fineGridHeight(i, j) {
+  const key = j * ((n - 1) * detailStep + 1) + i + 1;
+  const slot = key & (vertexCacheSize - 1);
+  if (vertexKeys[slot] !== key) {
+    vertexHeights[slot] = detailVertex(i / detailStep, j / detailStep);
+    vertexKeys[slot] = key;
+  }
+  return vertexHeights[slot];
+}
 
 function smoothTerrainRow(i, t) {
   const a = heights[i - 1], b = heights[i], c = heights[i + 1], d = heights[i + 2];
@@ -640,31 +655,7 @@ export function buildMask(res = 1024) {
   const m = new Float32Array(res * res);
   for (let i = 0; i < m.length; i++) m[i] = img[i * 4] / 255;
 
-  // separable box blur, twice, for soft groomed shoulders
-  let a = m, b = new Float32Array(m.length);
-  for (let pass = 0; pass < 2; pass++) {
-    const r = 1;
-    // horizontal
-    for (let y = 0; y < res; y++) {
-      let sum = 0;
-      const row = y * res;
-      for (let x = -r; x <= r; x++) sum += a[row + clamp(x, 0, res - 1)];
-      for (let x = 0; x < res; x++) {
-        b[row + x] = sum / (r * 2 + 1);
-        sum += a[row + Math.min(res - 1, x + r + 1)] - a[row + Math.max(0, x - r)];
-      }
-    }
-    // vertical
-    for (let x = 0; x < res; x++) {
-      let sum = 0;
-      for (let y = -r; y <= r; y++) sum += b[clamp(y, 0, res - 1) * res + x];
-      for (let y = 0; y < res; y++) {
-        a[y * res + x] = sum / (r * 2 + 1);
-        sum += b[Math.min(res - 1, y + r + 1) * res + x] - b[Math.max(0, y - r) * res + x];
-      }
-    }
-  }
-  return { mask: a, res };
+  return { mask: boxBlurGrid(m, res, 1, 2), res };
 }
 
 function sampleMask(x, z) {
@@ -693,6 +684,7 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
   let pack = null;
   if (packDownload) loadWhistlerSnowPack(packDownload.signal, packCache).then(result => { pack = result; });
   n = N;
+  vertexKeys.fill(0);
   heights = local.heights;
   landCover = local.cover;
   prepareValleyLakes(heights, landCover, WORLD);
@@ -1099,23 +1091,22 @@ export function heightAt(x, z, normal) {
       u - ix * terrainTile * detailStep, v - iz * terrainTile * detailStep);
   }
   // Physics can sample the next tile before it becomes visible.
-  const step = 1 / detailStep;
   const a = Math.min((n - 1) * detailStep - 1, Math.floor(u));
   const b = Math.min((n - 1) * detailStep - 1, Math.floor(v));
   const tx = u - a, tz = v - b;
-  const h10 = detailVertex((a + 1) * step, b * step);
-  const h01 = detailVertex(a * step, (b + 1) * step);
+  const h10 = fineGridHeight(a + 1, b);
+  const h01 = fineGridHeight(a, b + 1);
   return tx + tz <= 1
-    ? detailVertex(a * step, b * step) * (1 - tx - tz) + h10 * tx + h01 * tz
-    : detailVertex((a + 1) * step, (b + 1) * step) * (tx + tz - 1) + h10 * (1 - tz) + h01 * (1 - tx);
+    ? fineGridHeight(a, b) * (1 - tx - tz) + h10 * tx + h01 * tz
+    : fineGridHeight(a + 1, b + 1) * (tx + tz - 1) + h10 * (1 - tz) + h01 * (1 - tx);
 }
 
 // Root trees against both surfaces when the detailed tile is streamed in.
 // The lower portion of each trunk is buried on the higher of the two terrains.
-export function treeAnchorHeightAt(x, z) {
-  if (!insideTerrain(WORLD, x, z)) return heightAt(x, z);
+export function treeAnchorHeightAt(x, z, detailedHeight = heightAt(x, z)) {
+  if (!insideTerrain(WORLD, x, z)) return detailedHeight;
   const [gx, gz] = worldIndex(x, z, WORLD);
-  return Math.max(heightAt(x, z), triangleHeight(gradedHeights, n, gx, gz));
+  return Math.max(detailedHeight, triangleHeight(gradedHeights, n, gx, gz));
 }
 
 export function normalAt(x, z, out = new THREE.Vector3()) {

@@ -246,7 +246,7 @@ function buildForest(scene, grid, rand, detail) {
     const kind = family + (Math.sin(x * .051 + z * .023 + family * 2) > .1 ? species.length : 0);
     const cell = `${Math.floor(x / patchSize)},${Math.floor(z / patchSize)},${kind}`;
     if (!buckets.has(cell)) buckets.set(cell, { kind, trees: [] });
-    const tree = { x, y: treeAnchorHeightAt(x,z), z, apex, yaw, stretch, kind };
+    const tree = { x, y: treeAnchorHeightAt(x,z,y), z, apex, yaw, stretch, kind };
     buckets.get(cell).trees.push(tree);
     grid.addCircle(x, z, Math.min(.88, apex * .021), 'tree', { tree, minY:tree.y-.75, maxY:tree.y+apex });
     count++;

@@ -20,7 +20,8 @@ export function worldIndex(x, z, bounds) {
 
 export function boxBlurGrid(src, n, radius, iterations = 2) {
   const N = n;
-  let a = src, b = new Float32Array(src.length);
+  const a = src, b = new Float32Array(src.length);
+  const sums = new Float64Array(N);
   const w = radius * 2 + 1;
   for (let it = 0; it < iterations; it++) {
     for (let y = 0; y < N; y++) {
@@ -32,12 +33,20 @@ export function boxBlurGrid(src, n, radius, iterations = 2) {
         sum += a[row + Math.min(N - 1, x + radius + 1)] - a[row + Math.max(0, x - radius)];
       }
     }
-    for (let x = 0; x < N; x++) {
-      let sum = 0;
-      for (let y = -radius; y <= radius; y++) sum += b[clamp(y, 0, N - 1) * N + x];
-      for (let y = 0; y < N; y++) {
-        a[y * N + x] = sum / w;
-        sum += b[Math.min(N - 1, y + radius + 1) * N + x] - b[Math.max(0, y - radius) * N + x];
+    // Keep each column's running sum in double precision, but traverse rows
+    // consecutively so each cache line supplies adjacent output samples.
+    sums.fill(0);
+    for (let y = -radius; y <= radius; y++) {
+      const row = clamp(y, 0, N - 1) * N;
+      for (let x = 0; x < N; x++) sums[x] += b[row + x];
+    }
+    for (let y = 0; y < N; y++) {
+      const row = y * N;
+      const added = Math.min(N - 1, y + radius + 1) * N;
+      const removed = Math.max(0, y - radius) * N;
+      for (let x = 0; x < N; x++) {
+        a[row + x] = sums[x] / w;
+        sums[x] += b[added + x] - b[removed + x];
       }
     }
   }

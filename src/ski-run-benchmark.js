@@ -72,6 +72,46 @@ export function captureTitleArrival({ targetWindow = window, game = targetWindow
   });
 }
 
+// Sample a rendered frame about once a second. Some browsers withhold GPU
+// timers. The descent and its ordinary frame measurements work in either case.
+function createGpuTimer(gl) {
+  const ext = gl.getExtension?.('EXT_disjoint_timer_query_webgl2');
+  if (!ext || !gl.getQuery(ext.TIME_ELAPSED_EXT, ext.QUERY_COUNTER_BITS_EXT)) return null;
+  const samples = [];
+  let pending, next = 0;
+  function collect() {
+    if (!pending) return;
+    const disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT);
+    if (!disjoint && !gl.getQueryParameter(pending, gl.QUERY_RESULT_AVAILABLE)) return;
+    if (!disjoint) {
+      const ms = gl.getQueryParameter(pending, gl.QUERY_RESULT) / 1e6;
+      if (Number.isFinite(ms) && ms > 0) samples.push(ms);
+    }
+    gl.deleteQuery(pending);
+    pending = null;
+  }
+  return {
+    begin(now) {
+      if (now < next || gl.isContextLost()) return false;
+      next = now + 1031;
+      collect();
+      if (pending || gl.getQuery(ext.TIME_ELAPSED_EXT, gl.CURRENT_QUERY)) return false;
+      pending = gl.createQuery();
+      if (!pending) return false;
+      gl.beginQuery(ext.TIME_ELAPSED_EXT, pending);
+      return true;
+    },
+    end() { gl.endQuery(ext.TIME_ELAPSED_EXT); },
+    finish() {
+      if (!gl.isContextLost()) {
+        collect();
+        if (pending) gl.deleteQuery(pending);
+      }
+      return { samples: samples.length, medianMs: samples.length ? median(samples) : null };
+    },
+  };
+}
+
 export async function driveSkiRun({
   runId = DEFAULT_SKI_RUN, timeoutMs = 260000, targetWindow = window,
   game = targetWindow.__alpine,
@@ -146,6 +186,7 @@ export async function driveSkiRun({
   game.setFrameObserver?.((time, vsync) => { frameStart = time; fromAnimationFrame = vsync; });
   const finishRadius = 6;
   const gl = renderer.getContext();
+  const gpuTimer = createGpuTimer(gl);
   const contextLost = () => finish('WebGL context lost',performance.now());
   const visibilityChanged = () => {
     if (document.hidden) finish('tab hidden',performance.now());
@@ -160,6 +201,7 @@ export async function driveSkiRun({
     renderer.render = draw;
     game.setFrameObserver?.(null);
     state.finishedMs = now;
+    state.gpu = gpuTimer?.finish() ?? null;
     state.reason = reason;
     state.done = true;
     state.result = {
@@ -192,7 +234,11 @@ export async function driveSkiRun({
   renderer.render = function (s,c) {
     const main = s === scene && c === camera && renderer.getRenderTarget() == null;
     const begin = main ? performance.now() : 0;
-    draw.call(this,s,c);
+    const sample = main && gpuTimer?.begin(begin);
+    if (sample) {
+      try { draw.call(this,s,c); }
+      finally { gpuTimer.end(); }
+    } else draw.call(this,s,c);
     if (!main || state.done || !game.state.playing || document.hidden || gl.isContextLost()) return;
     const now = performance.now();
     // Chrome can submit more than one internal draw per tick. Count one onscreen game render.

@@ -60,10 +60,11 @@ ranges=spans();check(ranges.reduce((n,r)=>n+r[1],0)===13,'Expired prefix still r
 small.clear();small.segmentCursor=16;
 small.writeSegment(row(0,400),row(.24,400));small.writeSegment(row(.24,400),row(.48,400));small.update(400);
 ranges=spans();check(ranges.length===2&&ranges.reduce((n,r)=>n+r[1],0)===2,'Partial wrap must preserve both sides of a chunk');
-const updates=small.posAttr.updateRanges.map(r=>({...r}));
+const position=small.chunks[0].geometry.attributes.position;
+const updates=position.updateRanges.map(r=>({...r}));
 check(updates.length===2&&updates.reduce((n,r)=>n+r.count,0)===108,'Ring uploads must remain two changed spans');
 const a=16*cols*2+cols,b=0;for(let j=0;j<cols;j++)for(let k=0;k<3;k++)
- check(small.posAttr.array[(a+j)*3+k]===small.posAttr.array[(b+j)*3+k],'Chunk/ring endpoint cracked');
+ check(position.array[(a+j)*3+k]===position.array[(b+j)*3+k],'Chunk/ring endpoint cracked');
 small.update(609.999);check(small.segmentCount===2,'Track expired before shader fade ended');
 small.update(610);check(small.segmentCount===0&&spans().length===0,'Fully faded track still submitted');
 small.clear();check(small.segmentCursor===0&&small.segmentCount===0&&!small.chunks.some(c=>c.mesh.visible),'Clear leaves drawable chunks');
@@ -78,11 +79,11 @@ for(let i=0;i<900;i++){
  const birth=800+i*.1;multi.writeSegment(row(i*.24,birth),row((i+1)*.24,birth+.1));
  expected.push({slot:i%257,birth:birth+.1});if(expected.length>257)expected.shift();
  if(i%13===0||i===899){multi.update(birth+.1);
-  const actual=multi.chunks.flatMap(c=>c.geometry.groups.flatMap(g=>Array.from({length:g.count/per},(_,j)=>g.start/per+j))).sort((a,b)=>a-b);
+  const actual=multi.chunks.flatMap(c=>c.geometry.groups.flatMap(g=>Array.from({length:g.count/per},(_,j)=>c.start+g.start/per+j))).sort((a,b)=>a-b);
   check(JSON.stringify(actual)===JSON.stringify(expected.map(e=>e.slot).sort((a,b)=>a-b)),'Chunk omitted or duplicated a live wrapped slot');
   for(const c of multi.chunks)if(c.mesh.visible)for(const g of c.geometry.groups){
    const first=g.start/per*cols*2,end=first+g.count/per*cols*2;
-   for(let v=first;v<end;v++)check(c.geometry.boundingBox.containsPoint(new fixture.camera.position.constructor().fromBufferAttribute(multi.posAttr,v)),'Chunk bounds clipped a live vertex');
+   for(let v=first;v<end;v++)check(c.geometry.boundingBox.containsPoint(new fixture.camera.position.constructor().fromBufferAttribute(c.geometry.attributes.position,v)),'Chunk bounds clipped a live vertex');
   }
  }
 }
@@ -97,11 +98,15 @@ def main():
     ap.add_argument('--url', default='http://127.0.0.1:8779/')
     ap.add_argument('--label', default='after')
     ap.add_argument('--effects-source', type=Path)
+    ap.add_argument('--software', action='store_true', help='Use SwiftShader for deterministic GPU-independent comparisons')
     args = ap.parse_args()
     out = Path('test-output/trail-audit')
     out.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(channel='chrome', headless=True, args=['--enable-webgl', '--use-angle=d3d11'])
+        flags = ['--enable-webgl', '--use-angle=d3d11']
+        if args.software:
+            flags = ['--disable-gpu', '--disable-gpu-compositing', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
+        browser = pw.chromium.launch(channel='chrome', headless=True, args=flags)
         page = browser.new_page(viewport={'width': 1200, 'height': 800})
         errors = []
         page.on('pageerror', lambda e: errors.append(str(e)))
