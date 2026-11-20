@@ -117,13 +117,22 @@
   position: absolute;
   inset: 0 auto auto 0;
   width: max-content;
-  max-width: min(25vw, 220px);
+  max-width: min(22vw, 200px);
   padding: 4px 8px;
   color: var(--destination-muted);
-  font: 600 clamp(12px, 1.2vw, 17px)/1.1 var(--font-body);
+  font: 600 clamp(12px, 1.16vw, 17px)/1.12 var(--font-body);
   text-shadow: 0 2px 5px #0b1721;
   text-wrap: balance;
   -webkit-tap-highlight-color: transparent;
+}
+.destination-tile span { display: block; }
+.destination-tile .destination-tile-country {
+  margin-top: 4px;
+  color: #9eb5c0;
+  font-size: clamp(9px, .78vw, 11px);
+  font-weight: 600;
+  letter-spacing: .055em;
+  text-transform: uppercase;
 }
 .destination-tile:hover { color: var(--destination-ice); }
 .destination-tile[aria-current="false"]:not([hidden]) { pointer-events: auto; cursor: pointer; }
@@ -203,8 +212,7 @@
 .destination-route-key .key-blue { --key-color: #70bfff; }
 .destination-route-key .key-red { --key-color: #f2848d; }
 .destination-route-key .key-black, .destination-route-key .key-double { --key-color: #dae8ed; }
-.destination-route-key .key-double::before { border-top-style: double; border-top-width: 4px; }
-.destination-route-key .key-lift::before { border-top-style: dashed; }
+.destination-route-key .key-double::before, .destination-route-key .key-lift::before { border-top-style: dashed; }
 .destination-touch-help { display: none; }
 @media (pointer: coarse) {
   .destination-desktop-help { display: none; }
@@ -216,7 +224,8 @@
   .destination-controls { gap: 6px; }
   .destination-list { gap: 6px; padding: 0 7px; font-size: 13px; }
   .destination-stage { margin: 0 -16px; }
-  .destination-tile[aria-current="false"] { display: none; }
+  .destination-tile { max-width: min(26vw, 125px); padding-inline: 2px; }
+  .destination-tile .destination-tile-country { margin-top: 3px; letter-spacing: .015em; }
   .destination-route-key { gap: 3px 13px; }
   #destination-name { font-size: clamp(29px, 8.7vw, 55px); }
   .destination-details { gap: 7px; }

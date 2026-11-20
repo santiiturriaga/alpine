@@ -4,7 +4,6 @@ const DATA_URL = new URL('../data/destination-relief.bin', import.meta.url);
 const UNIT = 65535;
 const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
 const mix = (a, b, t) => a + (b - a) * t;
-const smooth = t => t * t * (3 - 2 * t);
 
 const ROUTE_STYLES = [
   { color: '#dc963f', width: .0045, dash: [.013, .007], lift: .0031 },
@@ -67,20 +66,18 @@ function terrainFace(batch, a, b, c, peak, variation, color) {
   const faceSlope = 1 - ny / length;
   const faceLight = (-.46 * nx + .81 * ny + .35 * nz) / length;
   for (const point of [a, b, c]) {
-    const terrainMix = point.slope === undefined ? 0 : .89;
+    const terrainMix = .72;
     const height = mix(elevation, point.y / peak, terrainMix);
-    const slope = mix(faceSlope, point.slope ?? 0, terrainMix);
-    const light = mix(faceLight, point.light ?? 0, terrainMix);
+    const slope = mix(faceSlope, point.slope, terrainMix);
+    const light = mix(faceLight, point.light, terrainMix);
     const rock = clamp((slope - .22) * 2.3) * (.9 - height * .28);
     const woodland = mix(forest, point.forest, terrainMix) * (.84 - height * .39) * (1 - rock);
     const snow = 1 - rock - woodland;
-    const shade = (light - .8) * 48 + variation * (1 - terrainMix) + (point.grain ?? 0) * 10;
+    const shade = (light - .8) * 48 + variation * (1 - terrainMix) + point.grain * 10;
     const r = (222 + 20 * height) * snow + 113 * rock + 83 * woodland + shade;
     const g = (236 + 12 * height) * snow + 133 * rock + 132 * woodland + shade;
     const blue = (238 + 12 * height) * snow + 141 * rock + 117 * woodland + shade;
-    const fade = point.toe;
-    color.setRGB(clamp(mix(r, 37, fade) / 255), clamp(mix(g, 55, fade) / 255),
-      clamp(mix(blue, 63, fade) / 255), 'srgb');
+    color.setRGB(clamp(r / 255), clamp(g / 255), clamp(blue / 255), 'srgb');
     batch.vertex(point, color);
   }
 }
@@ -102,98 +99,30 @@ function locator(axis) {
   };
 }
 
-function softenBoundary(perimeter, index) {
-  const count = perimeter.length;
-  const point = perimeter[index];
-  let height = point.y, forest = point.forest, weight = 1;
-  for (const direction of [-1, 1]) {
-    let previous = point, distance = 0;
-    for (let step = 1; step < count; step++) {
-      const next = perimeter[(index + direction * step + count) % count];
-      distance += Math.hypot(next.x - previous.x, next.z - previous.z);
-      if (distance >= .13) break;
-      const influence = (1 - distance / .13) ** 2;
-      height += next.y * influence;
-      forest += next.forest * influence;
-      weight += influence;
-      previous = next;
-    }
-  }
-  return { height: height / weight, forest: forest / weight };
-}
-
-function foothillGrain(x, z) {
+function terrainGrain(x, z) {
   return .50 * Math.sin(x * 33 + z * 21) * Math.cos(z * 27 - x * 9) +
     .34 * Math.sin(z * 44 - x * 19) * Math.cos(x * 37 + z * 13) +
     .16 * Math.cos(x * 63 - z * 71);
 }
 
-function appendFoothills(points, perimeter, sample, width, depth, addFace) {
-  const segments = 8;
-  const rings = [perimeter];
-  for (let layer = 1; layer <= segments; layer++) rings.push([]);
-
-  // Keep every DEM sample. A curved extension matches the outer elevations
-  // and eases to zero height and zero slope around its entire footprint.
-  for (let index = 0; index < perimeter.length; index++) {
-    const border = perimeter[index];
-    const { x, y, z, forest } = border;
-    const radius = Math.hypot(x, z);
-    const dx = x / radius, dz = z / radius;
-    const azimuth = Math.atan2(z, x);
-    const irregularity = .041 * Math.sin(3 * azimuth + width) + .024 * Math.cos(5 * azimuth + depth);
-    const roundness = 2.5;
-    const limit = (Math.abs(dx / (width / 2 + .375)) ** roundness +
-      Math.abs(dz / (depth / 2 + .375)) ** roundness) ** (-1 / roundness) + irregularity;
-    const reach = limit - radius;
-    const { height: softened, forest: softenedForest } = softenBoundary(perimeter, index);
-    const inset = sample(x - dx * .034, z - dz * .034);
-    const tangent = clamp((y - inset.y) / .034 * reach, -1.5 * y, .18 * y) * .74;
-    for (let layer = 1; layer <= segments; layer++) {
-      const t = layer / segments;
-      const returnToFloor = 1 - smooth(t);
-      const blend = smooth(clamp(t * 3.15));
-      const footX = x + dx * reach * t;
-      const footZ = z + dz * reach * t;
-      const grain = foothillGrain(footX, footZ);
-      const height = mix(y, softened, blend);
-      const wrinkle = grain * Math.sin(Math.PI * t) ** 2 * height * .25;
-      const point = {
-        x: footX,
-        y: layer === segments ? 0 : height * returnToFloor + tangent * t * (1 - t) ** 3 + wrinkle,
-        z: footZ,
-        forest: mix(forest, softenedForest, blend) * returnToFloor,
-        grain: grain * Math.sin(Math.PI * t),
-        toe: smooth(clamp((t - .04) / .96)),
-      };
-      rings[layer].push(point);
-      points.push(point);
-    }
+function appendWalls(batch, perimeter) {
+  const top = new Color(), bottom = new Color();
+  for (let i = 0; i < perimeter.length; i++) {
+    const a = perimeter[i], b = perimeter[(i + 1) % perimeter.length];
+    const wallA = { x: a.x, y: 0, z: a.z };
+    const wallB = { x: b.x, y: 0, z: b.z };
+    const dx = b.x - a.x, dz = b.z - a.z;
+    const length = Math.hypot(dx, dz);
+    const shade = (.46 * dz + .35 * dx) / length * 21;
+    top.setRGB((70 + shade) / 255, (88 + shade) / 255, (96 + shade) / 255, 'srgb');
+    bottom.setRGB((39 + shade) / 255, (56 + shade) / 255, (64 + shade) / 255, 'srgb');
+    batch.vertex(a, top);
+    batch.vertex(wallA, bottom);
+    batch.vertex(b, top);
+    batch.vertex(b, top);
+    batch.vertex(wallA, bottom);
+    batch.vertex(wallB, bottom);
   }
-  const trees = [];
-  for (let layer = 1; layer < rings.length; layer++) {
-    const inner = rings[layer - 1], ring = rings[layer], outer = rings[Math.min(layer + 1, segments)];
-    for (let i = 0; i < perimeter.length; i++) {
-      const next = (i + 1) % perimeter.length, previous = (i + perimeter.length - 1) % perimeter.length;
-      const ax = outer[i].x - inner[i].x, ay = outer[i].y - inner[i].y, az = outer[i].z - inner[i].z;
-      const bx = ring[next].x - ring[previous].x, by = ring[next].y - ring[previous].y, bz = ring[next].z - ring[previous].z;
-      const nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
-      const length = Math.hypot(nx, ny, nz) || 1;
-      const point = ring[i];
-      point.slope = 1 - ny / length;
-      point.light = (-.46 * nx + .81 * ny + .35 * nz) / length;
-      if (layer <= 4 && point.forest > .24 && point.slope < .25) trees.push(point);
-    }
-  }
-  for (let layer = 1; layer < rings.length; layer++) {
-    const inner = rings[layer - 1], outer = rings[layer];
-    for (let i = 0; i < perimeter.length; i++) {
-      const next = (i + 1) % perimeter.length;
-      addFace(inner[i], outer[i], inner[next]);
-      addFace(inner[next], outer[i], outer[next]);
-    }
-  }
-  return trees;
 }
 
 function routeGeometry(view, start, sample, width, depth, routeCells) {
@@ -248,7 +177,7 @@ const routeCell = (x, z) => Math.floor((x + 1) / .01) + Math.floor((z + 1) / .01
 const TREE_SHADES = ['#6f9b8f', '#587f71', '#375b54', '#41695f'].map(color => new Color(color));
 const ROCK_SHADES = ['#798a8d', '#526a70', '#3e575e', '#657b7e'].map(color => new Color(color));
 
-function landscapeGeometry(sample, routeCells, width, depth, foothills, random) {
+function landscapeGeometry(sample, routeCells, width, depth, random) {
   const batch = vertexBatch();
   function cap(x, y, z, size, base, apex, radius, sides, turn, shades) {
     const tip = { x: x + size * .055, y: y + size * apex, z };
@@ -275,6 +204,7 @@ function landscapeGeometry(sample, routeCells, width, depth, foothills, random) 
   for (let z = -depth / 2 + spacing / 2; z < depth / 2 - spacing / 2; z += spacing) {
     for (let x = -width / 2 + spacing / 2; x < width / 2 - spacing / 2; x += spacing) {
       const sx = x + (random() - .5) * spacing, sz = z + (random() - .5) * spacing;
+      if (Math.abs(sx) > width / 2 - .011 || Math.abs(sz) > depth / 2 - .011) continue;
       if (routeCells.has(routeCell(sx, sz))) continue;
       const { y, forest, slope } = sample(sx, sz);
       const tree = forest > .18 && random() < forest * .63 && slope < 1.1;
@@ -285,9 +215,6 @@ function landscapeGeometry(sample, routeCells, width, depth, foothills, random) 
         cap(sx, y, sz, .006 + random() * .013, -.16, .36, .55, 4, .51, ROCK_SHADES);
       }
     }
-  }
-  for (const { x, y, z, forest } of foothills) {
-    if (random() < forest * .39) conifer(x, y, z, .013 + random() * .012);
   }
   return batch.geometry();
 }
@@ -314,8 +241,24 @@ export function createDestinationRelief(view) {
     const index = points.length;
     const y = view.getUint16(heightOffset + index * 2, true) / UNIT;
     const forest = view.getUint8(coverOffset + index) / 255;
-    points.push({ x, y, z, forest, toe: 0 });
+    points.push({ x, y, z, forest });
     peak = Math.max(peak, y);
+  }
+
+  // Sample the grade across neighbouring DEM posts so snow and rock shading
+  // follow the ridges instead of exposing the diagonal of every triangle.
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+    const point = points[j * cols + i];
+    const left = points[j * cols + Math.max(0, i - 1)];
+    const right = points[j * cols + Math.min(cols - 1, i + 1)];
+    const north = points[Math.max(0, j - 1) * cols + i];
+    const south = points[Math.min(rows - 1, j + 1) * cols + i];
+    const nx = (left.y - right.y) / (right.x - left.x);
+    const nz = (north.y - south.y) / (south.z - north.z);
+    const length = Math.hypot(nx, 1, nz);
+    point.slope = 1 - 1 / length;
+    point.light = (-.46 * nx + .81 + .35 * nz) / length;
+    point.grain = terrainGrain(point.x, point.z) * .27;
   }
 
   const locateX = locator(xAxis), locateZ = locator(zAxis);
@@ -348,9 +291,9 @@ export function createDestinationRelief(view) {
   for (let i = 0; i < cols - 1; i++) perimeter.push(points[(rows - 1) * cols + i]);
   for (let j = rows - 1; j > 0; j--) perimeter.push(points[j * cols + cols - 1]);
   for (let i = cols - 1; i > 0; i--) perimeter.push(points[i]);
-  const foothills = appendFoothills(points, perimeter, sample, width, depth, addFace);
+  appendWalls(terrain, perimeter);
 
   const routeCells = new Set();
   const routes = routeGeometry(view, coverOffset + pointCount, sample, width, depth, routeCells);
-  return { terrain: terrain.geometry(), routes, details: landscapeGeometry(sample, routeCells, width, depth, foothills, random), points };
+  return { terrain: terrain.geometry(), routes, details: landscapeGeometry(sample, routeCells, width, depth, random), width, depth, peak };
 }

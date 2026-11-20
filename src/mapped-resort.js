@@ -7,6 +7,7 @@ import { loadingProgress } from './mountain-loading.js';
 import { createMultiplayer } from './multiplayer.js';
 import { createTravelTracker } from './skier-profile.js';
 import { createSnowTraffic } from './snow-traffic.js';
+import { bindSnowMotionBlur } from './snow-crystals.js';
 import { createRiderShadow } from './rider-shadow.js';
 import {
   graphicsProfiles, bindRealism, createRenderer, resizeViewport, renderMountainFrame,
@@ -267,9 +268,7 @@ export async function startMappedResort(mountain) {
     runs, crystals: crystalSpecs, heightAt: ground.heightAt, coinStep: 10, forestCoins: forestLines.coins,
   });
   ui.collectibles = collectibles;
-  const findList = outfitter.dialog.querySelector('[data-finds]');
-  findList.previousElementSibling.textContent = 'Mountain finds';
-  findList.previousElementSibling.hidden = findList.hidden = !collectibles.totalCrystals;
+  outfitter.findsLabel = 'Mountain finds';
   $('coin-count').parentElement.classList.toggle('hidden', !collectibles.totalCoins);
   $('crystal-count').parentElement.classList.toggle('hidden', !collectibles.totalCrystals);
   outfitter.catalog = collectibles.crystals.map((crystal) => {
@@ -502,7 +501,7 @@ export async function startMappedResort(mountain) {
 
   function openMountain(section = 'travel') {
     updateConditionsClock();
-    if (mountainPanel.open || outfitter.dialog.open) return;
+    if (mountainPanel.open || outfitter.dialog.open || outfitter.customizing) return;
     releaseLook();
     clearInput();
     showMountainMenu(section);
@@ -538,7 +537,7 @@ export async function startMappedResort(mountain) {
     }
     if (initializeAudio) activateAudio();
     if (mountainPanel.open) mountainPanel.close();
-    if (outfitter.dialog.open) outfitter.dialog.close();
+    if (outfitter.dialog.open || outfitter.customizing) outfitter.close();
     if (liftSystem.active) {
       liftSystem.cancel(player);
       audio.gondolaStop();
@@ -795,7 +794,7 @@ export async function startMappedResort(mountain) {
     travelTracker.update(dt, player, { active: movingOnMountain, nearest: movingOnMountain ? ui.findNearest(player, false, simTime) : null });
     if (playing && !frozen) snowTraffic.update(dt, player, people.people, conditionsNow, movingOnMountain);
     ground.streamBackcountry?.(playing ? player.pos : camera.position, camera.position);
-    world.update(dt, camera, movingOnMountain ? player.speed : 0);
+    world.update(dt, camera, movingOnMountain ? player.speed : 0, playing ? player.pos : null);
     people.update(frozen ? 0 : dt, simTime, camera, playing && !ride ? player : null);
     forestLines.update();
     sky.update(dt, camera);
@@ -842,11 +841,11 @@ export async function startMappedResort(mountain) {
     outfitter.openCustomizer(trigger);
   }
 
-  function openOutfitter() {
-    if (outfitter.dialog.open) return;
+  function openOutfitter(trigger = document.activeElement) {
+    if (outfitter.dialog.open || outfitter.customizing) return;
     releaseLook();
     clearInput();
-    outfitter.open();
+    outfitter.open(undefined, trigger);
   }
 
   const bindings = {
@@ -855,7 +854,7 @@ export async function startMappedResort(mountain) {
     'pause-customize': () => openCustomizer($('pause-customize')),
     'menu-mountain': () => openMountain(), 'pause-mountain': () => openMountain(),
     'pause-lifts': () => openMountain('lifts'),
-    'mountain-done': () => mountainPanel.close(), 'mountain-outfitter': openOutfitter,
+    'mountain-done': () => mountainPanel.close(), 'mountain-outfitter': event => openOutfitter(event.currentTarget),
     'how-to-btn': () => openPanel('guide'), 'pause-guide': () => openPanel('guide'),
     'guide-drop': () => playing ? closePanel() : travel('default'),
     'map-open': () => openPanel('map'), 'pause-map': () => openPanel('map'),
@@ -872,6 +871,7 @@ export async function startMappedResort(mountain) {
     renderer,
   });
   bindRealism($('pause-realism'), query);
+  bindSnowMotionBlur($('pause-motion-blur'), $('motion-blur-hint'));
   for (const [id, action] of Object.entries(bindings)) $(id)?.addEventListener('click', action);
   for (const name of ['map', 'guide', 'pause']) {
     document.querySelectorAll(`[data-close="${name}-screen"]`).forEach((button) =>
@@ -898,6 +898,7 @@ export async function startMappedResort(mountain) {
 
   window.addEventListener('keydown', (event) => {
     const { code } = event;
+    if (code !== 'Escape' && event.target.closest?.('input, select, textarea, [contenteditable="true"]')) return;
     if ((code === 'Enter' || code === 'Space') && event.target.closest?.('button, select, input, textarea, summary, a[href]')) return;
     if (outfitter.customizing || outfitter.dialog.open || mountainPanel.open || event.ctrlKey || event.metaKey || event.altKey) return;
     const shown = modal();

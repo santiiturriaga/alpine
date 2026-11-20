@@ -1,5 +1,5 @@
 import { jacketFinishes } from './garment-marks.js';
-import { createGearPreview } from './gear-preview.js';
+import { createBarberPreview } from './gear-preview.js';
 import { SKI_MODELS, SNOWBOARD_MODELS } from './gear-catalog.js';
 import { restoreRide, rideOptions, equipRide } from './ride-inventory.js';
 import { BACKPACK_MODELS, DEFAULT_BACKPACK_MODEL, isBackpackModel } from './backpack-catalog.js';
@@ -45,33 +45,77 @@ function read() {
     haircut:Object.hasOwn(haircuts,data.haircut)?data.haircut:'helmet',
     hairColor:hairColors.some(([,color])=>color===data.hairColor)?data.hairColor:hairColors[0][1]};
 }
-const element=(tag,cls,text='')=>{const e=document.createElement(tag);if(cls)e.className=cls;e.textContent=text;return e;};
+const freeOptions = (entries, active) => entries.map(([id, name]) => ({
+  id, name, owned: true, price: 0, active: id === active,
+}));
 
 export class Outfitter {
   constructor(player,close,renderer) {
     this.player=player;this.state=read();this.dialog=document.getElementById('outfitter');
+    this.closeShop=close;
+    this.findsLabel='Field notes';
     this.dialog.querySelector('[data-shop-close]').onclick=close;
     this.dialog.addEventListener('cancel',e=>{e.preventDefault();close();});
-    this.notices=this.dialog.querySelector('output');
     this.previewCanvas=this.dialog.querySelector('[data-gear-preview]');
-    this.previewCaption=this.dialog.querySelector('[data-preview-caption]');
-    this.goggleButton=this.dialog.querySelector('[data-goggle-preview]');
     this.renderer=renderer;
     for (const button of this.dialog.querySelectorAll('[data-turn]')) button.onclick=()=>{
       this.angle+=Number(button.dataset.turn);
       this.drawPreview();
     };
-    window.addEventListener('storage',e=>{if(e.key===key){this.state=read();this.equip();if(this.dialog.open)this.render();}});
+    window.addEventListener('storage',e=>{if(e.key===key){this.state=read();this.equip();if(this.dialog.open)this.renderBarber();}});
     this.equip();
   }
-  get customizing() { return this.customizer?.isOpen ?? false; }
-  async openCustomizer(trigger) {
-    if (!this.customizer) {
-      const {createCharacterCustomizer} = await import('./character-customizer.js');
-      if (!trigger?.getClientRects().length || trigger.closest('[inert], .hidden')) return;
-      this.customizer ??= createCharacterCustomizer(this);
+  get customizing() { return !!(this.openRequest || this.customizer?.isOpen); }
+  async openCustomizer(trigger = document.activeElement, options = {}) {
+    if (this.customizing || this.dialog.open) return;
+    const request = this.openRequest = {};
+    let loading;
+    const dismissLoading = () => {
+      if (!loading) return;
+      loading.close();
+      loading.remove();
+      loading = null;
+    };
+    try {
+      if (!this.customizer) {
+        // Take modal ownership before fetching the studio. A delayed import
+        // must never reopen a shop after the rider has returned to the slope.
+        loading = document.createElement('dialog');
+        loading.id = 'outfitter-loading';
+        loading.setAttribute('aria-labelledby', 'outfitter-loading-label');
+        loading.innerHTML = '<span id="outfitter-loading-label" role="status">Opening outfitter…</span><button type="button" autofocus>Back</button>';
+        request.cancel = () => {
+          if (this.openRequest !== request) return;
+          this.openRequest = null;
+          dismissLoading();
+          options.onClose?.();
+          trigger?.focus({ preventScroll: true });
+        };
+        loading.querySelector('button').onclick = request.cancel;
+        loading.oncancel = event => { event.preventDefault(); request.cancel(); };
+        loading.onclose = () => { if (loading) request.cancel(); };
+        document.body.append(loading);
+        loading.showModal();
+        const {createCharacterCustomizer} = await import('./character-customizer.js');
+        if (this.openRequest !== request) return;
+        dismissLoading();
+        this.customizer = createCharacterCustomizer(this);
+      }
+      if (!options.onClose && (!trigger?.getClientRects().length || trigger.closest('[inert], .hidden'))) return;
+      this.customizer.open(trigger, options);
+    } catch (error) {
+      if (this.openRequest !== request) return;
+      dismissLoading();
+      console.error('Could not open the outfitter', error);
+      options.onClose?.();
+    } finally {
+      if (this.openRequest === request) this.openRequest = null;
     }
-    this.customizer.open(trigger);
+  }
+  close() {
+    this.openRequest?.cancel?.();
+    if (this.customizer?.isOpen) this.customizer.close();
+    if (this.dialog.open) this.closeShop();
   }
   equip() {
     const s=this.state;
@@ -91,6 +135,18 @@ export class Outfitter {
     return { ...this.broadcastOutfit, apparel:s.outfit.jacket, skiModel:s.skis, snowboardModel:s.snowboard,
       footwear:s.footwear, haircut:s.haircut, hairColor:s.hairColor };
   }
+  previewAppearance(slot, id) {
+    const appearance = this.appearance;
+    if (id === undefined) return appearance;
+    if (slot === 'jacket') {
+      appearance.jacket = jacketFinishes[id] ?? id;
+      appearance.apparel = id;
+    } else if (slot === 'skis') appearance.skis = appearance.skiModel = id;
+    else if (slot === 'snowboard') appearance.snowboard = appearance.snowboardModel = id;
+    else if (slot === 'backpack') appearance.backpackModel = id;
+    else appearance[slot === 'backpackColor' ? 'backpack' : slot] = id;
+    return appearance;
+  }
   customizationOptions(slot) {
     const s = this.state;
     if (slot === 'skis' || slot === 'snowboard') return rideOptions(s,slot);
@@ -100,8 +156,15 @@ export class Outfitter {
     if (slot === 'goggles') return Object.entries(GOGGLES).map(([id,g]) => ({
       id, name:g.name, color:g.frame, owned:true, price:0, active:s.outfit.goggles === id,
     }));
-    if (slot === 'stance') return [['regular','Regular · left foot forward'],['goofy','Goofy · right foot forward']]
-      .map(([id,name]) => ({ id,name,price:0,owned:true,active:s.stance === id }));
+    if (slot === 'stance') return freeOptions([
+      ['regular','Regular · left foot forward'],['goofy','Goofy · right foot forward'],
+    ], s.stance);
+    if (slot === 'sticker') return freeOptions(Object.entries(stickers), s.sticker);
+    if (slot === 'footwear') return [
+      { id:'standard',name:'Standard boots',price:0,owned:true,active:s.footwear==='standard' },
+      { id:'traverse',name:SNOW_SHOES.name,price:SNOW_SHOES.price,owned:s.ownsSnowShoes,active:s.footwear==='traverse',
+        description:`Walk ${Math.round((SNOW_SHOES.speed-1)*100)}% faster on level snow and keep more pace uphill. Switch to walking mode with B.` },
+    ];
     const field = slot === 'backpackColor' ? 'backpack' : slot;
     const palette = field === 'jacket' ? jacketPalette(s.finds) : colors[field];
     if (!Array.isArray(palette)) return [];
@@ -114,14 +177,21 @@ export class Outfitter {
     if (slot === 'skis' || slot === 'snowboard') {
       if (!equipRide(s,slot,id)) return false;
     } else {
-      if (!this.customizationOptions(slot).some(option => option.id === id)) return false;
-      if (slot === 'backpack') s.backpackModel=id;
-      else if (slot === 'stance') s.stance=id;
+      const item = this.customizationOptions(slot).find(option => option.id === id);
+      if (!item) return false;
+      if (slot === 'footwear') {
+        if (!item.owned) {
+          if (s.balance < item.price) return false;
+          s.balance -= item.price;
+          s.ownsSnowShoes = true;
+        }
+        s.footwear = id;
+      } else if (slot === 'backpack') s.backpackModel=id;
+      else if (slot === 'stance' || slot === 'sticker') s[slot]=id;
       else s.outfit[slot === 'backpackColor' ? 'backpack' : slot]=id;
     }
     this.equip();
     this.save();
-    if (this.dialog.open) this.render();
     return true;
   }
   equipPatrolShell() {
@@ -129,7 +199,6 @@ export class Outfitter {
     this.state.outfit.jacket=patrolShell;
     this.equip();
     this.save();
-    if(this.dialog.open)this.render();
     return true;
   }
   save(){try{localStorage.setItem(key,JSON.stringify(this.state));}catch{}}
@@ -141,55 +210,27 @@ export class Outfitter {
     return true;
   }
   find(id,reward) {if(this.state.finds.includes(id))return false;this.state.finds.push(id);this.credit(reward);return true;}
-  open(shop={}){
-    this.barber=shop.kind==='barber';
-    this.dialog.querySelector('#outfitter-name').textContent=shop.name||'Mountain outfitter';
-    this.setPreviewMode(this.barber?'hair':'outfit');
-    this.dialog.querySelector('[data-shop-gear]').hidden=this.barber;
-    this.dialog.querySelector('[data-shop-barber]').hidden=!this.barber;
-    this.notices.textContent='';
-    this.render();
+  open(shop={}, trigger){
+    if (this.customizing || this.dialog.open) return;
+    if (shop.kind !== 'barber') {
+      return this.openCustomizer(trigger, { title: shop.name || 'Mountain outfitter', onClose: this.closeShop });
+    }
+    this.dialog.querySelector('#outfitter-name').textContent=shop.name||'Barber';
+    this.angle=.13;
+    this.renderBarber();
     this.dialog.showModal();
     this.dialog.scrollTop=0;
     this.drawPreview();
   }
   drawPreview(){
     if(!this.renderer)return;
-    this.preview ??= createGearPreview(this.renderer,this.previewCanvas);
-    this.preview(this.appearance,this.angle,this.previewMode);
-  }
-  setPreviewMode(mode) {
-    if(this.previewMode===mode && this.dialog.open)return;
-    this.previewMode=mode;
-    this.angle=mode==='hair'?.13:mode==='goggles'?-.77:-.48;
-    const caption=mode==='goggles'?'Smith × Supreme':'Your skier';
-    this.previewCaption.textContent=caption;
-    this.previewCanvas.setAttribute('aria-label',mode==='goggles'?'3D close-up of your Smith × Supreme goggles':
-      mode==='hair'?'3D preview of your skier’s haircut':'3D preview of your skier and equipped outfit');
-    this.goggleButton.setAttribute('aria-pressed',String(mode==='goggles'));
-  }
-  renderGoggles() {
-    const s=this.state, card=this.dialog.querySelector('[data-goggles]');
-    const color=card.querySelector('select');
-    color.replaceChildren(...Object.entries(GOGGLES).map(([id, finish])=>new Option(finish.name,id)));
-    color.value=s.outfit.goggles;
-    card.style.setProperty('--topsheet',GOGGLES[color.value].frame);
-    color.onchange=()=>{
-      s.outfit.goggles=color.value;
-      const finish=GOGGLES[color.value];
-      card.style.setProperty('--topsheet',finish.frame);
-      this.setPreviewMode('goggles');
-      this.equip();this.save();
-      this.notices.textContent=`${finish.name} goggles equipped.`;
-    };
-    this.goggleButton.onclick=()=>{
-      this.setPreviewMode(this.previewMode==='goggles'?'outfit':'goggles');
-      this.drawPreview();
-    };
+    this.preview ??= createBarberPreview(this.renderer,this.previewCanvas);
+    this.preview(this.appearance,this.angle);
   }
   renderBarber(){
     const fields=this.dialog.querySelector('[data-shop-barber]');
     const s=this.state;
+    this.dialog.querySelector('[data-balance]').textContent=`${s.balance} mountain coins`;
     const style=fields.querySelector('[data-haircut]'),color=fields.querySelector('[data-hair-color]');
     style.replaceChildren(...Object.entries(haircuts).map(([id,label])=>new Option(label,id)));
     color.replaceChildren(...hairColors.map(([label,hex])=>new Option(label,hex)));
@@ -202,61 +243,5 @@ export class Outfitter {
       this.equip();this.save();
     };
     color.onchange=()=>{s.hairColor=color.value;this.equip();this.save();};
-  }
-  renderFootwear(){
-    const s=this.state,slot=this.dialog.querySelector('[data-footwear]');
-    const equipped=s.footwear==='traverse';
-    const button=element('button',null,equipped?'Switch to ski boots':s.ownsSnowShoes?'Equip':`Buy · ${SNOW_SHOES.price} coins`);
-    button.disabled=!s.ownsSnowShoes&&s.balance<SNOW_SHOES.price;
-    button.dataset.snowShoes='';
-    button.onclick=()=>{
-      if(!s.ownsSnowShoes){
-        if(s.balance<SNOW_SHOES.price)return;
-        s.balance-=SNOW_SHOES.price;
-        s.ownsSnowShoes=true;
-      }
-      s.footwear=equipped?'standard':'traverse';
-      this.equip();this.save();this.render();
-      this.dialog.querySelector('[data-snow-shoes]').focus({preventScroll:true});
-      this.notices.textContent=equipped?'Standard ski boots equipped.':`${SNOW_SHOES.name} equipped.`;
-    };
-    const boost=Math.round((SNOW_SHOES.speed-1)*100);
-    slot.replaceChildren(element('strong',null,SNOW_SHOES.name),element('p',null,
-      `Walk ${boost}% faster on level snow and keep more pace uphill. Switch to walking mode with B.`),button);
-  }
-  render(){
-    const s=this.state,dialog=this.dialog;
-    dialog.querySelector('[data-balance]').textContent=`${s.balance} mountain coins`;
-    if(this.barber){this.renderBarber();return;}
-    this.renderGoggles();
-    this.renderFootwear();
-    for (const slot of ['skis','snowboard']) {
-      const list=dialog.querySelector(`[data-${slot}]`);
-      list.replaceChildren();
-      for (const item of this.customizationOptions(slot)) {
-        const card=element('article','gear-card');
-        const button=element('button',null,item.active?'Equipped':item.owned?'Equip':`Buy · ${item.price} coins`);
-        button.type='button';
-        button.disabled=item.active||(!item.owned&&s.balance<item.price);
-        button.dataset[slot==='skis'?'ski':'board']=item.id;
-        button.onclick=()=>{
-          if(this.equipCustomization(slot,item.id)) this.notices.textContent=`${item.name} equipped.`;
-        };
-        card.append(element('strong',null,item.name),element('p',null,item.description),element('small',null,item.specs),button);
-        list.append(card);
-      }
-    }
-    const fields=dialog.querySelector('[data-apparel]');fields.replaceChildren();
-    for(const [slot,palette] of Object.entries(colors)){
-      const label=element('label',null,slot[0].toUpperCase()+slot.slice(1)),select=element('select');
-      select.dataset.slot=slot;for(const [name,hex] of (slot==='jacket'?jacketPalette(s.finds):palette))select.add(new Option(name,hex));
-      select.value=s.outfit[slot];select.onchange=()=>{s.outfit[slot]=select.value;this.equip();this.save();};
-      label.append(select);fields.append(label);
-    }
-    const badge=element('select');for(const [id,label] of Object.entries(stickers))badge.add(new Option(label,id));
-    badge.value=s.sticker;badge.onchange=()=>{s.sticker=badge.value;this.equip();this.save();};
-    badge.dataset.slot='sticker';const label=element('label',null,'Helmet & pack');label.append(badge);fields.append(label);
-    const finds=dialog.querySelector('[data-finds]');finds.replaceChildren();
-    for(const find of this.catalog||[]){const li=element('li',s.finds.includes(find.id)?'collected':'',s.finds.includes(find.id)?find.title:find.hint);finds.append(li);}
   }
 }

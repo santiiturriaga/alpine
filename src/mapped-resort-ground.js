@@ -609,7 +609,6 @@ export async function loadMappedGround(scene, config, baseURL, { quality = 'BALA
     localPatches.push({ meshGrid: rasterGrid(detailDem, detail, detail.bounds), granite: true,
       inside: (ax, az, bx = ax, bz = az) => ax >= minX && az >= minZ && bx <= maxX && bz <= maxZ });
   }
-  const surfaceGrid = (x, z) => localPatches.find(patch => patch.inside(x, z))?.meshGrid ?? grid;
   const regional = rasterGrid(regionalDem, backdrop, backdrop.bounds);
   const localForestAt = forestSampler(cover, forest, forest.bounds || bounds);
   const regionBounds = backdrop.bounds;
@@ -642,8 +641,12 @@ export async function loadMappedGround(scene, config, baseURL, { quality = 'BALA
     survey: surveyTerrain, material: snowMaterial(bounds, { texture: field.texture, cascade: field.cascade }, true), seed,
     compact: compactDevice, viewDistance: config.viewDistance ?? 19000,
   });
-  const heightAt = (x, z, normal, exact) => insideTerrain(bounds, x, z)
-    ? surfaceGrid(x, z).sample(x, z, normal, exact) : backcountry.sample(x, z, normal);
+  const detailLOD = createMappedTerrainDetail(grid, quality, TILE);
+  function heightAt(x, z, normal, exact) {
+    if (!insideTerrain(bounds, x, z)) return backcountry.sample(x, z, normal);
+    const patch = localPatches.find(patch => patch.inside(x, z));
+    return patch ? patch.meshGrid.sample(x, z, normal, exact) : detailLOD.sample(x, z, normal, exact);
+  }
   function fieldAt(x, z, out = {}) {
     if (insideTerrain(bounds, x, z)) return field.at(x, z, out);
     out.groomed = 0;
@@ -652,7 +655,6 @@ export async function loadMappedGround(scene, config, baseURL, { quality = 'BALA
     return out;
   }
   group.add(surveyTerrain.group, backcountry.group, backcountry.horizon);
-  const detailLOD = createMappedTerrainDetail(grid, quality);
   meshTerrain(group, grid, localMaterial, detailLOD, localPatches);
   for (const patch of localPatches) {
     const material = patch.granite ? summitTerrainMaterial(localMaterial, patch.meshGrid.bounds) : localMaterial;
@@ -679,7 +681,13 @@ export async function loadMappedGround(scene, config, baseURL, { quality = 'BALA
       nightLight.limits.value.copy(limits);
       return nightLight.strength;
     },
-    normalAt(x, z, out = new THREE.Vector3()) { heightAt(x, z, out, true); return out; },
+    normalAt(x, z, out = new THREE.Vector3()) {
+      // The contact height follows the visible faces. The ride model uses
+      // the surrounding slope across triangle boundaries.
+      const reach = 2.5;
+      return out.set(heightAt(x - reach, z) - heightAt(x + reach, z), reach * 2,
+        heightAt(x, z - reach) - heightAt(x, z + reach)).normalize();
+    },
     surfaceAt(x, z, out = {}) {
       const pack = climateUniforms.snowpack.value;
       let cover = 1;

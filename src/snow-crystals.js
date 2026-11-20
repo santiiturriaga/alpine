@@ -4,9 +4,32 @@ import { climateUniforms } from './climate-state.js';
 // Horizontal travel during a short virtual exposure, in metres, and the
 // remaining contrast of centimetre-scale grain. Shared by both snow shaders.
 const shutter = { value: new Vector3(0, 0, 1) };
+let motionBlurEnabled = true;
+
+export function bindSnowMotionBlur(input, hint) {
+  const key = 'alpine.snow-motion-blur';
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  let preferred = true;
+  try { preferred = localStorage.getItem(key) !== 'off'; } catch {}
+
+  function sync() {
+    motionBlurEnabled = preferred && !reducedMotion.matches;
+    if (!motionBlurEnabled) shutter.value.set(0, 0, 1);
+    input.checked = motionBlurEnabled;
+    input.disabled = reducedMotion.matches;
+    hint.hidden = !reducedMotion.matches;
+  }
+  input.addEventListener('change', () => {
+    preferred = input.checked;
+    try { localStorage.setItem(key, preferred ? 'on' : 'off'); } catch {}
+    sync();
+  });
+  reducedMotion.addEventListener('change', sync);
+  sync();
+}
 
 export function updateSnowShutter(player, active) {
-  if (!active || !(player.speed > 10)) {
+  if (!motionBlurEnabled || !active || !(player.speed > 10)) {
     shutter.value.set(0, 0, 1);
     return;
   }

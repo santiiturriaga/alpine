@@ -284,9 +284,9 @@ export async function buildMappedResortWorld(scene, config, baseURL, { quality =
       signs.setQuality(name);
       lodges.setQuality(name);
     },
-    update(dt, camera, travelSpeed = 0) {
+    update(dt, camera, travelSpeed = 0, riderPosition) {
       if (!camera) return;
-      ground.updateDetail(camera);
+      ground.updateDetail(camera, riderPosition);
       forest.update(camera, travelSpeed, dt);
       signs.update(camera);
       lodges.updateDetail(camera);

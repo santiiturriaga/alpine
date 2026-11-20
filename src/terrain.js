@@ -21,6 +21,7 @@ import { terrainHorizon } from './terrain-horizon.js';
 import { createTerrainOcclusion } from './terrain-occlusion.js';
 import { LODGE_FRAME, LODGE_ANNEX } from './roundhouse-site.js';
 import { triangleHeight, worldIndex, boxBlurGrid } from './terrain-grid.js';
+import { surveyCurve } from './terrain-profile.js';
 import { coarseTerrainTopology, createTerrainTileDetail } from './terrain-tile-detail.js';
 import { startSnowGeneration } from './terrain-snow-worker-client.js';
 import { loadWhistlerSnowPack, unpackWhistlerSnowPack, whistlerSnowPackCacheMode } from './whistler-snow-pack.js';
@@ -194,10 +195,7 @@ function fineGridHeight(i, j) {
   return vertexHeights[slot];
 }
 
-function smoothTerrainRow(i, t) {
-  const a = heights[i - 1], b = heights[i], c = heights[i + 1], d = heights[i + 2];
-  return b + .5 * t * ((c - a) + t * (2 * a - 5 * b + 4 * c - d + t * (3 * (b - c) + d - a)));
-}
+const surveyRow = (i, t) => surveyCurve(heights[i - 1], heights[i], heights[i + 1], heights[i + 2], t);
 
 function detailVertex(gx, gz) {
   const detail = originalDetailVertex(gx, gz);
@@ -217,12 +215,14 @@ function originalDetailVertex(gx, gz) {
   const ix = Math.floor(gx), iz = Math.floor(gz);
   if (edge < 1e-7 || ix < 1 || iz < 1 || ix >= n - 2 || iz >= n - 2) return base;
   const tx = gx - ix, tz = gz - iz, i = iz * n + ix;
-  const a = smoothTerrainRow(i - n, tx), b = smoothTerrainRow(i, tx);
-  const c = smoothTerrainRow(i + n, tx), d = smoothTerrainRow(i + 2 * n, tx);
-  const smooth = b + .5 * tz * ((c - a) + tz * (2 * a - 5 * b + 4 * c - d + tz * (3 * (b - c) + d - a)));
-  const h0 = Math.min(heights[i], heights[i + 1], heights[i + n], heights[i + n + 1]);
-  const h1 = Math.max(heights[i], heights[i + 1], heights[i + n], heights[i + n + 1]);
-  return base + clamp(clamp(smooth, h0, h1) - base, -1.6, 1.6) * smoothstep(0, 2, edge);
+  const a = heights[i], b = heights[i + 1], c = heights[i + n], d = heights[i + n + 1];
+  const dz = WORLD.sizeZ / (n - 1);
+  const grade = Math.hypot(Math.max(Math.abs(b - a), Math.abs(d - c)) / cell,
+    Math.max(Math.abs(c - a), Math.abs(d - b)) / dz);
+  const snow = 1 - smoothstep(.46, .94, grade);
+  if (!snow) return base;
+  const curved = surveyCurve(surveyRow(i - n, tx), surveyRow(i, tx), surveyRow(i + n, tx), surveyRow(i + 2 * n, tx), tz);
+  return base + clamp(curved - base, -1.6, 1.6) * snow * smoothstep(0, 2, edge);
 }
 
 function makeTerrainDetail(mesh, tileMaterials) {

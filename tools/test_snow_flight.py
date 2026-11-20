@@ -37,9 +37,12 @@ TEST = '''async () => {
             ground.shape=null; reset(pitch,20);
             for(let i=0;i<42;i++) step();
             check(!events.some(e=>e.type==='launch') && p.grounded, 'Lost contact on a constant plane');
+            const stanceOffset=p.model.position.clone().sub(p.pos);
             step({ollie:true});
             const ollie=events.find(e=>e.type==='ollie');
             check(p.airborne && ollie, 'Ollie did not start');
+            const poseShift=p.model.position.clone().sub(p.pos).distanceTo(stanceOffset);
+            check(poseShift<.012, `Rig shifted ${poseShift} m relative to the rider at takeoff`);
             const takeoffVy=ollie.vy, normalVy=(p.vy - pitch*p.vel.z)/Math.hypot(1,pitch);
             let apex=0;
             for(let i=0;i<180 && p.airborne;i++) {
@@ -53,6 +56,14 @@ TEST = '''async () => {
             check(normalVy>4.25 && normalVy<5.15, 'Takeoff impulse did not follow the snow normal');
             if(pitch<0) check(takeoffVy<0, 'Downhill momentum was erased at takeoff');
             recordsBySlope[pitch]={takeoffVy,normalVy,apex,airTime:landing.airTime,impact:landing.impact};
+        }
+        ground.shape=z=>-.24*z-.065*(THREE.MathUtils.smoothstep(z,0,.65)-THREE.MathUtils.smoothstep(z,2,2.65));
+        for (const hz of [30,60,120]) {
+            reset(0,20,-2.7);
+            for(let i=0;i<hz*.85;i++) {
+                p.update(1/hz,{});
+                check(p.grounded && events.length===0, `${discipline} launched over a shallow hollow at ${hz} Hz`);
+            }
         }
         ground.shape=z=>z < -2.4 ? .144*(z+2.4)-.1728 : z > 2.4 ? -.144*(z-2.4)-.1728 : -.03*z*z;
         reset(0,21,-3.5);
@@ -73,6 +84,33 @@ TEST = '''async () => {
         step({ollie:true});
         check(p.airborne && p.pos.y-ground.heightAt(p.pos.x,p.pos.z)>2.3,
             'Ollie on the departure frame snapped down to the lower slope');
+        for (const mode of [0,2]) {
+            p.cameraMode=mode;
+            reset(0,18,-2.7);
+            let elevation=p.camera.position.y-p.pos.y;
+            const direction=new THREE.Vector3();
+            let pitch=Math.asin(p.camera.getWorldDirection(direction).y);
+            for(let i=0;i<25;i++) {
+                p.update(1/60,{});
+                const relative=p.camera.position.y-p.pos.y;
+                const nextPitch=Math.asin(p.camera.getWorldDirection(direction).y);
+                if(i>4) {
+                    check(Math.abs(relative-elevation)<.06, `Camera ${mode} lifted over the cliff in ${discipline}`);
+                    check(Math.abs(nextPitch-pitch)<.075, `Camera ${mode} pitched at the cliff in ${discipline}`);
+                }
+                elevation=relative;
+                pitch=nextPitch;
+            }
+            check(p.airborne,'The camera test never crossed the drop');
+        }
+        p.cameraMode=0;
+        ground.shape=null; reset(-.30,20);
+        p.pos.y=ground.heightAt(p.pos.x,p.pos.z)+.035+.0003;
+        p.grounded=false; p.airborne=true; p.airTime=.3; p.vy=-7.2;
+        const landingStart=p.pos.z;
+        p.update(1/120,{});
+        check(p.grounded && p.pos.z-landingStart>p.speed/120*.95,
+            `${discipline} lost horizontal travel on the touchdown frame`);
         ground.shape=null; reset(-.27,18);
         step({ollie:true});
         p.spin=Math.PI*.5;
@@ -109,6 +147,55 @@ TEST = '''async () => {
     check(/swiftshader/i.test(backend), 'software renderer not active');
     return {backend,records};
 }'''
+
+
+def ego_bowl_descent(page):
+    result = page.evaluate('''async () => {
+        const THREE = await import('three');
+        const {Player} = await import('/src/player.js');
+        const {buildTerrain,normalAt,surfaceAt} = await import('/src/terrain.js');
+        const {runPointAt,startPose,RUNS} = await import('/src/worlddata.js');
+        const terrain = await buildTerrain();
+        const run = RUNS.filter(r=>r.name==='Ego Bowl').sort((a,b)=>b.length-a.length)[0];
+        const a=runPointAt(run,0), b=runPointAt(run,1);
+        const direction=terrain.heightAt(a.x,a.z)>terrain.heightAt(b.x,b.z)?1:-1;
+        let t=direction>0?.13:.87;
+        const start=runPointAt(run,t), heading=Math.atan2(direction*start.tx,direction*start.tz);
+        const camera=new THREE.PerspectiveCamera(54,1.5,.27,1000), torso=new THREE.Vector3();
+        const player=new Player(new THREE.Scene(),camera,{ground:{...terrain,startPose,normalAt,surfaceAt}});
+        player.teleport({...start,heading},{resetStats:true});
+        player.vel.set(Math.sin(heading)*18,0,Math.cos(heading)*18);
+        let launches=0, previousEye=0, previousEyeStep=0, previousTorso=0;
+        let maxEyeStepChange=0,maxRelativeTorsoStep=0,tileChange=0;
+        player.onEvent=e=>{if(e.type==='launch') launches++;};
+        for(let frame=0;frame<650;frame++){
+            const {x,z}=player.pos;
+            if(frame%36===0){
+                const before=terrain.heightAt(x,z);
+                terrain.updateDetail(player.pos);
+                tileChange=Math.max(tileChange,Math.abs(terrain.heightAt(x,z)-before));
+            }
+            const ahead=runPointAt(run,t+direction*13/run.length);
+            const angle=Math.atan2(ahead.x-x,ahead.z-z)-player.heading;
+            const steer=THREE.MathUtils.clamp(-Math.atan2(Math.sin(angle),Math.cos(angle))*2.6,-1,1);
+            player.update(1/60,{steer,tuck:true},frame/60);
+            t+=direction*player.speed/60/run.length;
+            const eyeStep=camera.position.y-previousEye;
+            const relativeTorso=player.rig.torso.getWorldPosition(torso).y-player.pos.y;
+            if(frame>90){
+                maxEyeStepChange=Math.max(maxEyeStepChange,Math.abs(eyeStep-previousEyeStep));
+                maxRelativeTorsoStep=Math.max(maxRelativeTorsoStep,Math.abs(relativeTorso-previousTorso));
+            }
+            previousEye=camera.position.y;
+            previousEyeStep=eyeStep;
+            previousTorso=relativeTorso;
+        }
+        return {distance:player.stats.distance,launches,maxEyeStepChange,maxRelativeTorsoStep,tileChange};
+    }''')
+    assert result['distance'] > 250 and result['launches'] == 0, result
+    assert result['maxEyeStepChange'] < .035 and result['maxRelativeTorsoStep'] < .009, result
+    assert result['tileChange'] < .001, result
+    print(json.dumps({'egoBowl': result}, indent=2))
 
 
 def live_crash(browser, url, screenshots):
@@ -153,6 +240,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--url', default='http://127.0.0.1:8080/')
     parser.add_argument('--live', action='store_true')
+    parser.add_argument('--terrain', action='store_true', help='Replay a tucked descent over the actual Ego Bowl terrain')
     parser.add_argument('--screenshots', type=Path)
     args = parser.parse_args()
     if args.screenshots:
@@ -164,6 +252,8 @@ def main():
         page.route('**/flight-test.html', lambda request: request.fulfill(body=SHELL, content_type='text/html'))
         page.goto(args.url + 'flight-test.html')
         print(json.dumps(page.evaluate(TEST), indent=2))
+        if args.terrain:
+            ego_bowl_descent(page)
         page.close()
         if args.live:
             live_crash(browser, args.url, args.screenshots)

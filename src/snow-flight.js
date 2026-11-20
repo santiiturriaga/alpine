@@ -15,14 +15,31 @@ export function departure(from, to, nextHeight, heightAt, dt) {
   const span = clamp(speed * .043, .31, 1.25);
   const origin = heightAt(from.x, from.z);
   const behind = heightAt(from.x - dirX * span, from.z - dirZ * span);
-  const rise = (origin - behind) / span;
+  const tipRise = (origin - behind) / span;
+  const gravityDrop = .5 * GRAVITY * dt * dt;
+  if (origin + tipRise * step - gravityDrop - nextHeight < .0018) return null;
+  // The last contact can be the uphill wall of a small hollow. Use the
+  // approach across the full running length to bound its takeoff velocity.
+  const fullSpan = 2 * span;
+  const approach = heightAt(from.x - dirX * fullSpan, from.z - dirZ * fullSpan);
+  const rise = Math.min(tipRise, (origin - approach) / fullSpan);
   const vertical = clamp(rise * speed, -speed * 1.2, speed * 1.2);
-  const y = origin + vertical * dt - .5 * GRAVITY * dt * dt;
+  const y = origin + vertical * dt - gravityDrop;
   if (y - nextHeight < .0018) return null;
   const groundAhead = heightAt(to.x + dirX * span, to.z + dirZ * span);
   const time = dt + span / speed;
   const recovery = origin + vertical * time - .5 * GRAVITY * time * time - groundAhead;
   if (recovery < .026) return null;
+  // Knees and ankles can extend through small hollows without changing to
+  // a flight pose. A genuine roller or drop keeps falling away beyond the tip.
+  const extension = .10 * Math.hypot(1, rise);
+  if (recovery < extension) {
+    const extensionTime = .19;
+    const distance = speed * extensionTime;
+    const fallLine = heightAt(from.x + dirX * distance, from.z + dirZ * distance);
+    const clearance = origin + vertical * extensionTime - .5 * GRAVITY * extensionTime ** 2 - fallLine;
+    if (clearance < extension) return null;
+  }
   return { y: y + SNOW_CLEARANCE, vy: vertical - GRAVITY * dt };
 }
 

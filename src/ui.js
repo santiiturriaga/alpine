@@ -5,6 +5,7 @@ import { ResortMap } from './resort-map.js';
 import { RouteGuide } from './route-guide.js';
 import { indexNearbyTrails } from './nearby-trails.js';
 import { loadingProgress, finishMountainLoading } from './mountain-loading.js';
+import { bindPauseTabs } from './pause-tabs.js';
 import { clamp, formatNumber, formatTime } from './util.js';
 import {
   formatTravelDistance, onProfileChange, setSkierName, setSkierUnits, skierName, skiUnits, travelStats, unitPreference,
@@ -90,6 +91,7 @@ export class UI {
     this.nearest = null;
     this.lastNearestCheck = 0;
     this.toastTimers = new Set();
+    bindPauseTabs(this.el.pause);
     this.bindProfile();
   }
 
@@ -149,6 +151,16 @@ export class UI {
   }
 
   showModal(id, focusTarget = this.el[id]?.querySelector('button')) {
+    if ((id === 'map' || id === 'guide') && this.isOpen('pause')) {
+      const focused = document.activeElement;
+      this.pauseReturnFocus = this.el.pause.contains(focused) ? focused : null;
+    } else if (id === 'pause') {
+      focusTarget = this.pauseReturnFocus ?? focusTarget;
+      if (focusTarget?.closest('[hidden]') || focusTarget?.disabled) focusTarget = $('resume');
+      this.pauseReturnFocus = null;
+    } else if (id !== 'map' && id !== 'guide') {
+      this.pauseReturnFocus = null;
+    }
     for (const key of ['guide', 'map', 'pause', 'summary']) {
       const node = this.el[key];
       if (!node) continue;
@@ -166,6 +178,7 @@ export class UI {
   }
 
   hideModals() {
+    this.pauseReturnFocus = null;
     for (const key of ['guide', 'map', 'pause', 'summary']) {
       const node = this.el[key];
       if (!node) continue;
@@ -188,6 +201,7 @@ export class UI {
     this.el.audioMenu?.classList.toggle('muted', !enabled);
     if (this.el.pauseAudio) {
       this.el.pauseAudio.classList.toggle('on', enabled);
+      this.el.pauseAudio.setAttribute('aria-pressed', String(enabled));
       const label = this.el.pauseAudio.querySelector('span');
       if (label) label.textContent = enabled ? 'ON' : 'OFF';
     }
@@ -196,6 +210,7 @@ export class UI {
   setMarkers(on) {
     if (this.el.pauseMarkers) {
       this.el.pauseMarkers.classList.toggle('on', on);
+      this.el.pauseMarkers.setAttribute('aria-pressed', String(on));
       const label = this.el.pauseMarkers.querySelector('span');
       if (label) label.textContent = on ? 'ON' : 'OFF';
     }

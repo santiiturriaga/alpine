@@ -2,13 +2,16 @@ import * as THREE from 'three';
 import { createSkier } from './skier.js';
 import { skiDeck, snowboardDeck } from './skier-equipment.js';
 import { canvasTexture, makeCanvas } from './util.js';
+import { createCustomizerThumbnails } from './customizer-thumbnails.js';
+import { buildSkiGoggles } from './ski-goggles.js';
 
 const slots = {
   goggles: { label: 'Goggles', side: 'left', point: [0, .14, .16], angle: -.25 },
-  helmet: { label: 'Helmet', side: 'right', point: [.05, .237, .085] },
+  helmet: { label: 'Helmet', side: 'right', point: [.05, .237, .085], angle: -.45 },
   jacket: { label: 'Jacket', side: 'left', point: [-.154, .351, -.102], angle: -.27, behind: true },
   backpack: { label: 'Backpack', side: 'right', point: [0, 0, 0], angle: 2.7, behind: true },
   pants: { label: 'Pants', side: 'left', behind: true },
+  footwear: { label: 'Footwear', side: 'right', point: [0, .12, .07], angle: -.45 },
   skis: { label: 'Skis', side: 'left', point: [0, .016, .64], angle: -.4 },
   snowboard: { label: 'Snowboard', side: 'right', point: [0, .02, .51], angle: -.55 },
 };
@@ -87,7 +90,38 @@ function createStudio(canvas, mountainRenderer) {
   const vector = new THREE.Vector3();
   const pantsPoint = new THREE.Vector3();
   const candidates = [rig.group, spare];
-  let spareSlot, spareKey, compact = false, screenWidth = 1, screenHeight = 1;
+  let spareSlot, spareKey, thumbnails, goggleView, gogglesCloseUp = false;
+  let compact = false, screenWidth = 1, screenHeight = 1;
+  const shoes = () => rig.shadowPose.legs.flatMap(leg => [leg.skiBoot, leg.boardBoot, leg.walkShoe]).filter(Boolean);
+
+  function fitGoggleView() {
+    if (!goggleView) return;
+    const aspect = screenWidth / Math.max(1, screenHeight);
+    const extent = Math.max(.17, (compact ? .258 : .235) / aspect);
+    const view = goggleView.camera;
+    view.top = extent;
+    view.bottom = -extent;
+    view.left = -extent * aspect;
+    view.right = extent * aspect;
+    view.updateProjectionMatrix();
+  }
+
+  function setGogglesCloseUp(enabled) {
+    gogglesCloseUp = enabled;
+    if (!enabled || goggleView) return;
+    const goggles = buildSkiGoggles(rig.gearAnchors.goggles.userData.goggles);
+    goggles.group.position.y = -.14;
+    const closeUp = new THREE.Scene();
+    closeUp.background = new THREE.Color('#3c4240');
+    for (const child of scene.children) if (child.isLight) closeUp.add(child.clone());
+    closeUp.add(goggles.group);
+    const view = new THREE.OrthographicCamera(-1, 1, 1, -1, .02, 5);
+    view.position.set(0, .11, .85);
+    view.lookAt(0, 0, .015);
+    view.updateMatrixWorld(true);
+    goggleView = { scene: closeUp, camera: view, goggles };
+    fitGoggleView();
+  }
 
   function placeSpare() {
     const skis = spareSlot === 'skis';
@@ -95,9 +129,10 @@ function createStudio(canvas, mountainRenderer) {
     spare.position.x = skis ? -offset : offset;
   }
 
-  function setAppearance(appearance) {
-    rig.setAppearance(appearance);
-    rig.animate(.3, displayPose, null);
+  function setAppearance(appearance, footMode) {
+    rig.setAppearance({ ...appearance, haircut: 'helmet' });
+    goggleView?.goggles.setColor(appearance.goggles);
+    rig.animate(.3, { ...displayPose, footMode }, null);
     const trousers = rig.gearAnchors.pants.geometry;
     trousers.computeBoundingBox();
     trousers.boundingBox.getCenter(pantsPoint);
@@ -145,6 +180,7 @@ function createStudio(canvas, mountainRenderer) {
     camera.left = -extent * aspect;
     camera.right = extent * aspect;
     camera.updateProjectionMatrix();
+    fitGoggleView();
     // Preserve embroidery detail on larger displays without exceeding the
     // resolution the player uses on the mountain. Small game viewports still
     // get enough studio pixels to inspect the equipment.
@@ -157,18 +193,30 @@ function createStudio(canvas, mountainRenderer) {
   }
 
   function rotate(angle) {
-    rig.group.rotation.y = angle;
+    if (gogglesCloseUp) goggleView.goggles.group.rotation.y = angle;
+    else rig.group.rotation.y = angle;
     camera.updateMatrixWorld();
   }
 
   function render() {
-    renderer.render(scene, camera);
+    if (gogglesCloseUp) renderer.render(goggleView.scene, goggleView.camera);
+    else renderer.render(scene, camera);
   }
 
   function anchor(slot, x, y) {
+    if (gogglesCloseUp && slot === 'goggles') {
+      goggleView.goggles.group.localToWorld(vector.fromArray(slots.goggles.point));
+      vector.project(goggleView.camera);
+      return [(vector.x + 1) * x / 2, (1 - vector.y) * y / 2, vector.z];
+    }
     const node = rig.gearAnchors[slot];
     if (slot === spareSlot) spare.localToWorld(vector.set(0, .23, .025));
     else if (slot === 'pants') node.localToWorld(vector.copy(pantsPoint));
+    else if (slot === 'footwear') {
+      const shoe = shoes().find(part => part.visible && part.parent.visible);
+      if (!shoe) return null;
+      shoe.localToWorld(vector.fromArray(slots[slot].point));
+    }
     else if (node) node.localToWorld(vector.copy(node.userData.labelPoint ?? vector.fromArray(slots[slot].point)));
     else return null;
     vector.project(camera);
@@ -196,8 +244,10 @@ function createStudio(canvas, mountainRenderer) {
   }
 
   function pick(x, y) {
+    if (gogglesCloseUp) return;
     ray.setFromCamera({ x, y }, camera);
     const anchors = rig.gearAnchors;
+    const footwear = shoes();
     for (const { object } of ray.intersectObjects(candidates)) {
       let slot;
       let visible = true;
@@ -205,6 +255,7 @@ function createStudio(canvas, mountainRenderer) {
         visible &&= node.visible;
         if (slot) continue;
         if (node === spare) slot = spareSlot;
+        else if (footwear.includes(node)) slot = 'footwear';
         else slot = Object.keys(slots).find(key => node === anchors[key]);
         if (!slot && node.name.includes('trouser')) slot = 'pants';
         if (!slot && node.name === 'Ski equipment') slot = 'skis';
@@ -213,7 +264,13 @@ function createStudio(canvas, mountainRenderer) {
     }
   }
 
-  return { setAppearance, resize, rotate, render, anchor, positionRearLeader, pick };
+  function thumbnail(group, id, appearance) {
+    thumbnails ??= createCustomizerThumbnails(renderer);
+    return thumbnails(group, id, appearance);
+  }
+
+  const cachedThumbnail = (group, id, appearance) => thumbnails?.cached(group, id, appearance);
+  return { setAppearance, setGogglesCloseUp, resize, rotate, render, anchor, positionRearLeader, pick, thumbnail, cachedThumbnail };
 }
 
 export function createCharacterCustomizer(outfitter) {
@@ -223,7 +280,7 @@ export function createCharacterCustomizer(outfitter) {
   dialog.innerHTML = `
     <header class="customizer-header">
       <h2 id="customizer-title">Customize</h2>
-      <div><span class="customizer-balance"></span><button type="button" class="customizer-back" autofocus>Back <span aria-hidden="true">×</span></button></div>
+      <div><span class="customizer-balance"></span><button type="button" class="customizer-finds" aria-pressed="false" hidden></button><button type="button" class="customizer-back" autofocus>Back <span aria-hidden="true">×</span></button></div>
     </header>
     <div class="customizer-main">
       <div class="customizer-stage">
@@ -236,12 +293,24 @@ export function createCharacterCustomizer(outfitter) {
           <button type="button" class="customizer-motion" aria-pressed="false">Auto-rotate</button>
         </div>
       </div>
-      <section class="customizer-detail" aria-labelledby="customizer-selection">
-        <h3 id="customizer-selection"></h3>
-        <div class="customizer-options"></div>
-        <p class="customizer-preview-error" hidden>The 3D preview is unavailable. Equipment changes still apply on the mountain.</p>
+      <div class="customizer-panel">
+        <section class="customizer-detail" aria-labelledby="customizer-selection">
+          <div class="customizer-section-head">
+            <h3 id="customizer-selection"></h3>
+            <button type="button" class="customizer-goggle-view" hidden>Goggle close-up</button>
+          </div>
+          <p class="customizer-preview-error" hidden>The 3D preview is unavailable. Equipment changes still apply on the mountain.</p>
+          <div class="customizer-options"></div>
+        </section>
         <output class="customizer-notice" aria-live="polite"></output>
-      </section>
+        <div class="customizer-purchase" hidden>
+          <p></p>
+          <div>
+            <button type="button" class="customizer-discard">Cancel preview</button>
+            <button type="button" class="customizer-buy"></button>
+          </div>
+        </div>
+      </div>
     </div>`;
   document.body.append(dialog);
   const stage = dialog.querySelector('.customizer-stage');
@@ -250,10 +319,16 @@ export function createCharacterCustomizer(outfitter) {
   const hotspotGroup = dialog.querySelector('.customizer-hotspots');
   const options = dialog.querySelector('.customizer-options');
   const detail = dialog.querySelector('.customizer-detail');
+  const title = dialog.querySelector('#customizer-title');
   const selection = dialog.querySelector('#customizer-selection');
+  const goggleToggle = dialog.querySelector('.customizer-goggle-view');
   const balance = dialog.querySelector('.customizer-balance');
   const back = dialog.querySelector('.customizer-back');
+  const finds = dialog.querySelector('.customizer-finds');
   const notice = dialog.querySelector('.customizer-notice');
+  const purchase = dialog.querySelector('.customizer-purchase');
+  const buy = purchase.querySelector('.customizer-buy');
+  const discard = purchase.querySelector('.customizer-discard');
   const error = dialog.querySelector('.customizer-preview-error');
   const motion = dialog.querySelector('.customizer-motion');
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -264,21 +339,30 @@ export function createCharacterCustomizer(outfitter) {
     button.dataset.side = side;
     button.textContent = label;
     button.onclick = () => select(slot);
+    const hitArea = document.createElementNS(ns, 'path');
+    hitArea.classList.add('customizer-line-hit');
+    hitArea.dataset.leader = slot;
+    hitArea.dataset.lineSlot = slot;
+    hitArea.addEventListener('click', () => select(slot));
+    lines.append(hitArea);
     let line, endpoint;
     if (!behind) {
       line = document.createElementNS(ns, 'path');
       endpoint = document.createElementNS(ns, 'circle');
+      line.dataset.lineSlot = endpoint.dataset.lineSlot = slot;
       endpoint.setAttribute('r', '2.6');
       lines.append(line, endpoint);
     }
     hotspotGroup.append(button);
-    return { slot, side, button, line, endpoint };
+    return { slot, side, button, line, endpoint, hitArea };
   });
-  let studio, openError = false, trigger;
+  let studio, openError = false, trigger, onClose;
   let selected = 'jacket', pending, applying = false;
+  let fullTurn;
   let angle = orbitAngle, targetAngle = null, auto = true, drag = null;
   let tap, handledTouch, closeTapTimer;
   let width = 0, height = 0, frame = 0, lastTime = 0, dirty = true;
+  let imageQueue = [], imageFrame = 0, imageError = false;
 
   function queueFrame() {
     if (!frame && studio && !openError && dialog.open) frame = requestAnimationFrame(tick);
@@ -315,9 +399,11 @@ export function createCharacterCustomizer(outfitter) {
         const endY = item.top + h / 2;
         const [x, y] = item.anchor;
         const elbow = endX + (x - endX) * .69;
+        const path = `M${endX},${endY} H${elbow} L${x},${y}`;
         item.button.style.transform = `translate(${left ? margin : width - margin - w}px, ${Math.round(item.top)}px)`;
+        item.hitArea.setAttribute('d', path);
         if (item.line) {
-          item.line.setAttribute('d', `M${endX},${endY} H${elbow} L${x},${y}`);
+          item.line.setAttribute('d', path);
           item.endpoint.setAttribute('cx', x);
           item.endpoint.setAttribute('cy', y);
         } else studio.positionRearLeader(item.slot, endX, endY, elbow, item.anchor, item.slot === selected);
@@ -359,11 +445,9 @@ export function createCharacterCustomizer(outfitter) {
 
   function refreshPreview() {
     if (!studio) return;
-    const appearance = { ...outfitter.appearance };
+    const appearance = outfitter.previewAppearance(selected, pending?.id);
     if (equipmentSlots.includes(selected)) appearance.discipline = selected === 'skis' ? 'ski' : 'snowboard';
-    if (pending && selected === 'skis') appearance.skis = appearance.skiModel = pending;
-    if (pending && selected === 'snowboard') appearance.snowboard = appearance.snowboardModel = pending;
-    studio.setAppearance(appearance);
+    studio.setAppearance(appearance, selected === 'footwear');
     dirty = true;
     queueFrame();
   }
@@ -380,11 +464,40 @@ export function createCharacterCustomizer(outfitter) {
     queueFrame();
   }
 
+  function updateGoggleToggle() {
+    goggleToggle.hidden = selected !== 'goggles' || !studio || openError;
+    goggleToggle.textContent = fullTurn ? 'Full outfit' : 'Goggle close-up';
+  }
+
+  function setGoggleView(enabled) {
+    if (enabled === Boolean(fullTurn) || (enabled && (!studio || openError))) return;
+    if (enabled) {
+      fullTurn = { angle, auto };
+      angle = -.62;
+    } else {
+      ({ angle, auto } = fullTurn);
+      fullTurn = undefined;
+    }
+    targetAngle = null;
+    lastTime = 0;
+    studio.setGogglesCloseUp(enabled);
+    stage.classList.toggle('is-goggle-close-up', enabled);
+    canvas.setAttribute('aria-label', enabled
+      ? '3D close-up of your Smith × Supreme goggles. Drag or use the arrow keys to turn.'
+      : '3D skier preview. Drag or use the arrow keys to turn.');
+    updateGoggleToggle();
+    updateMotion();
+    dirty = true;
+    queueFrame();
+  }
+  goggleToggle.onclick = () => setGoggleView(!fullTurn);
+
   function select(slot) {
+    if (slot !== 'goggles') setGoggleView(false);
     selected = slot;
     pending = undefined;
     notice.textContent = '';
-    if (slots[slot].angle !== undefined) turnTo(slots[slot].angle);
+    if (!fullTurn && slots[slot]?.angle !== undefined) turnTo(slots[slot].angle);
     renderOptions();
     detail.scrollTop = 0;
     refreshPreview();
@@ -398,7 +511,7 @@ export function createCharacterCustomizer(outfitter) {
 
   function choose(group, item) {
     if (item.owned === false && item.price > 0) {
-      pending = item.id;
+      pending = item;
       notice.textContent = '';
     } else {
       pending = undefined;
@@ -423,6 +536,26 @@ export function createCharacterCustomizer(outfitter) {
     }
   }
 
+  function paintNextImage() {
+    imageFrame = 0;
+    if (!dialog.open || !studio || openError || imageError || !imageQueue.length) return;
+    const { image, group, item } = imageQueue.shift();
+    try {
+      image.src = studio.thumbnail(group, item.id, outfitter.previewAppearance(group, item.id));
+      image.hidden = false;
+    } catch (error) {
+      console.warn('Equipment thumbnails are unavailable', error);
+      imageError = true;
+    }
+    queueImages();
+  }
+
+  function queueImages() {
+    if (!imageFrame && dialog.open && studio && !openError && !imageError && imageQueue.length) {
+      imageFrame = requestAnimationFrame(paintNextImage);
+    }
+  }
+
   function addOptions(group, title, fragment) {
     const items = outfitter.customizationOptions(group);
     if (!items.length) return;
@@ -439,28 +572,44 @@ export function createCharacterCustomizer(outfitter) {
       button.type = 'button';
       button.dataset.item = item.id;
       button.dataset.group = group;
-      const inPreview = group === selected && pending === item.id;
+      const inPreview = group === selected && pending?.id === item.id;
       button.setAttribute('aria-pressed', String(pending && group === selected ? inPreview : !!item.active));
+      const preview = document.createElement('span');
+      preview.className = 'customizer-thumbnail';
+      preview.setAttribute('aria-hidden', 'true');
       if (item.color && /^#[\da-f]{3,8}$/i.test(item.color)) {
         const swatch = document.createElement('i');
         swatch.style.backgroundColor = item.color;
-        button.append(swatch);
+        preview.append(swatch);
       }
+      const image = document.createElement('img');
+      image.alt = '';
+      image.width = 192;
+      image.height = 112;
+      image.draggable = false;
+      preview.append(image);
+      const existing = studio?.cachedThumbnail(group, item.id, outfitter.previewAppearance(group, item.id));
+      image.hidden = !existing;
+      if (existing) image.src = existing;
+      else imageQueue.push({ image, group, item });
+      const caption = document.createElement('span');
+      caption.className = 'customizer-caption';
       const name = document.createElement('span');
       name.textContent = item.name;
-      button.append(name);
+      caption.append(name);
       if (inPreview || item.active || (item.price && !item.owned)) {
         const status = document.createElement('small');
-        status.textContent = inPreview ? 'Preview' : item.active ? 'Equipped' : `${item.price} coins`;
-        button.append(status);
+        status.textContent = inPreview ? 'Trying on' : item.active ? 'Equipped' : `${item.price} coins · Try on`;
+        caption.append(status);
       }
+      button.append(preview, caption);
       button.onclick = () => choose(group, item);
       entry.append(button);
       list.append(entry);
     }
     fragment.append(list);
     if (group !== selected) return;
-    const current = items.find(item => item.id === pending) ?? items.find(item => item.active) ??
+    const current = pending ?? items.find(item => item.active) ??
       items.find(item => equipmentSlots.includes(group) && outfitter.appearance[group] === item.id);
     if (!current?.description && !current?.specs && !pending) return;
     const info = document.createElement('div');
@@ -479,37 +628,64 @@ export function createCharacterCustomizer(outfitter) {
       source.textContent = 'Manufacturer details ↗';
       info.append(source);
     }
-    if (pending && current) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'customizer-buy';
-      button.textContent = 'Buy and equip · ' + current.price + ' coins';
-      button.onclick = () => {
-        if (!equip(group, current)) return;
-        pending = undefined;
-        renderOptions();
-        keepOptionFocus(group, current.id);
-        refreshPreview();
-      };
-      info.append(button);
-    }
     fragment.append(info);
   }
 
+  function endPreview() {
+    const id = pending?.id;
+    pending = undefined;
+    renderOptions();
+    keepOptionFocus(selected, id);
+    refreshPreview();
+  }
+  buy.onclick = () => {
+    if (pending && equip(selected, pending)) endPreview();
+  };
+  discard.onclick = endPreview;
+  finds.onclick = () => select(selected === 'finds' ? 'jacket' : 'finds');
+
   function renderOptions() {
+    imageQueue = [];
     balance.textContent = `${outfitter.state.balance} mountain coins`;
-    selection.textContent = slots[selected].label;
+    finds.hidden = !outfitter.catalog?.length;
+    finds.textContent = outfitter.findsLabel;
+    finds.setAttribute('aria-pressed', String(selected === 'finds'));
+    selection.textContent = slots[selected]?.label ?? outfitter.findsLabel;
+    updateGoggleToggle();
     for (const { slot, button, line, endpoint } of hotspots) {
       button.setAttribute('aria-pressed', String(slot === selected));
       line?.classList.toggle('is-selected', slot === selected);
       endpoint?.classList.toggle('is-selected', slot === selected);
     }
     const fragment = document.createDocumentFragment();
-    const groupTitle = selected === 'backpack' ? 'Model' : selected === 'goggles' ? 'Smith × Supreme' : '';
-    addOptions(selected, groupTitle, fragment);
-    if (selected === 'backpack') addOptions('backpackColor', 'Color', fragment);
-    if (selected === 'snowboard') addOptions('stance', 'Lead foot', fragment);
+    if (selected === 'finds') {
+      const list = document.createElement('ul');
+      list.className = 'customizer-find-list';
+      for (const entry of outfitter.catalog ?? []) {
+        const item = document.createElement('li');
+        const found = outfitter.state.finds.includes(entry.id);
+        item.textContent = found ? entry.title : entry.hint;
+        item.classList.toggle('is-found', found);
+        list.append(item);
+      }
+      fragment.append(list);
+    } else {
+      const groupTitle = selected === 'backpack' ? 'Model' : selected === 'goggles' ? 'Smith × Supreme' : '';
+      addOptions(selected, groupTitle, fragment);
+      if (selected === 'backpack') addOptions('backpackColor', 'Color', fragment);
+      if (selected === 'snowboard') addOptions('stance', 'Lead foot', fragment);
+      if (selected === 'helmet') addOptions('sticker', 'Helmet & pack decals', fragment);
+    }
     options.replaceChildren(fragment);
+    queueImages();
+    purchase.hidden = !pending;
+    if (pending) {
+      const needed = pending.price - outfitter.state.balance;
+      purchase.querySelector('p').textContent = needed > 0
+        ? `${pending.name} · ${needed} more coins needed` : `Trying on ${pending.name}`;
+      buy.textContent = `Buy and equip · ${pending.price} coins`;
+      buy.disabled = needed > 0;
+    }
   }
 
   function resize() {
@@ -611,6 +787,7 @@ export function createCharacterCustomizer(outfitter) {
   reducedMotion.addEventListener('change', ({ matches }) => {
     if (!matches || !dialog.open) return;
     auto = false;
+    if (fullTurn) fullTurn.auto = false;
     targetAngle = null;
     updateMotion();
   });
@@ -619,31 +796,54 @@ export function createCharacterCustomizer(outfitter) {
     error.hidden = false;
     stage.classList.add('preview-unavailable');
     cancelAnimationFrame(frame);
+    cancelAnimationFrame(imageFrame);
     frame = 0;
+    imageFrame = 0;
     openError = true;
+    setGoggleView(false);
+    updateGoggleToggle();
   });
   canvas.addEventListener('webglcontextrestored', () => {
     requestAnimationFrame(() => {
       openError = false;
       error.hidden = true;
       stage.classList.remove('preview-unavailable');
+      updateGoggleToggle();
       resize();
+      queueImages();
     });
   });
-  back.onclick = () => {
-    clearTimeout(closeTapTimer);
+  function close() {
+    if (!dialog.open) return;
     dialog.close();
-  };
+    finishClose();
+  }
+  back.onclick = close;
+  dialog.addEventListener('cancel', event => {
+    event.preventDefault();
+    close();
+  });
   dialog.addEventListener('close', () => {
+    if (!dialog.open && (trigger || onClose)) finishClose();
+  });
+  function finishClose() {
     clearTimeout(closeTapTimer);
     cancelAnimationFrame(frame);
+    cancelAnimationFrame(imageFrame);
     frame = 0;
+    imageFrame = 0;
+    imageQueue = [];
+    setGoggleView(false);
     observer.disconnect();
     drag = null;
     tap = undefined;
     canvas.classList.remove('is-dragging');
-    trigger?.focus({ preventScroll: true });
-  });
+    const opener = trigger;
+    const afterClose = onClose;
+    trigger = onClose = undefined;
+    afterClose?.();
+    opener?.focus({ preventScroll: true });
+  }
   outfitter.dialog.addEventListener('outfitterchange', () => {
     if (dialog.open && !applying) {
       pending = undefined;
@@ -652,9 +852,11 @@ export function createCharacterCustomizer(outfitter) {
     }
   });
 
-  function open(opener = document.activeElement) {
+  function open(opener, { title: heading = 'Customize', onClose: afterClose } = {}) {
     if (dialog.open) return;
     trigger = opener;
+    onClose = afterClose;
+    title.textContent = heading;
     selected = 'jacket';
     pending = undefined;
     angle = orbitAngle;
@@ -678,11 +880,12 @@ export function createCharacterCustomizer(outfitter) {
     observer.observe(stage);
     resize();
     refreshPreview();
+    queueImages();
     document.fonts.ready.then(() => {
       if (!dialog.open) return;
       dirty = true;
       queueFrame();
     });
   }
-  return { open, close: () => dialog.close(), get isOpen() { return dialog.open; } };
+  return { open, close, get isOpen() { return dialog.open; } };
 }

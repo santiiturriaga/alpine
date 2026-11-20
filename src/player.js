@@ -124,6 +124,7 @@ export class Player {
     this.camLook = new THREE.Vector3();
     this.camHeight = null;
     this.camPitchOffset = 0;
+    this.helmetSlope = 0;
     this.cameraArmFraction = 1;
     this.walkCameraTight = false;
     this.boardEyeOffset = null;
@@ -515,7 +516,7 @@ export class Player {
       const h = dt / steps;
       for (let i = 0; i < steps; i++) {
         if (this.footMode && this.grounded) this.simulateFoot(h, input);
-        else this.simulate(h, input, time);
+        else this.simulate(h, input);
         if (this.crash) break;
       }
     }
@@ -643,12 +644,21 @@ export class Player {
     }
   }
 
-  simulate(dt, input, time) {
-    let speed = Math.hypot(this.vel.x, this.vel.z);
-    this.beforeStep.copy(this.pos);
+  simulate(dt, input) {
     this.chainWindow=Math.max(0,this.chainWindow-dt);
     if(!this.chainWindow)this.trickChain=0;
     this.boostTime=input.brake?0:Math.max(0,this.boostTime-dt);
+    const remaining = this.simulateStep(dt, input);
+    // A touchdown inside this step still has time left to travel on the snow.
+    if (remaining > 0 && this.grounded) {
+      if (this.footMode) this.simulateFoot(remaining, input);
+      else this.simulateStep(remaining, input);
+    }
+  }
+
+  simulateStep(dt, input) {
+    let speed = Math.hypot(this.vel.x, this.vel.z);
+    this.beforeStep.copy(this.pos);
 
     if (this.grounded) {
       if (!this.boarding) this.orientSkis(dt, input, speed);
@@ -750,13 +760,13 @@ export class Player {
         const before = this.beforeStep.y - this.groundHeight(this.beforeStep.x, this.beforeStep.z) - SNOW_CLEARANCE;
         const crossing = before > 0 ? before / (before - gap) : 0;
         this.pos.lerp(this.beforeStep, 1 - crossing);
-        this.vy += GRAVITY * dt * (1 - crossing);
-        this.airTime -= dt * (1 - crossing);
+        const remaining = dt * (1 - crossing);
+        this.vy += GRAVITY * remaining;
+        this.airTime -= remaining;
         this.land(this.groundHeight(this.pos.x, this.pos.z));
+        return remaining;
       }
     }
-    this._lastX = this._lastX ?? this.pos.x;
-    this._lastZ = this._lastZ ?? this.pos.z;
   }
 
   get trickBonus() { return this.trickContextMultiplier * (this.landingTrickMultiplier ?? 1); }
@@ -1047,7 +1057,7 @@ export class Player {
     const float = this.boarding ? boardFloat(this.snowboardModel) : this.skiResponse.float;
     const depth = compressible ? this.powder ** 1.45 * (.102 - .058 * planing
       + .018 * Math.abs(this.steer) * planing + .034 * this.landingLoad) / float : 0;
-    this.snowSink = snap || !compressible ? depth : damp(this.snowSink, depth, 12, dt);
+    this.snowSink = snap || (onSnow && !compressible) ? depth : damp(this.snowSink, depth, 12, dt);
     const upVec = this.footMode ? _up : _stanceUp.copy(_up).lerp(onSnow ? _normal : this.airNormal, .58).normalize();
     const bracing = onSnow && !this.footMode ? this.stopEdge : 0;
     const torsoYaw = !this.boarding && bracing > .002
@@ -1068,8 +1078,9 @@ export class Player {
     this.model.position.copy(this.pos);
     this.model.position.y -= this.snowSink;
     if (!onSnow) {
-      // Air tricks still rotate about the skier's torso.
-      this.model.position.addScaledVector(_up, .76)
+      // Rotate tricks around the torso in the takeoff stance. An inclined
+      // stance already has a horizontal offset when the skis leave the snow.
+      this.model.position.add(_pivot.set(0, .76, 0).applyQuaternion(_qBase))
         .sub(_pivot.set(0, .76, 0).applyQuaternion(this.model.quaternion));
     }
     this.model.updateMatrix();
@@ -1181,6 +1192,15 @@ export class Player {
     const yaw = board ? this.followBoardCamera(dt, snap, 7.5) : this.stopEdge > .12
       ? this.travelHeading + shortestAngle(this.travelHeading, this.stopApproach) * this.stopEdge : this.travelHeading;
     const sin = Math.sin(yaw), cos = Math.cos(yaw);
+    // Hold the takeoff view across a gap. The cliff face under a flying
+    // skier supplies neither the eye position nor the rider's pitch.
+    if (walking) this.helmetSlope = 0;
+    else if (snap || !this.airborne) {
+      const normal = this.airborne ? this.airNormal : this.groundNormal(this.pos.x, this.pos.z, _normal);
+      const slope = Math.atan2(-(normal.x * sin + normal.z * cos), normal.y);
+      const turn = damp(this.helmetSlope, slope, 10, dt) - this.helmetSlope;
+      this.helmetSlope = snap ? slope : this.helmetSlope + clamp(turn, -2 * dt, 2 * dt);
+    }
     if (board) {
       // Stabilize head motion relative to the board. The camera still moves
       // with the rider as they travel, without lagging behind on the slope.
@@ -1192,20 +1212,18 @@ export class Player {
     } else {
       this.boardEyeOffset = null;
       const rear = walking ? 0 : .20;
-      const x = this.pos.x - sin * rear, z = this.pos.z - cos * rear;
-      const ground = this.groundHeight(this.pos.x, this.pos.z);
+      const horizontal = rear * Math.cos(this.helmetSlope);
+      const x = this.pos.x - sin * horizontal, z = this.pos.z - cos * horizontal;
       const eyeHeight = walking ? 1.65 - Math.cos(this.stridePhase * 2) * this.walkAmount * .016
         : 1.52 - this.tuckAmount * .31 - this.snowSink;
-      const air = Math.max(0, this.pos.y - ground - .035);
-      this.camera.position.set(x, this.groundHeight(x, z) + eyeHeight + air, z);
+      const eyeY = this.pos.y - SNOW_CLEARANCE + eyeHeight - rear * Math.sin(this.helmetSlope);
+      this.camera.position.set(x, Math.max(eyeY, this.groundHeight(x, z) + .25), z);
     }
     this.camPos.copy(this.camera.position);
     this.cameraArmFraction = 1;
     if (!board) this.camYaw = snap ? yaw : wrapAngle(this.camYaw + shortestAngle(this.camYaw, yaw) * (1 - Math.exp(-23 * dt)));
     const viewYaw = this.camYaw + this.lookYaw;
-    const { x, z } = this.camera.position;
-    const slope = walking ? 0 : Math.atan2(this.groundHeight(x + sin * 3, z + cos * 3) - this.groundHeight(x,z), 3);
-    const pitch = clamp(slope - (walking ? .035 : .26) - this.lookPitch, -1.43, .93);
+    const pitch = clamp(this.helmetSlope - (walking ? .035 : .26) - this.lookPitch, -1.43, .93);
     this.camLook.copy(this.camera.position).add(_tourLook.set(
       Math.sin(viewYaw)*Math.cos(pitch), Math.sin(pitch), Math.cos(viewYaw)*Math.cos(pitch)));
     this.camera.up.copy(_up);
@@ -1259,16 +1277,16 @@ export class Player {
       * Math.sqrt(Math.max(1, this.camera.aspect / 2.65));
     const height = (wide ? 3.4 : 1.95 + speed * .35) + this.lookPitch*distance*.65;
     const lookAhead = wide ? 13 : 8 + speed * 4;
-    const ground = this.groundHeight(this.pos.x, this.pos.z);
     const px = this.pos.x - fx * distance, pz = this.pos.z - fz * distance;
     // Keep the boom attached to the moving rider. Spring the yaw and height
     // independently so their lag cannot move the eye across the skier.
-    const boomHeight = Math.max(this.groundHeight(px, pz) - ground + height * .84, height);
+    const riderBase = this.pos.y - SNOW_CLEARANCE;
+    const boomHeight = Math.max(this.groundHeight(px, pz) - riderBase + height * .84, height);
     this.camHeight = snap || this.camHeight === null ? boomHeight : damp(this.camHeight, boomHeight, 9.2, dt);
     this.camPos.set(px, this.pos.y + this.camHeight, pz);
     const lx = this.pos.x + fx * lookAhead, lz = this.pos.z + fz * lookAhead;
-    const forwardGround = walking ? ground : this.groundHeight(lx, lz);
-    _tourLook.set(lx, this.pos.y + (forwardGround - ground) * .71 + .99 - this.lookPitch*2.7, lz);
+    const forwardGround = walking ? riderBase : this.groundHeight(lx, lz);
+    _tourLook.set(lx, this.pos.y + (forwardGround - riderBase) * .71 + .99 - this.lookPitch*2.7, lz);
 
     _cameraArm.copy(this.camPos);
     const cameraGround = this.groundHeight(_cameraArm.x, _cameraArm.z);

@@ -7,6 +7,7 @@ import { createMountainQuests } from './mountain-quests.js';
 import { createMultiplayer } from './multiplayer.js';
 import { createTravelTracker } from './skier-profile.js';
 import { createSnowTraffic } from './snow-traffic.js';
+import { bindSnowMotionBlur } from './snow-crystals.js';
 import {
   graphicsProfiles, bindRealism, createRenderer, resizeViewport, prepareFirstFrame, renderMountainFrame,
   applyShadowResolution, groundShadowWindow, sunShadowRefreshDue, updateSunShadow,
@@ -524,7 +525,6 @@ function openMap(returnTo = null) {
   mapReturn = returnTo
     || (!playing ? 'title' : ui.isOpen('pause') ? 'pause' : ui.isOpen('summary') ? 'summary' : 'game');
   if (mapReturn === 'title') ui.el.start.inert = true;
-  ui.hideModals();
   ui.showModal('map');
   paused = true;
   ui.drawBigMap(playing ? player : null, displayTime);
@@ -621,13 +621,13 @@ function closeMountainPanel(resume=true) {
   panelReturn=null;
 }
 
-function openShop(shop){
-  if(!outfitter||outfitter.dialog.open||transitioning)return;
+function openShop(shop, trigger = document.activeElement){
+  if(!outfitter||outfitter.dialog.open||outfitter.customizing||transitioning)return;
   if(scenicPose)leaveScenicView();
   shopReturn=$('mountain-panel').open ? 'mountain' : paused?'pause':playing?'game':'menu';
   releaseMouseLook();keysBackupClear();
   if(playing)paused=true;
-  outfitter.open(shop);
+  outfitter.open(shop, trigger);
 }
 function closeShop(){
   outfitter.dialog.close();
@@ -755,7 +755,7 @@ function bindMountainPanel() {
     button.onclick = () => travelTo(button.dataset.arrival, button.hasAttribute('data-photo'));
   }
   $('scenic-return').onclick=leaveScenicView;
-  $('mountain-outfitter').onclick=openShop;
+  $('mountain-outfitter').onclick = event => openShop(undefined, event.currentTarget);
   const file=$('scenic-file'),preview=$('scenic-reference'),opacity=$('scenic-opacity');
   $('scenic-load').onclick=()=>file.click();
   file.onchange=()=>{
@@ -1301,6 +1301,7 @@ function checkFinish(dt) {
 function bindKeys() {
   window.addEventListener('keydown', (event) => {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.code !== 'Escape' && event.target.closest?.('input, select, textarea, [contenteditable="true"]')) return;
     if ((event.code === 'Enter' || event.code === 'Space') && event.target.closest?.('button, select, input, textarea, summary, a[href]')) return;
     if (ui.isOpen('pause') && (event.code === 'ArrowUp' || event.code === 'ArrowDown')) return;
     if(outfitter?.dialog.open || outfitter?.customizing)return;
@@ -1595,6 +1596,7 @@ function bindUI() {
     renderer,
   });
   bindRealism($('pause-realism'), query);
+  bindSnowMotionBlur($('pause-motion-blur'), $('motion-blur-hint'));
 
   window.addEventListener('resize', onResize);
   document.addEventListener('visibilitychange', () => {
@@ -1602,12 +1604,11 @@ function bindUI() {
   });
 }
 
-async function toggleAudio() {
-  try { await audio.init(); } catch { /* ignore */ }
+function toggleAudio() {
   const on = audio.toggle();
   audioOn = on;
   ui.setAudio(on);
-  if (on) audio.ui();
+  if (on) audio.resume().then(() => { if (audio.enabled) audio.ui(); }).catch(() => {});
 }
 
 function applyQuality() {

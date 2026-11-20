@@ -6,8 +6,8 @@ const TAU = Math.PI * 2;
 
 // Camera headings that show the trail networks or landmark-facing ridges first.
 const OPENING_ANGLES = {
-  'whistler-blackcomb': -2.52,
-  'stevens-pass': -2.03,
+  'whistler-blackcomb': 2.52,
+  'stevens-pass': 2.5,
   'snoqualmie': -1.26,
   'crystal-mountain': -.54,
   'les-3-vallees': 2.49,
@@ -54,9 +54,10 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
   let selected = Math.max(0, places.findIndex(place => place.id === current.id));
   let position = selected, target = selected;
   let records, pending, previewError = false, view, contextLost = false;
-  let pointer, suppressClick = false, idleUntil = 0;
+  let opener, pointer, suppressClick = false, idleUntil = 0;
   let lastWheelEvent = 0, lastWheelStep = 0, wheelTravel = 0;
-  let frame = 0, lastFrame = 0, resize = true, dirty = true, warming = false, rotating = false;
+  let frame = 0, lastFrame = 0, lastSpin = 0;
+  let resize = true, dirty = true, warming = false, rotating = false;
 
   const tiles = places.map((place, index) => {
     const button = document.createElement('button');
@@ -65,7 +66,12 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
     button.tabIndex = -1;
     button.dataset.destination = place.id;
     button.setAttribute('aria-label', `${place.label}, ${place.country}`);
-    button.textContent = place.label;
+    const label = document.createElement('span');
+    label.textContent = place.label;
+    const country = document.createElement('span');
+    country.className = 'destination-tile-country';
+    country.textContent = place.country;
+    button.append(label, country);
     button.hidden = true;
     models.append(button);
     return { place, button, angle: OPENING_ANGLES[place.id] ?? -.91, index };
@@ -78,7 +84,9 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
 
   function warmPreviews() {
     if (warming || !view || !dialog.open || contextLost) return;
-    const next = tiles.filter(tile => !tile.model && records.has(tile.place.id))
+    const limit = models.clientWidth <= 620 ? 2 : 3;
+    const next = tiles.filter(tile => !tile.model && records.has(tile.place.id) &&
+        Math.abs(relative(tile.index, target)) <= limit)
       .sort((a, b) => Math.abs(relative(a.index, target)) - Math.abs(relative(b.index, target)))[0];
     if (!next) return;
     warming = true;
@@ -86,7 +94,7 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
       warming = false;
       if (!dialog.open || contextLost) return;
       build(next);
-      if (Math.abs(relative(next.index, position)) < 2.34) invalidate();
+      if (Math.abs(relative(next.index, position)) < 2.6) invalidate();
       warmPreviews();
     };
     if ('requestIdleCallback' in window) requestIdleCallback(warm, { timeout: 170 });
@@ -143,8 +151,10 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
         tile.angleGoal = undefined;
       }
       rotating = true;
-    } else if (!still && !pointer && now > idleUntil) {
-      tile.angle = (tile.angle + elapsed * .23) % TAU;
+    } else if (!still && !pointer && now > idleUntil && now - lastSpin >= 32) {
+      const spinElapsed = Math.min(.064, (now - lastSpin) / 1000);
+      lastSpin = now;
+      tile.angle = (tile.angle + spinElapsed * .23) % TAU;
       rotating = true;
     }
     if (resize) {
@@ -204,8 +214,9 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
     }
   }
 
-  function open() {
+  function open(trigger = document.activeElement) {
     if (dialog.open) return;
+    opener = trigger;
     dialog.showModal();
     dialog.focus({ preventScroll: true });
     resize = true;
@@ -266,10 +277,20 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
 
   function finishDrag(event, cancelled = false) {
     if (pointer?.id !== event.pointerId) return;
-    const { moved, rotate, turn } = pointer;
+    const { kind, moved, rotate, turn } = pointer;
     pointer = undefined;
     stage.classList.remove('is-dragging');
-    if (!moved) return;
+    if (!moved) {
+      // Some touch browsers omit the click after releasing inside a swipe area.
+      if (kind === 'touch' && !cancelled) {
+        const index = hitTile(event);
+        if (index !== -1 && index !== selected) {
+          suppressClick = true;
+          select(index);
+        }
+      }
+      return;
+    }
     suppressClick = true;
     idleUntil = performance.now() + 1600;
     if (!cancelled && !rotate && Math.abs(turn) >= .18) {
@@ -326,6 +347,11 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
     frame = 0;
     pointer = undefined;
     stage.classList.remove('is-dragging');
+    if (!standalone && opener?.isConnected && opener.getClientRects().length &&
+        getComputedStyle(opener).visibility === 'visible') {
+      opener.focus({ preventScroll: true });
+    }
+    opener = undefined;
   });
   reduceMotion.addEventListener('change', () => invalidate());
   new ResizeObserver(() => {
@@ -367,7 +393,8 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
   });
   travel.addEventListener('click', go);
   document.addEventListener('click', event => {
-    if (event.target.closest?.('[data-destination-open]')) open();
+    const trigger = event.target.closest?.('[data-destination-open]');
+    if (trigger) open(trigger);
   });
   if (standalone) $('destination-close').setAttribute('aria-label', 'Back to game');
   return { open };
