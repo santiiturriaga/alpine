@@ -71,7 +71,7 @@ export function attachForestFade(shader, region, near) {
 let atlasPromise, atlas, winterAtlas, proxyMaterials = new Map();
 
 export function preloadForestCrowns() {
-  const load = name => new THREE.TextureLoader().loadAsync(new URL(`../assets/forest/${name}?v=2`, import.meta.url).href)
+  const load = name => new THREE.TextureLoader().loadAsync(new URL(`../assets/forest/${name}?v=3`, import.meta.url).href)
     .then(texture => {
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.anisotropy = 4;

@@ -702,8 +702,8 @@ export function coniferMaterial(level = 0, region = null) {
       diffuseColor.rgb *= 1.0 - distantCanopy * canopyTint;
     `).replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
       vec3 needleSky = normalize(mat3(viewMatrix) * vec3(0.0, 1.0, 0.0));
-      normal = normalize(mix(normal, normalize(normal + needleSky * 2.0), needleSurface
-        * ${level === -2 ? '.62' : 'mix(.62,.31,closeCoverage)'}));
+      normal = normalize(mix(normal, normalize(normal + needleSky * .81), needleSurface
+        * ${level === -2 ? '.42' : 'mix(.42,.23,closeCoverage)'}));
       ${level === -2 ? '' : `
       if (barkSurface > .5) {
         vec3 acrossWood = cross(needleSky,normal);
@@ -713,6 +713,27 @@ export function coniferMaterial(level = 0, region = null) {
       }
       `}
     `).replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+      ${level === -2 ? '' : `
+      // Let direct light reach the upper sprays. In the dense interior and
+      // underneath, overlapping needles intercept most of that light.
+      float exposedSpray = smoothstep(.15,.83,upperBough);
+      float stemShade = twigRidge * smoothstep(.43,.92,fract(vMapUv.y*2.0));
+      float needleDirect = mix(.48,.92,exposedSpray) * (1.0-stemShade*.28);
+      float needleSheen = mix(.24,.60,exposedSpray);
+      reflectedLight.directDiffuse *= mix(1.0,mix(needleDirect,.93,rimedSpray),needleSurface);
+      reflectedLight.directSpecular *= mix(1.0,needleSheen,needleSurface*(1.0-rimedSpray));
+      #if NUM_DIR_LIGHTS > 0
+        // Light crossing a thin needle is predominantly green. The exposed
+        // tips transmit more than the packed needles around the branch stem.
+        float incidence = dot(normal,directionalLights[0].direction);
+        float backlight = smoothstep(-.34,.76,-incidence) * (.54+.46*abs(incidence));
+        float tips = (1.0-smoothstep(.20,.66,fract(vMapUv.y*2.0))) * (1.0-twigRidge*.46);
+        float canopyExposure = mix(.58,1.0,smoothstep(.23,.67,p.y));
+        float transmitted = needleSurface * backlight * mix(.15,.59,tips) * canopyExposure * (1.0-stemShade*.46);
+        vec3 transmissionTint = mix(vec3(.46,1.20,.48),vec3(.88,1.0,1.14),rimedSpray);
+        reflectedLight.directDiffuse += diffuseColor.rgb*directionalLights[0].color*transmissionTint*transmitted;
+      #endif
+      `}
       reflectedLight.indirectDiffuse += diffuseColor.rgb * ${level === -2 ? '.14' : '(.17 + .30 * needleSurface + .07 * barkSurface + .23 * snowPad + .22 * rimedSpray)'};
     `);
     shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
@@ -750,6 +771,6 @@ export function coniferMaterial(level = 0, region = null) {
     if (region) attachForestFade(shader,region,level !== -2);
     if (level !== -2) attachChaseFoliage(shader);
   };
-  material.customProgramCacheKey = () => `conifer-needle-branches-${level}-${region}-v28`;
+  material.customProgramCacheKey = () => `conifer-needle-branches-${level}-${region}-v31`;
   return material;
 }
