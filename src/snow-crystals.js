@@ -1,6 +1,23 @@
+import { Vector3 } from 'three';
 import { climateUniforms } from './climate-state.js';
 
+// Horizontal travel during a short virtual exposure, in metres, and the
+// remaining contrast of centimetre-scale grain. Shared by both snow shaders.
+const shutter = { value: new Vector3(0, 0, 1) };
+
+export function updateSnowShutter(player, active) {
+  if (!active || !(player.speed > 10)) {
+    shutter.value.set(0, 0, 1);
+    return;
+  }
+  const t = Math.min(1, (player.speed - 10) / 16);
+  const duration = t * t * (3 - 2 * t) * Math.min(1 / 175, .18 / player.speed);
+  const x = player.vel.x * duration, z = player.vel.z * duration;
+  shutter.value.set(x, z, 1 / (1 + 30 * (x*x + z*z)));
+}
+
 export function bindSnowCrystals(shader) {
+  shader.uniforms.snowShutter = shutter;
   shader.uniforms.snowSun = climateUniforms.snowSun;
   shader.uniforms.snowSunDirection = climateUniforms.snowSunDirection;
   shader.uniforms.iceHorizon = climateUniforms.reflectedHorizon;
@@ -10,6 +27,27 @@ export function bindSnowCrystals(shader) {
     uniform float snowSun;
     uniform vec3 snowSunDirection;
     uniform vec3 iceHorizon, iceZenith;
+    uniform vec3 snowShutter;
+
+    // Contrast of a narrow periodic feature averaged over a short exposure.
+    float snowBandContrast(float cycles) { return 1./(1.+1.7*cycles*cycles); }
+
+    // Broken wind lips approximately a metre apart. A shorter harmonic
+    // steepens the sheltered face. Integrate each frequency along travel
+    // so sliding across the ridges softens them more than following them.
+    float windLipHeight(vec2 ground, float drift, float crust, float eye, float loose) {
+      vec2 crosswind = vec2(.52,.79);
+      float phase = dot(ground,crosswind) + 1.48*(drift-.5) + .17*(crust-.5);
+      float pixel = fwidth(phase);
+      float strength = loose * (1.-smoothstep(9.,32.,eye))
+        * (1.-smoothstep(.18,.48,pixel)) * smoothstep(.22,.66,drift);
+      if (strength < .001) return 0.;
+      float travel = dot(snowShutter.xy,crosswind);
+      float angle = phase*6.2831853;
+      float shape = sin(angle)*snowBandContrast(travel)
+        + .34*sin(2.*angle+.55)*(1.-smoothstep(.12,.32,pixel))*snowBandContrast(2.*travel);
+      return .019*strength*shape;
+    }
 
     vec3 shadeWinterSurface(vec3 radiance, vec3 viewNormal, vec3 toEye, float snow, float ice, float powder) {
       float snowWeight = clamp(snow,0.,1.);
@@ -70,7 +108,7 @@ export function bindSnowCrystals(shader) {
       float size = mix(.031, .069, variation.z);
       float foot = pixel * .53;
       float dotMask = 1.0-smoothstep(max(.0,size-foot*.42),size+foot,length(delta));
-      return visible * flash * dotMask * min(1., .22 / max(.22, pixel));
+      return visible * flash * dotMask * min(1., .22 / max(.22, pixel)) * snowShutter.z;
     }
   `);
 }

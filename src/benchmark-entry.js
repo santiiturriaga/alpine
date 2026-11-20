@@ -2,7 +2,15 @@
 const bootTimeoutMs = 180000;
 const arrivalTimeoutMs = 90000;
 const runTimeoutMs = 650000;
-const frameLimit = 60;
+
+function benchmarkSettings(query) {
+  const requestedQuality = query.get('quality')?.toLowerCase();
+  const quality = ['budget', 'low', 'balanced', 'high', 'max'].includes(requestedQuality) ? requestedQuality : 'budget';
+  const resolution = ['480p', '720p', 'adaptive'].includes(query.get('resolution')) ? query.get('resolution') : 'native';
+  const cap = Number(query.get('cap'));
+  const frameLimit = [30, 60, 120, 240].includes(cap) ? cap : 60;
+  return { quality, resolution, frameLimit: resolution === 'adaptive' ? Math.min(60, frameLimit) : frameLimit };
+}
 
 class BenchmarkStorage {
   #values = new Map();
@@ -14,14 +22,14 @@ class BenchmarkStorage {
   clear() { this.#values.clear(); }
 }
 
-function setUpBenchmark(resolution) {
+function setUpBenchmark({ quality, resolution, frameLimit }) {
   const prefs = new BenchmarkStorage();
   Object.defineProperty(window, 'localStorage', { value: prefs });
   Object.defineProperty(window, 'sessionStorage', { value: new BenchmarkStorage() });
   prefs.setItem('alpine.multiplayer', 'off');
-  prefs.setItem('alpine.performance-options', JSON.stringify({ frameLimit, resolution, antialias: false }));
+  prefs.setItem('alpine.performance-options', JSON.stringify({ frameLimit, resolution, antialias: quality !== 'budget' }));
   const url = new URL(location.href);
-  url.search = new URLSearchParams({ benchmark: 'ego-bowl', quality: 'budget', resolution,
+  url.search = new URLSearchParams({ benchmark: 'ego-bowl', quality, resolution, cap: String(frameLimit),
     season: 'winter', weather: 'clear', time: 'day' });
   url.hash = '';
   history.replaceState(history.state, '', url);
@@ -35,7 +43,7 @@ function setUpBenchmark(resolution) {
   document.getElementById('app').inert = true;
 }
 
-function createPanel(resolution) {
+function createPanel({ quality, resolution, frameLimit }) {
   const stylesheet = document.createElement('link');
   stylesheet.rel = 'stylesheet';
   stylesheet.href = new URL('../ski-benchmark.css', import.meta.url);
@@ -74,8 +82,9 @@ function createPanel(resolution) {
   controls.retry.addEventListener('click', () => location.reload());
   document.body.append(panel);
   const find = selector => panel.querySelector(selector);
-  find('.ski-benchmark-settings').textContent = 'Budget · ' +
-    (resolution === 'adaptive' ? 'Adaptive resolution' : resolution === 'native' ? 'Native resolution' : resolution + ' render ceiling') + ' · 60 FPS cap';
+  const qualityLabel = quality[0].toUpperCase() + quality.slice(1);
+  const resolutionLabel = resolution === 'adaptive' ? 'Adaptive resolution' : resolution === 'native' ? 'Native resolution' : resolution + ' render ceiling';
+  find('.ski-benchmark-settings').textContent = `${qualityLabel} · ${resolutionLabel} · ${frameLimit} FPS cap`;
   return {
     panel, controls, heading: find('h1'), status: find('.ski-benchmark-status'), result: find('.ski-benchmark-result'),
     progress: find('progress'), distance: find('.ski-benchmark-progress output'),
@@ -224,9 +233,9 @@ function errorMessage(reason) {
 }
 
 export async function launchSkiBenchmark() {
-  const requested = new URLSearchParams(location.search).get('resolution');
-  const resolution = ['480p', '720p', 'adaptive'].includes(requested) ? requested : 'native';
-  const ui = createPanel(resolution);
+  const settings = benchmarkSettings(new URLSearchParams(location.search));
+  const { quality, resolution, frameLimit } = settings;
+  const ui = createPanel(settings);
   const controller = new AbortController();
   const { signal } = controller;
   let active, startup, titleTimer, progressTimer, hardware;
@@ -266,7 +275,7 @@ export async function launchSkiBenchmark() {
 
   let stopLoader;
   try {
-    setUpBenchmark(resolution);
+    setUpBenchmark(settings);
     stopLoader = recordLoader();
     document.addEventListener('visibilitychange', onHidden);
     window.addEventListener('pagehide', onHidden);
@@ -279,7 +288,7 @@ export async function launchSkiBenchmark() {
     clearTimeout(startup);
     const ready = inspectSkiBenchmark({ game });
     if (ready.contextLost) throw new Error('The browser released WebGL. Reload to try again.');
-    if (ready.quality !== 'Budget' || ready.resolution !== resolution || Number(ready.frameLimit) !== frameLimit)
+    if (ready.quality?.toLowerCase() !== quality || ready.resolution !== resolution || Number(ready.frameLimit) !== frameLimit)
       throw new Error('The benchmark could not apply the requested graphics settings.');
     game.renderer.domElement.addEventListener('webglcontextlost', onLost, { once: true });
     window.addEventListener('resize', onResize);

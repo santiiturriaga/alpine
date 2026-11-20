@@ -73,11 +73,16 @@ export function liftParts(parts) {
 }
 
 function assembly(group, parts, name, shadows = true) {
-  const mesh = new THREE.Mesh(liftParts(parts), liftMetal);
+  const mesh = liftMesh(liftParts(parts), name, shadows);
+  group.add(mesh);
+  return mesh;
+}
+
+function liftMesh(geometry, name, shadows = true) {
+  const mesh = new THREE.Mesh(geometry, liftMetal);
   mesh.name = name;
   mesh.castShadow = shadows;
   mesh.receiveShadow = true;
-  group.add(mesh);
   return mesh;
 }
 
@@ -269,10 +274,113 @@ function sheaves(parts, gauge, distance, angle, wheels, vintage) {
   }
 }
 
-function support(group, lift, frame, previous, next, index, ground, colliders, distantDetail) {
+const distantTowerName = 'Distant mast, crosshead and sheaves';
+const towerCellSize = 512;
+const towerProjection = new THREE.Matrix4(), towerFrustum = new THREE.Frustum();
+const towerSphere = new THREE.Sphere(), towerNormalMatrix = new THREE.Matrix3();
+const towerVertex = new THREE.Vector3();
+
+function batchDistantSupports(group, supports) {
+  const cells = new Map();
+  for (const tower of supports) {
+    const { position } = tower.root;
+    const key = `${Math.floor(position.x / towerCellSize)}:${Math.floor(position.z / towerCellSize)}`;
+    if (!cells.has(key)) cells.set(key, []);
+    cells.get(key).push(tower);
+  }
+  for (const towers of cells.values()) {
+    if (towers.length === 1) {
+      const [{ distant, geometry }] = towers;
+      distant.add(liftMesh(geometry, distantTowerName));
+      continue;
+    }
+    const origin = towers[0].root.position;
+    let vertexCount = 0, indexCount = 0;
+    for (const { geometry } of towers) {
+      vertexCount += geometry.attributes.position.count;
+      indexCount += geometry.index.count;
+    }
+    const positions = new Float32Array(vertexCount * 3);
+    const normals = new Float32Array(vertexCount * 3);
+    const colors = new Uint16Array(vertexCount * 3);
+    const IndexArray = vertexCount <= 65535 ? Uint16Array : Uint32Array;
+    const indices = new IndexArray(indexCount);
+    const buffer = new THREE.BufferAttribute(new IndexArray(indexCount), 1).setUsage(THREE.DynamicDrawUsage);
+    const bounds = new THREE.Sphere();
+    const transform = new THREE.Matrix4();
+    let vertexOffset = 0, indexOffset = 0;
+    for (const tower of towers) {
+      const { root, geometry } = tower;
+      root.updateMatrix();
+      transform.copy(root.matrix);
+      transform.elements[12] -= origin.x;
+      transform.elements[13] -= origin.y;
+      transform.elements[14] -= origin.z;
+      towerNormalMatrix.getNormalMatrix(transform);
+      const { position, normal, color } = geometry.attributes;
+      for (let i = 0; i < position.count; i++) {
+        const offset = (vertexOffset + i) * 3;
+        towerVertex.fromBufferAttribute(position, i).applyMatrix4(transform).toArray(positions, offset);
+        towerVertex.fromBufferAttribute(normal, i).applyMatrix3(towerNormalMatrix).toArray(normals, offset);
+      }
+      colors.set(color.array, vertexOffset * 3);
+      for (let i = 0; i < geometry.index.count; i++) indices[indexOffset + i] = vertexOffset + geometry.index.getX(i);
+      tower.indices = indices.subarray(indexOffset, indexOffset + geometry.index.count);
+      tower.bounds = geometry.boundingSphere;
+      tower.selected = false;
+      bounds.union(towerSphere.copy(tower.bounds).applyMatrix4(transform));
+      indexOffset += geometry.index.count;
+      vertexOffset += position.count;
+      geometry.dispose();
+      tower.geometry = null;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3, true));
+    geometry.setIndex(buffer);
+    geometry.boundingSphere = bounds;
+    geometry.setDrawRange(0, 0);
+    const mesh = liftMesh(geometry, 'Distant lift towers');
+    mesh.position.copy(origin);
+
+    // The renderer has updated the main camera's LODs before either pass draws.
+    // Apply each pass's frustum to the original per-tower bounds, then upload
+    // the active index ranges only when the selection changes.
+    function selectTowers(camera) {
+      towerFrustum.setFromProjectionMatrix(towerProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+      let changed = false;
+      for (const tower of towers) {
+        const selected = tower.root.visible && tower.distant.visible && towerFrustum.intersectsSphere(
+          towerSphere.copy(tower.bounds).applyMatrix4(tower.root.matrixWorld));
+        if (tower.selected !== selected) {
+          tower.selected = selected;
+          changed = true;
+        }
+      }
+      if (!changed) return;
+      let count = 0;
+      for (const tower of towers) {
+        if (!tower.selected) continue;
+        buffer.array.set(tower.indices, count);
+        count += tower.indices.length;
+      }
+      geometry.setDrawRange(0, count);
+      if (count) {
+        buffer.addUpdateRange(0, count);
+        buffer.needsUpdate = true;
+      }
+    }
+    mesh.onBeforeRender = (_renderer, _scene, camera) => selectTowers(camera);
+    mesh.onBeforeShadow = (_renderer, _object, _camera, shadowCamera) => selectTowers(shadowCamera);
+    group.add(mesh);
+  }
+}
+
+function support(group, lift, frame, previous, next, index, ground, colliders, distantSupports) {
   const { gauge, paint, vintage } = lift;
   const y = ground.heightAt(frame.x,frame.z), height = frame.y-y;
-  const root = distantDetail ? new THREE.LOD() : new THREE.Group();
+  const root = distantSupports ? new THREE.LOD() : new THREE.Group();
   root.position.set(frame.x,frame.y,frame.z); root.rotation.y = frame.heading;
   root.name = `${lift.def.name} · tower ${index + 1}`;
   group.add(root);
@@ -298,7 +406,7 @@ function support(group, lift, frame, previous, next, index, ground, colliders, d
     parts.push(box(.20,.20,.08,'#5d5131',[0,-1.05,-radius-.05]));
     return assembly(parent,parts,'Galvanized mast, foundation, ladder, crosshead and sheaves');
   }
-  if (distantDetail) {
+  if (distantSupports) {
     const silhouette = [
       cylinder(radius*1.25,height-.20,paint,[0,-height/2-.20,0],undefined,.70*radius,8),
       cylinder(radius+.25,.55,'#777e7c',[0,-height+.04,0],undefined,radius+.24,8),
@@ -310,10 +418,11 @@ function support(group, lift, frame, previous, next, index, ground, colliders, d
         box(.26,.33,index%4 === 0 ? 2.55 : 1.96,dark,[x,-.17,0],[-grade,0,0]));
     }
     const detailed = new THREE.Group();
-    const distant = assembly(root,silhouette,'Distant mast, crosshead and sheaves');
+    const distant = new THREE.Object3D();
     root.addLevel(detailed);
     root.addLevel(distant,210,.08);
     distant.visible = false;
+    distantSupports.push({ root, distant, geometry: liftParts(silhouette) });
     let mesh;
     root.update = camera => {
       THREE.LOD.prototype.update.call(root,camera);
@@ -713,7 +822,9 @@ export function buildAerialLanes(parent,lift,ground,colliders,sharedMidstation,d
     const rope=ropeTube(points,.029);rope.name='Terminal return wrap';group.add(rope);
   }
   const towers=[profile.bottom,...profile.towers,profile.top];
-  profile.towers.forEach((frame,i)=>support(group,lift,frame,towers[i],towers[i+2],i,ground,colliders,distantDetail));
+  const distantSupports = distantDetail ? [] : null;
+  profile.towers.forEach((frame,i)=>support(group,lift,frame,towers[i],towers[i+2],i,ground,colliders,distantSupports));
+  if (distantSupports) batchDistantSupports(group, distantSupports);
   if (detachable || !lift.vintage) {
     const droop=[];
     for(let i=0;i<towers.length-1;i++) {

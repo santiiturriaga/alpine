@@ -151,13 +151,13 @@ function signGraphics(run) {
 function buildSigns(scene, ground, config, env, initialQuality) {
   const group = new THREE.Group();
   group.name = `${config.name} · trail signs`;
-  const post = new THREE.CylinderGeometry(.074, .078, 2.23, 8);
+  const post = new THREE.CylinderGeometry(.074, .078, 2.23, 8).translate(0, .98, -.12);
   const panel = new THREE.PlaneGeometry(2.40, .54);
-  const backing = new THREE.BoxGeometry(2.45, .59, .08);
+  const backing = new THREE.BoxGeometry(2.45, .59, .08).translate(0, 1.92, 0);
   const cedar = new THREE.MeshStandardMaterial({ color: 0x605145, roughness: .88 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x242922, roughness: .87 });
-  const positions = [];
-  const signs = [];
+  const signs = [], districts = new Map();
+  const localPosition = new THREE.Vector3();
   let budget = initialQuality === 'BUDGET';
   let lastX = Infinity, lastZ = Infinity;
   for (const run of config.runs) {
@@ -169,28 +169,48 @@ function buildSigns(scene, ground, config, env, initialQuality) {
     const offset = runStyle(run).width * .55;
     const x = a.x + dir.y * offset, z = a.z - dir.x * offset;
     const y = ground.heightAt(x, z);
-    if (!env.isOpen(x, y + .5, z, .58) || positions.some(p => Math.hypot(x - p.x, z - p.z) < 9)) continue;
-    positions.push({ x, z });
+    if (!env.isOpen(x, y + .5, z, .58) ||
+        signs.some(({sign: {position: p}}) => Math.hypot(x - p.x, z - p.z) < 9)) continue;
+    const material = new THREE.MeshStandardMaterial({ roughness: .81 });
     const sign = new THREE.Group();
     sign.position.set(x, y, z);
     sign.rotation.y = Math.atan2(-dir.x, -dir.y);
-    const stand = new THREE.Mesh(post, cedar);
-    stand.position.set(0, .98, -.12);
-    const body = new THREE.Mesh(backing, dark);
-    body.position.y = 1.92;
-    const material = new THREE.MeshStandardMaterial({ roughness: .81 });
+    sign.updateMatrix();
     const face = new THREE.Mesh(panel, material);
+    face.position.set(0, 1.92, .043);
     face.onBeforeRender = () => {
       if (material.map) return;
       material.map = signGraphics(run);
       material.needsUpdate = true;
     };
-    face.position.set(0, 1.92, .043);
-    sign.add(stand, body, face);
+    sign.add(face);
     sign.visible = !budget;
     group.add(sign);
-    signs.push({ sign, material });
+    const key = `${Math.floor(x / 1200)},${Math.floor(z / 1200)}`;
+    if (!districts.has(key)) districts.set(key, { signs: [], origin: sign.position });
+    const district = districts.get(key);
+    const matrix = sign.matrix.clone().setPosition(localPosition.subVectors(sign.position, district.origin));
+    const entry = { sign, material, matrix };
+    signs.push(entry);
+    district.signs.push(entry);
     env.addCircle(x, z, .077, 'trail-post', { minY: y, maxY: y + 2.25 });
+  }
+  // Faces keep their individual lettering. Each district instantiates the
+  // hardware around a local origin to preserve precision on nearby signs.
+  for (const district of districts.values()) {
+    const count = district.signs.length;
+    const posts = new THREE.InstancedMesh(post, cedar, count);
+    const backs = new THREE.InstancedMesh(backing, dark, count);
+    backs.instanceMatrix = posts.instanceMatrix;
+    posts.position.copy(district.origin);
+    backs.position.copy(district.origin);
+    district.signs.forEach(({matrix}, i) => posts.setMatrixAt(i, matrix));
+    posts.computeBoundingSphere();
+    backs.computeBoundingSphere();
+    district.posts = posts;
+    district.backs = backs;
+    if (budget) posts.count = backs.count = 0;
+    group.add(posts, backs);
   }
   scene.add(group);
   cacheStaticTransforms(group);
@@ -205,12 +225,29 @@ function buildSigns(scene, ground, config, env, initialQuality) {
     if (!Number.isFinite(lastX) || (budget && (lastX - x) ** 2 + (lastZ - z) ** 2 > 18 ** 2)) {
       lastX = x;
       lastZ = z;
-      for (const { sign, material } of signs) {
-        const range = sign.visible ? 470 : 420;
-        sign.visible = !budget || (x - sign.position.x) ** 2 + (z - sign.position.z) ** 2 < range ** 2;
-        if (budget && !sign.visible && material.map) {
-          material.map.dispose();
-          material.map = null;
+      for (const district of districts.values()) {
+        let changed = false;
+        for (const {sign, material} of district.signs) {
+          const range = sign.visible ? 470 : 420;
+          const visible = !budget || (x - sign.position.x) ** 2 + (z - sign.position.z) ** 2 < range ** 2;
+          if (visible === sign.visible) continue;
+          changed = true;
+          sign.visible = visible;
+          if (!visible && material.map) {
+            material.map.dispose();
+            material.map = null;
+          }
+        }
+        if (changed) {
+          let count = 0;
+          for (const {sign, matrix} of district.signs) {
+            if (sign.visible) district.posts.setMatrixAt(count++, matrix);
+          }
+          district.posts.count = district.backs.count = count;
+          if (count) {
+            district.posts.instanceMatrix.addUpdateRange(0, count * 16);
+            district.posts.instanceMatrix.needsUpdate = true;
+          }
         }
       }
     }

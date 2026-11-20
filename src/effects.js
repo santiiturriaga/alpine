@@ -3,6 +3,7 @@ import { clamp, makeCanvas, mulberry32, makeRadialTexture } from './util.js';
 import { heightAt, normalAt, terrain } from './terrain.js';
 import { WORLD } from './worlddata.js';
 import { climateUniforms } from './climate-state.js';
+import { updateSnowShutter } from './snow-crystals.js';
 import { coniferGeometry } from './conifers.js';
 import { strikeTreeSnow, updateTreeSnow } from './tree-snow.js';
 
@@ -676,6 +677,7 @@ export class TuckWind {
   }
 
   update(dt, skier, active) {
+    updateSnowShutter(skier, active && skier.grounded && !skier.footMode && !skier.crash && !this.reducedMotion.matches);
     const speed = clamp((skier.speed - 13) / 17, 0, 1);
     const target = active && !this.reducedMotion.matches ? speed * (skier.tuckAmount || 0) : 0;
     this.energy += (target - this.energy) * (1 - Math.exp(-dt * 7.5));

@@ -387,9 +387,8 @@ async function startGame(pose = startPose(), startAudio = true, { preframed = fa
   if (transitioning || playing) return;
   transitioning = true;
   document.activeElement?.blur?.();
-  if (startAudio) {
-    try { await audio.init(); } catch { /* audio is optional */ }
-  }
+  // A browser can keep audio suspended until a later gesture.
+  if (startAudio) audio.init().catch(() => {});
   audioOn = audio.enabled;
   ui.setAudio(audioOn);
   audio.ui();
@@ -1745,6 +1744,7 @@ function frame(now, vsync) {
   displayTime = now / 1000;
 
   if (!playing) {
+    tuckWind.update(dt, player, false);
     skiPatrol?.update(0, null, camera, climate.state.season);
     updatePassGates(dt,null,camera);
     env?.update(dt, displayTime, camera);
@@ -1840,7 +1840,7 @@ function frame(now, vsync) {
     nearest,
   });
 
-  tuckWind.update(dt, player, !paused && !ride && !finished && !player.footMode);
+  tuckWind.update(dt, player, movingOnMountain && !finished && !player.footMode);
   const listener = player.pos;
   const dining = env.interiors?.rooms || [];
   let tavern = clamp(1 - Math.hypot(listener.x + 2549.25, listener.z - 2071.35,

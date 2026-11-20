@@ -86,6 +86,55 @@ const noise = /* glsl */ `
   }
 `;
 
+const cliffFaceGLSL = /* glsl */ `
+  uniform sampler2D cliffTerrain;
+  uniform vec4 cliffTerrainLimits;
+  uniform float cliffTerrainCells;
+
+  vec4 cliffFace(vec3 p, float up, float eligible, out float relief) {
+    relief = 0.0;
+    float grade = 1.0 - up;
+    vec2 strike = mat2(.92,-.392,.392,.92)*p.xz;
+    // Gently dipping beds run across neighboring faces in world space.
+    vec3 bedPoint = vec3(strike.x*.017,(p.y+strike.y*.24)*.105,strike.y*.024);
+    vec3 blockPoint = vec3(strike.x*.053,(p.y-strike.x*.15)*.047,strike.y*.062);
+    vec3 fieldPoint = vec3(strike.x*.008,p.y*.016,strike.y*.011);
+    vec3 fracturePoint = vec3(strike.x*.22+p.y*.018,p.y*.082,strike.y*.20-p.y*.052);
+    float fieldFilter = surfaceNoiseCoverage(fieldPoint);
+    float bedFilter = surfaceNoiseCoverage(bedPoint);
+    float blockFilter = surfaceNoiseCoverage(blockPoint);
+    float fractureFilter = surfaceNoiseCoverage(fracturePoint);
+    if (eligible <= 0.0 || grade < .12) return vec4(0.0);
+
+    vec2 mapUv = (p.xz-cliffTerrainLimits.xy)/cliffTerrainLimits.zw;
+    vec2 land = textureLod(cliffTerrain,(mapUv*(cliffTerrainCells-1.0)+.5)/cliffTerrainCells,0.0).rg;
+    float field = coveredSurfaceNoise(fieldPoint,fieldFilter);
+    // DEM shoulders shed snow earlier than the gullies that collect it.
+    float faceGrade = grade + (land.r-.5)*.095 + (field-.5)*.10;
+    float exposed = eligible*smoothstep(.195,.247,faceGrade);
+    if (exposed <= 0.0) return vec4(0.0);
+
+    float blocks = coveredSurfaceNoise(blockPoint,blockFilter);
+    float beds = coveredSurfaceNoise(bedPoint+vec3(.0,(field-.5)*1.55+(blocks-.5)*1.25,.0),bedFilter);
+    float fractures = coveredSurfaceNoise(fracturePoint,fractureFilter);
+    float seam = (1.0-smoothstep(.009,.067,abs(blocks-.43))) * smoothstep(.29,.57,beds);
+    float fissure = (1.0-smoothstep(.008,.059,abs(fractures-.42))) * fractureFilter;
+    float facet = smoothstep(.24,.73,beds*.39+blocks*.25+fractures*.36);
+    vec3 stone = mix(vec3(.020,.025,.034),vec3(.171,.155,.130),facet);
+    stone *= 1.0-.41*seam-.42*fissure;
+
+    // Snow sits on the sloping tops of broken beds and in concave chutes.
+    float shelf = smoothstep(.51,.76,beds+(fractures-.5)*.25) * smoothstep(.33,.71,blocks)
+      * (1.0-smoothstep(.27,.49,grade));
+    float chute = (1.0-smoothstep(.18,.51,land.r)) * (1.0-smoothstep(.23,.42,grade));
+    float permanentSnow = land.g*(1.0-smoothstep(.29,.52,grade));
+    float snowRetention = max(climateSnowpack,smoothstep(climateSnowline-100.0,climateSnowline+100.0,p.y));
+    exposed *= 1.0-clamp(snowRetention*(.70*shelf+.49*chute)+.76*permanentSnow,0.0,.92);
+    relief = .64*(beds-.5)+.45*(blocks-.5)+.49*(fractures-.5)-.38*seam-.25*fissure;
+    return vec4(stone*(1.0-.16*climateWetness),exposed);
+  }
+`;
+
 const surfaces = {
   snow: {
     color: /* glsl */ `
@@ -175,34 +224,21 @@ const surfaces = {
       float apron = (1.-smoothstep(62.,117.,abs(cirque.x)))
         * smoothstep(-132.,-70.,cirque.y) * (1.-smoothstep(14.,46.,cirque.y))
         * smoothstep(.39,.94,climateSnowpack);
-      // Steep, exposed faces shed the snow between tilted rock beds.
-      vec3 strata = vec3(wind.x*.056,p.y*.292 + wind.y*.052,wind.y*.063);
-      vec3 coarsePoint = strata + .56*scoured;
-      vec3 finePoint = strata*vec3(10.5,8.0,13.0) + scoured;
-      float coarseFilter = surfaceNoiseCoverage(coarsePoint);
-      float fineFilter = surfaceNoiseCoverage(finePoint);
-      float slope = 1.0 - up + .15*(scoured-.5);
-      float exposure = offPiste * (1.0-apron*.96) * (1.0-.82*forestExtent) * smoothstep(1250.0,1840.0,p.y);
-      float exposed = 0.0, fracture = .5;
-      // Noise is in [0,1], so its contribution to the ledge is at most .045.
-      if (exposure > 0.0 && slope + .046 > .225) {
-        float coarseFracture = coveredSurfaceNoise(coarsePoint,coarseFilter);
-        float ledge = slope + .09*(coarseFracture-.5);
-        exposed = exposure * smoothstep(.225,.43,ledge);
-        if (exposed > 0.0) {
-          float fineFracture = coveredSurfaceNoise(finePoint,fineFilter);
-          fracture = smoothstep(.34,.67,coarseFracture + (fineFracture-.5)*(.25+.37*vicinity));
-        }
-      }
-      vec3 shale = mix(vec3(.025,.029,.033),vec3(.183,.168,.148),fracture);
-      float rimed = smoothstep(.42,.77,.57*scoured+.43*drift + .16*(1.0-fracture));
+      float cliffRelief = 0.;
+      vec4 rock = vec4(0.);
+      #ifdef TERRAIN_CLIFFS
+        float exposure = offPiste * (1.0-apron*.96) * (1.0-.94*forestExtent)
+          * smoothstep(1390.0,1810.0,p.y);
+        rock = cliffFace(p,up,exposure,cliffRelief);
+      #endif
+      float exposed = rock.a;
       float dune = (.096 + .144 * loose) * drift * (1.0 - .66 * groomed);
       // Elongated, irregular ripples model wind slabs and compressed snow.
       vec3 ripplePosition = vec3(p.x*.69 + p.z*.28, p.y*.29, p.z*2.04 - p.x*.8);
       float rippleWeight = 1.0 - smoothstep(.33,.92,length(fwidth(ripplePosition)));
       float ripple = detail > .001 && (rippleWeight > 0.0 || pillowsActive)
         ? surfaceNoise(ripplePosition + .22 * scoured) : .5;
-      float detailNormals = .018 * crust + .0011 * grain * microCoverage;
+      float detailNormals = .018 * crust + .0011 * grain * microCoverage * snowShutter.z;
       float polished = ice * smoothstep(.23,.67,.85*scoured+.28*drift) * (1.0-.40*marks) * (1.0-exposed);
       float churnRelief = 0.0;
       #ifndef TERRAIN_NO_FIXED_TRACKS
@@ -218,6 +254,10 @@ const surfaces = {
       float relief = mix(dune * vicinity + detailNormals * detail, .016 * drift, polished) - .023*marks
         + .045 * ripple * detail * rippleWeight * (1.0 - groomed*.66)
         + churnRelief;
+      float windLip = windLipHeight(p.xz, drift, ripple, distanceToEye,
+        (1.-groomed)*(1.-ice)*(1.-traffic)*(.35+.65*loose));
+      relief += windLip;
+      diffuseColor.rgb *= 1. + min(0.,windLip)*1.25;
       // Small settled pillows overlap the longer wind ripples. Keep this
       // relief on loose snow and filter it away as it becomes subpixel.
       if (pillowsActive) {
@@ -257,13 +297,26 @@ const surfaces = {
       float visibleGrooves = groomerPass * (1.0-smoothstep(.12,.32,fwidth(groovePhase)))
         * (1.0-.84*ice) * (1.0-.64*loose) * (1.0-.68*smoothstep(.03,.35,marks))
         * (.48+.52*scoured);
-      float groove = visibleGrooves > .001 ? .5+.5*cos(groovePhase*6.28318531) : .5;
+      float groove = .5;
+      // The grooming map stores distance across the run. Recover the local
+      // direction from its screen derivatives without a second texture read.
+      vec2 gx = dFdx(p.xz), gy = dFdy(p.xz);
+      vec2 dp = vec2(dFdx(groovePhase),dFdy(groovePhase));
+      if (visibleGrooves > .001) {
+        float contrast = 1.;
+        float det = gx.x*gy.y-gx.y*gy.x;
+        if (snowShutter.z < 1. && abs(det) > 1e-10) {
+          vec2 gradient = vec2(gy.y*dp.x-gx.y*dp.y,gx.x*dp.y-gy.x*dp.x)/det;
+          contrast = snowBandContrast(dot(gradient,snowShutter.xy));
+        }
+        groove += .5*cos(groovePhase*6.28318531)*contrast;
+      }
       diffuseColor.rgb *= 1.0 - .091*visibleGrooves*groove*(1.0-.76*traffic);
       if (climateRealism > .5 && detail > .001) {
         float crystals = smoothstep(.735,.905,grain) * microCoverage * detail * cover;
         if (crystals > 0.0) {
           float flash = pow(smoothstep(.82,.99,abs(dot(normalize(vNormal),normalize(vViewPosition)))),3.0);
-          diffuseColor.rgb += vec3(.17,.21,.27) * crystals * (.25 + .75*flash) * (1.0-.71*ice);
+          diffuseColor.rgb += vec3(.17,.21,.27) * crystals * (.25 + .75*flash) * (1.0-.71*ice) * snowShutter.z;
         }
       }
       relief -= .0012*visibleGrooves*groove;
@@ -278,8 +331,8 @@ const surfaces = {
         diffuseColor.rgb = mix(meadow,diffuseColor.rgb,cover);
         relief = mix(.022*crust+.009*grain*microCoverage,relief,cover);
       }
-      diffuseColor.rgb = mix(diffuseColor.rgb,shale,exposed*(1.0-.58*rimed*cover));
-      relief += exposed * (.11*fracture+.07*drift);
+      diffuseColor.rgb = mix(diffuseColor.rgb,rock.rgb,exposed);
+      relief = mix(relief,cliffRelief,exposed);
     `,
     normal: 'normal = surfaceNormal(-vViewPosition, normal, relief * smoothstep(.055,.27,abs(dot(normal, normalize(vViewPosition)))));',
     roughness: 'roughnessFactor = mix(mix(.94,.68,groomed*.80 + crust*.16*detail + traffic*.18), mix(.21,.115,climateRealism), polished*.88);',
@@ -318,6 +371,13 @@ const surfaces = {
       ridgeForest=mix(ridgeForest,ridgeForest*vec3(1.45,.96,.58),climateAutumn*.44);
       bareRidge=mix(bareRidge,ridgeForest,forestMelt);
       diffuseColor.rgb=mix(diffuseColor.rgb,bareRidge,ridgeMelt);
+      #ifdef TERRAIN_CLIFFS
+        float up = clamp(dot(normalize(vNormal),mat3(viewMatrix)*vec3(0,1,0)),0.0,1.0);
+        float cliffRelief;
+        vec4 rock = cliffFace(p,up,(1.0-treeCover)*smoothstep(1350.0,1840.0,p.y),cliffRelief);
+        diffuseColor.rgb = mix(diffuseColor.rgb,rock.rgb,rock.a);
+        relief = mix(relief,cliffRelief,rock.a);
+      #endif
     `,
     normal: 'normal = surfaceNormal(-vViewPosition, normal, relief);',
     roughness: '',
@@ -408,19 +468,26 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
   const skiSnow = kind === 'snow' && snowMaps?.skiSnow;
   const material = new THREE.MeshStandardMaterial({ roughness: .9, ...options });
   const terrain = kind === 'snow' || kind === 'mountain';
+  const cliffCover = snowMaps?.cliffCover;
   const roomCutout = kind === 'snow' && snowMaps?.interiorCutout !== false;
   const noFixedTracks = kind === 'snow' && snowMaps?.fixedTracks === false;
   if (terrain) {
     terrainSurfaces.add(material);
     material.addEventListener('dispose', () => terrainSurfaces.delete(material));
   }
-  material.customProgramCacheKey = () => `${kind}${roomCutout ? '-room' : ''}${skiSnow ? `-ski-snow-${skiSnow.mode}` : ''}${terrain && budgetSampling ? '-volume' : ''}${noFixedTracks ? '-no-tracks' : ''}`;
+  material.customProgramCacheKey = () => `${kind}${roomCutout ? '-room' : ''}${skiSnow ? `-ski-snow-${skiSnow.mode}` : ''}${terrain && budgetSampling ? '-volume' : ''}${noFixedTracks ? '-no-tracks' : ''}${cliffCover ? '-cliffs' : ''}`;
   material.onBeforeCompile = (shader) => {
     if (roomCutout) shader.fragmentShader = '#define TERRAIN_ROOM_CUTOUT\n' + shader.fragmentShader;
     if (noFixedTracks) shader.fragmentShader = '#define TERRAIN_NO_FIXED_TRACKS\n' + shader.fragmentShader;
     if (terrain && budgetSampling) {
       shader.fragmentShader = '#define TERRAIN_NOISE_VOLUME\n' + shader.fragmentShader;
       shader.uniforms.terrainNoise = { value: terrainNoiseVolume() };
+    }
+    if (cliffCover) {
+      shader.fragmentShader = '#define TERRAIN_CLIFFS\n' + shader.fragmentShader;
+      shader.uniforms.cliffTerrain = { value: cliffCover.texture };
+      shader.uniforms.cliffTerrainLimits = { value: cliffCover.limits };
+      shader.uniforms.cliffTerrainCells = { value: cliffCover.texture.image.width };
     }
     shader.uniforms.climateSnowpack = climateUniforms.snowpack;
     shader.uniforms.climateSnowline = climateUniforms.snowline;
@@ -480,7 +547,7 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
         surfacePoint=(modelMatrix*surfaceWorld).xyz;
       `);
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float climateSnowpack; uniform float climateSnowline; uniform float climateAutumn; uniform float climateSpring; uniform float climateWetness; uniform float climateTerrainSun; uniform float climateRealism;\n' + noise + pisteUniforms + skiUniforms + (kind === 'snow' ? snowTrafficGLSL : ''))
+      .replace('#include <common>', '#include <common>\nuniform float climateSnowpack; uniform float climateSnowline; uniform float climateAutumn; uniform float climateSpring; uniform float climateWetness; uniform float climateTerrainSun; uniform float climateRealism;\n' + noise + (cliffCover ? cliffFaceGLSL : '') + pisteUniforms + skiUniforms + (kind === 'snow' ? snowTrafficGLSL : ''))
       .replace('#include <color_fragment>', '#include <color_fragment>\n' + (skiSnow
         ? skiSnow.mode === 0
           ? 'if (inSkiSnow(surfacePoint.xz, skiSnowFeet[0], skiSnowScale[0]) || inSkiSnow(surfacePoint.xz, skiSnowFeet[1], skiSnowScale[1])) discard;\n'

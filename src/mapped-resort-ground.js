@@ -278,6 +278,11 @@ const materialSource = /* glsl */ `
       mix(mix(resortHash(vec3(lo.xy,hi.z)),resortHash(vec3(hi.x,lo.y,hi.z)),f.x),
           mix(resortHash(vec3(lo.x,hi.yz)),resortHash(hi),f.x),f.y),f.z);
   }
+  float filteredRockNoise(vec3 p, float visibility) {
+    vec3 footprint = fwidth(p);
+    float weight = visibility * (1. - smoothstep(.1024,.8464,dot(footprint,footprint)));
+    return weight > 0. ? mix(.5,resortNoise(p),weight) : .5;
+  }
 `;
 
 function snowMaterial(bounds, field, regional = false, nightLight = null) {
@@ -288,7 +293,7 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
   const cascade = field.cascade;
   const village = field.village;
   const regionalColor = /* glsl */ `
-    vec3 surveyColor(vec3 p, float up, float mountainside, float flutes, float cliffBed, float cliff, float weather) {
+    vec3 surveyColor(vec3 p, float up, float mountainside, float flutes, float cliffBed, vec3 stone, float cliff, float weather) {
       float surveySnow = max(weather, snowpack);
       ${regionalForest ? `
         vec4 surveyedStand = texture2D(regionalStand, (p.xz-regionalStandBounds.xy)/regionalStandBounds.zw) * 2.55;
@@ -298,7 +303,6 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
       float canopy = forests > 0. ? resortNoise(p * vec3(.055,.041,.055)) : .5;
       vec3 spruce = mix(vec3(.018,.027,.029),vec3(.112,.160,.163),canopy*.7+mountainside*.3);
       vec3 alpine = mix(vec3(.49,.58,.66),vec3(.85,.91,.95),.55*flutes+.45*mountainside);
-      vec3 stone = vec3(.11,.134,.15) * (.54+.70*cliffBed);
       ${cascade ? `
         float rockLayers = resortNoise(vec3(p.x*.021-p.y*.037,p.y*.142,p.z*.023+p.y*.044));
         float rockFlank = smoothstep(.08,.65,1.-up) * smoothstep(1000.,1630.,p.y);
@@ -368,11 +372,24 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
       float ice = smoothstep(.21,.68,surface.g);
       float road = smoothstep(.66,.79,surface.g) * smoothstep(.45,.66,surface.r) * (1. - smoothstep(.76,.92,surface.r));
       float mountainside = resortNoise(p * vec3(.017,.023,.018));
-      float flutes = resortNoise(p * vec3(.11,.027,.088) + mountainside*.44);
-      float cliffBed = resortNoise(p * vec3(.085,.335,.086));
-      float steep = smoothstep(.20,.57,1. - up);
-      float naturalCliff = smoothstep(.35,.76,steep + (mountainside-.44)*.39 + (flutes-.48)*.43) * (.63+.37*cliffBed);
+      // Broad gullies run down the face and intersect longer, gently dipping rock beds.
+      float bedding = p.y + dot(p.xz,vec2(.23,-.14));
+      vec3 gullyPoint = vec3(p.x*.030-p.y*.011, p.y*.012, p.z*.034+p.y*.006);
+      vec3 beddingPoint = vec3(p.x*.0085, (bedding + 36.*(mountainside-.5))*.037, p.z*.011);
+      float flutes = filteredRockNoise(gullyPoint,1.);
+      float cliffBed = filteredRockNoise(beddingPoint,1.);
+      // Ledges retain snow on transitional slopes. The steepest faces shed the snow.
+      float slope = 1. - up;
+      float exposure = slope + (cliffBed-.5)*.18 + (flutes-.5)*.12 + (mountainside-.5)*.10;
+      float snowEdge = clamp(.75*fwidth(exposure),.035,.078);
+      float naturalCliff = smoothstep(.38-snowEdge,.38+snowEdge,exposure);
       float cliff = naturalCliff * (1. - groom * .94);
+      // Small fractures describe the rock without breaking up the snow boundary.
+      vec3 fracturePoint = vec3(p.x*.102+p.y*.077,bedding*.16,p.z*.106-p.y*.061);
+      float fractures = filteredRockNoise(fracturePoint,smoothstep(.26,.77,naturalCliff));
+      float joints = smoothstep(.515,.645,fractures);
+      float stoneTone = .20*mountainside + .25*flutes + .55*cliffBed;
+      vec3 exposedRock = mix(vec3(.077,.090,.105),vec3(.359,.320,.275),stoneTone) * (1.-.25*joints);
       float weather = smoothstep(snowline-165.,snowline+280.,p.y);
       float snow = max(weather, snowpack);
       ${forest && !regional ? `
@@ -385,7 +402,7 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
         grove = mix(grove, bareGrove, smoothstep(.24,.83,snowpack));
       ` : ''}
       ${regional ? `
-        diffuseColor.rgb *= surveyColor(p,up,mountainside,flutes,cliffBed,naturalCliff,weather);
+        diffuseColor.rgb *= surveyColor(p,up,mountainside,flutes,cliffBed,exposedRock,naturalCliff,weather);
       ` : `
         // Match the survey shading at the join and bring in marked terrain smoothly.
         vec2 edge = min(p.xz-resortLimits.xy, resortLimits.xy+resortLimits.zw-p.xz);
@@ -402,19 +419,22 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
         float coverage = 1. - smoothstep(.52,1.4,length(fwidth(finePoint)));
         float grains = nearDetail > .01 && coverage > 0. ? resortNoise(finePoint) : .5;
         float angle = surface.b * 3.14159265;
-        float along = dot(p.xz,vec2(sin(angle),cos(angle)));
-        float tracks = groom * nearDetail * (1.-ice) * (1.-smoothstep(.75,1.8,fwidth(along)*37.3));
-        float ripple = tracks > 0. ? .5 + .5*sin(along*37.3 + drift*.64) : .5;
+        vec2 acrossRun = vec2(cos(angle),-sin(angle));
+        float across = dot(p.xz,acrossRun);
+        float tracks = groom * nearDetail * (1.-ice) * (1.-smoothstep(.75,1.8,fwidth(across)*37.3));
+        float ripple = tracks > 0. ? .5 + .5*sin(across*37.3 + drift*.64)
+          * snowBandContrast(dot(snowShutter.xy,acrossRun)*5.94*snow*(1.-road)) : .5;
         float snowShape = mix(.88+.146*drift+.065*shallow,.96+.043*ripple*tracks,groom);
-        float crust = max(0.,grains-.57)*coverage*nearDetail;
+        float crust = max(0.,grains-.57)*coverage*nearDetail*snowShutter.z;
+        float windLip = windLipHeight(p.xz,drift,shallow,eye,(1.-groom)*(1.-ice)*(1.-traffic)*(1.-road));
         vec3 powder = vec3(.831,.890,.956) * (snowShape+crust*.13) * (.935+.106*mountainside);
         vec3 packed = vec3(.847,.908,.973) * (snowShape+crust*.08);
         vec3 blueIce = vec3(.591,.725,.833) * (.91+.104*drift+.03*shallow);
         vec3 snowColor = mix(mix(powder,packed,max(groom,traffic*.76)),blueIce,ice*.75);
+        snowColor *= 1. + min(0.,windLip)*1.25;
         snowColor *= 1.0 - traffic * .073;
-        snowColor += vec3(.15,.20,.26)*smoothstep(.74,.91,grains)*coverage*nearDetail*realism*(1.0-ice*.72);
-        vec3 granite = mix(vec3(.073,.083,.098),vec3(.245,.244,.228),cliffBed*.72+flutes*.28);
-        granite *= .78 + .3 * cliffBed;
+        snowColor += vec3(.15,.20,.26)*smoothstep(.74,.91,grains)*coverage*nearDetail*realism*(1.0-ice*.72)*snowShutter.z;
+        vec3 granite = exposedRock;
         float underTrees = smoothstep(.17,.81,surface.a);
         float canopy = underTrees > 0. ? resortNoise(p * vec3(.085,.041,.085)) : .5;
         vec3 spruce = mix(vec3(.042,.066,.066),vec3(.215,.302,.329),.76*canopy+.24*drift);
@@ -437,13 +457,17 @@ function snowMaterial(bounds, field, regional = false, nightLight = null) {
         vec3 surfaceColor = mix(granite,snowColor,(1.-cliff)*snow);
         float distantWeight = ${cascade ? 'smoothstep(1950.,4400.,eye)*(1.-marks)*.78' : '0.'};
         if (localWeight < 1. || distantWeight > 0.) {
-          vec3 survey = surveyColor(p,up,mountainside,flutes,cliffBed,naturalCliff,weather);
+          vec3 survey = surveyColor(p,up,mountainside,flutes,cliffBed,exposedRock,naturalCliff,weather);
           surfaceColor = mix(survey,surfaceColor,localWeight);
           surfaceColor = mix(surfaceColor,survey,distantWeight);
         }
         diffuseColor.rgb *= surfaceColor;
-        float resortRelief = nearDetail * (.021 * drift + .008 * shallow + .0014 * grains * coverage
-          + .0018 * ripple * tracks) * (1. - ice*.77) * localWeight;
+        float grainContrast = mix(1.,snowShutter.z,snow*(1.-road));
+        float resortRelief = nearDetail * (.021 * drift + .008 * shallow + .0014 * grains * coverage * grainContrast
+          + .0018 * ripple * tracks) * (1. - ice*.77) * (1.-cliff);
+        resortRelief += windLip * snow * (1.-cliff);
+        resortRelief += cliff * (.19 * cliffBed + .13 * flutes - .024 * joints) * (1.-smoothstep(200.,1200.,eye));
+        resortRelief *= localWeight;
       `}
     `).replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
       roughnessFactor *= 1. - ice*(.47+.20*realism)${regional ? '' : '*localWeight'};

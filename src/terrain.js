@@ -535,6 +535,21 @@ function buildTuskPatch(patch, regionHeight) {
   return peak;
 }
 
+function cliffCoverMap(heights, average, cover, bounds, curvatureScale) {
+  // Positive height residuals identify ridges and exposed shoulders.
+  const data = new Uint8Array(heights.length * 2);
+  for (let i = 0; i < heights.length; i++) {
+    data[2 * i] = Math.round(255 * clamp(.5 + (heights[i] - average[i]) / curvatureScale, 0, 1));
+    data[2 * i + 1] = cover[i] === 70 || cover[i] === 80 ? 255 : 0;
+  }
+  const texture = new THREE.DataTexture(data, bounds.grid, bounds.grid, THREE.RGFormat);
+  texture.minFilter = texture.magFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
+  const limits = new THREE.Vector4(bounds.minX, bounds.minZ,
+    bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ);
+  return { texture, limits };
+}
+
 function buildCoastMountains({ heights, cover }, tusk, local) {
   const bounds = regionBounds;
   const n = bounds.grid, step = (bounds.maxX - bounds.minX) / (n - 1);
@@ -549,14 +564,15 @@ function buildCoastMountains({ heights, cover }, tusk, local) {
   };
   const colorAt = (x, h, z, up) => {
     color.copy(open).lerp(northSnow, smoothstep(940, 1700, h));
-    color.lerp(stone, smoothstep(.13, .51, 1 - up) * .83);
+    color.lerp(stone, smoothstep(.13, .51, 1 - up) * .83 * (1 - smoothstep(1350, 1840, h)));
     const kind = regionCover(x, z);
     if (kind === 10) color.lerp(forest, .87);
     if (kind === 70) color.lerp(ice, .85);
     if (kind === 80) color.copy(water);
     return color;
   };
-  const material = surfaceMaterial('mountain', { vertexColors: true, roughness: .98 });
+  const cliffCover = cliffCoverMap(heights, boxBlurGrid(heights.slice(), n, 1, 1), cover, bounds, 70);
+  const material = surfaceMaterial('mountain', { vertexColors: true, roughness: .98 }, { cliffCover });
   const peak = buildTuskPatch(tusk, at);
   const survey = createSurveyTerrain({
     regional: { bounds, cols: n, rows: n, xAt: i => bounds.minX + i * step,
@@ -818,7 +834,8 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     map.needsUpdate = true;
   }
   const horizon = terrainHorizon(gradedHeights, N, N, WORLD);
-  const snowMaps = { pisteMap, tracks, roomCutout, annexCutout, roomYaw, mountainShade, groomingMap, horizon };
+  const cliffCover = cliffCoverMap(gradedHeights, blurred, landCover, WORLD, 26);
+  const snowMaps = { pisteMap, tracks, roomCutout, annexCutout, roomYaw, mountainShade, groomingMap, horizon, cliffCover };
   const mat = surfaceMaterial('snow', { vertexColors: true }, snowMaps);
   const markedSnow = surfaceMaterial('snow', { vertexColors: true }, { ...snowMaps, interiorCutout: false });
   const openSnow = surfaceMaterial('snow', { vertexColors: true }, {
