@@ -46,4 +46,19 @@ for (const tree of [{ x:0, y:0, z:3, height:14, width:1 }, { x:0, y:0, z:3, heig
   cameraClipper(() => [{ ...post, tree }])(0, 1, 0, eye, branches);
   assert.ok(Number.isFinite(branches.fraction) && branches.fraction > 0 && branches.fraction < .40);
 }
+
+// Staggered walking cameras beneath the mature branches only need to avoid
+// the real trunk. At crown height, branches can still ease the camera inward.
+const matureTree = { ...post, r: .6, maxY: 28, tree: { x:0, y:0, z:3, apex:28, stretch:1, kind:0 } };
+const walking = { walking: true };
+const aroundTree = cameraClipper(() => [matureTree]);
+eye.set(1.5, 1.8, 4.5);
+close(aroundTree(1.5, 1.8, 0, eye, walking), 4.5);
+close(walking.fraction, 1);
+eye.set(1.5, 9, 4.5);
+close(aroundTree(1.5, 9, 0, eye, walking), 4.5);
+assert.ok(walking.fraction < .40);
+eye.set(0, 1.8, 4.5);
+close(aroundTree(0, 1.8, 0, eye, walking), 2.22);
+close(walking.fraction, 1);
 console.log('Camera clears thin posts, rotated walls, overhead structures and occupied station envelopes.');

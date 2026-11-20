@@ -1,6 +1,6 @@
 import { heightAt } from './terrain.js';
 import { WORLD, RUNS, LIFTS, MOUNTAIN } from './worlddata.js';
-import { stationSite, stationPoint } from './station-sites.js';
+import { peakToPeakAccess, stationSite, stationPoint } from './station-sites.js';
 import { ROUNDHOUSE_SITE, ROUNDHOUSE_OLYMPIC_SITE, LODGE_FRAME, lodgePoint } from './roundhouse-site.js';
 import { PEAK_STONE_SITE, ROUNDHOUSE_STONE_SITE } from './inukshuk.js';
 import { DUSTYS_START } from './creekside-village.js';
@@ -69,7 +69,7 @@ export function whistlerAtlasSettings(liftExitFor, terrain) {
   function section(def, direction) {
     const points = direction ? [...def.points].reverse() : def.points;
     const index = direction ? def.points.length - 1 : 0;
-    const board = def.type === 'surface'
+    const board = def.type === 'p2p' ? peakToPeakAccess(def, direction).board : def.type === 'surface'
       ? stationPoint(stationSite(def, index), 3.5, -3.5)
       : stationPoint(stationSite(def, index), 8.5, -17);
     return { ...def, points, board, exit: () => liftExitFor(def, direction) };

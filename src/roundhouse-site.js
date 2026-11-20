@@ -11,10 +11,17 @@ export const LODGE_ANNEX = { x: -21.6, z: 11, width: 13.1, depth: 24.8,
 
 export const WHISTLER_PEAK_TERMINAL = { x: 539.6, z: 4823.7, width: 27.5, depth: 45,
   deck: 3.77, datumOffset: -.75, entryX: 1.3, entryWidth: 5.15, canopyDepth: 3.6 };
+export const BLACKCOMB_PEAK_TERMINAL = { width: 22, depth: 36, centerZ: -5,
+  track: 7.5, deck: 3.98, entryZ: 1.8, entryWidth: 3.8, rampLength: 10.8 };
 
 export function whistlerPeakTerminalSite(lift) {
   const [[ax, az], [bx, bz]] = lift.points;
   return { ...WHISTLER_PEAK_TERMINAL, yaw: Math.atan2(ax - bx, az - bz), surveyX: ax, surveyZ: az };
+}
+
+export function blackcombPeakTerminalSite(lift) {
+  const [x, z] = lift.points.at(-1), [px, pz] = lift.points.at(-2);
+  return { ...BLACKCOMB_PEAK_TERMINAL, x, z, yaw: Math.atan2(px - x, pz - z) };
 }
 
 export function terraceStairHeight(x, z, stepped = false) {

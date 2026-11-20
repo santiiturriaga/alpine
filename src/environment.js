@@ -33,6 +33,7 @@ import { buildChairTurnaround, buildMappedTerminal, buildStationOperations, REPL
 import { makeGondolaShell, addGondolaShell, attachCreeksideReflection, gondolaFleetGeometry,
   gondolaDoorsAtDistance } from './gondola-shell.js';
 import { ropeOffset, stationPoint, stationSite } from './station-sites.js';
+import { BLACKCOMB_PEAK_TERMINAL } from './roundhouse-site.js';
 import { buildAlpineCliffs } from './alpine-cliffs.js';
 import { buildGlacierCave } from './glacier-cave.js';
 import { createRoofSnow, createIcicles } from './roof-weather.js';
@@ -372,6 +373,7 @@ function buildForest(scene, grid, rand, detail) {
     region: 'whistler-blackcomb',
     heightAt,
     treesAt: (x, z, radius) => grid.query(x, z, radius),
+    forestFloor: (x, z) => landCoverAt(x, z) === 10 && pisteAt(x, z) < .18,
     permits: (x, z) => landCoverAt(x, z) === 10 && pisteAt(x, z) < .18
       && slopeAt(x, z) < .42 && !grid.buildingsAt(x, z).length,
   });
@@ -393,9 +395,9 @@ function buildForest(scene, grid, rand, detail) {
     setConiferBounds(footprint, 0, mesh.geometry, matrices, i);
     if (coniferInView(view, footprint)) include(mesh, tree);
   }
-  function updateDetail(camera) {
+  function updateDetail(camera, travelSpeed, dt) {
     const eye = camera.position;
-    updateUndergrowth(camera, forestQuality.name);
+    updateUndergrowth(camera, forestQuality.name, travelSpeed, dt);
     updateNeedles(eye);
     const scale = forestQuality.detail.value;
     const moved = scale !== detailScale || lastEye.distanceToSquared(eye) >= 25;
@@ -865,7 +867,7 @@ function liftSupports(def, lateral, grid) {
     const b = positions[Math.min(positions.length - 1, i + 1)];
     const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
     const terminal = i === 0 || i === positions.length - 1;
-    const height = terminal ? (def.type === 'p2p' ? (i===0 ? 6.6 : 7.5) : def.type === 'chair' ? 2.85 : 3.65)
+    const height = terminal ? (def.type === 'p2p' ? (i===0 ? 6.6 : BLACKCOMB_PEAK_TERMINAL.track) : def.type === 'chair' ? 2.85 : 3.65)
       : def.type === 'p2p' ? [0, 35, 65, 39, 35][i] : def.type === 'chair' ? 11.5 : 13.5;
     const ground = i === 0 && def.type === 'p2p' ? heightAt(begin.surveyX, begin.surveyZ) : heightAt(x, z);
     // The upper Excalibur rope crosses above the lower Blackcomb line.
@@ -2491,9 +2493,14 @@ export async function buildEnvironment(scene, { onProgress = () => {}, quality }
   onProgress(0.65, 'Hanging the trail signs…');
   await frame();
   const terminalLods = [];
+  let blackcombDeckAt, blackcombInteriorAt;
   for (const def of LIFTS.filter((lift) => lift.aerial)) {
     for (const index of [0, def.points.length - 1]) {
       const terminal = buildTerminal(scene, grid, markers, def, index);
+      if (def.id === PEAK_TO_PEAK && index > 0) {
+        blackcombDeckAt = terminal.userData.walkSurfaceAt;
+        blackcombInteriorAt = terminal.userData.interiorAt;
+      }
       if (terminal?.userData.terminalDetail) terminalLods.push(terminal.userData.terminalDetail);
     }
   }
@@ -2536,13 +2543,18 @@ export async function buildEnvironment(scene, { onProgress = () => {}, quality }
     alpineCliffs, glacierCave,
     walkSurfaceAt(x, z, y) {
       return glacierCave.walkSurfaceAt(x,z,y) ?? skiersPlaza.walkSurfaceAt(x,z,y) ?? creeksideFloor(x,z,y)
-        ?? roundhouseArrival.walkSurfaceAt(x,z,y) ?? interiors.walkSurfaceAt(x,z,y);
+        ?? roundhouseArrival.walkSurfaceAt(x,z,y) ?? blackcombDeckAt?.(x,z,y) ?? interiors.walkSurfaceAt(x,z,y);
     },
     async prepareArrival({ x, z }) {
       await Promise.all([fairmont.prepareArrival(x, z), creeksideVillage.prepareArrival(x, z)]);
     },
-    raisedPadAt: roundhouseArrival.raisedPadAt,
-    interiorAt(x, z, y) { return glacierCave.interiorAt(x,z,y) ?? interiors.interiorAt(x,z,y); },
+    raisedPadAt(x, z, y) {
+      return roundhouseArrival.raisedPadAt(x,z,y) ?? blackcombDeckAt?.(x,z,y);
+    },
+    interiorAt(x, z, y) {
+      return glacierCave.interiorAt(x,z,y) ?? roundhouseArrival.peakInteriorAt(x,z,y)
+        ?? blackcombInteriorAt?.(x,z,y) ?? interiors.interiorAt(x,z,y);
+    },
     get budget() { return detail.budget; },
     setQuality(name) {
       const budget = name === 'BUDGET';
@@ -2555,7 +2567,7 @@ export async function buildEnvironment(scene, { onProgress = () => {}, quality }
     queryColliders(x, z, r = 3) { return grid.query(x, z, r); },
     clipCameraArm: cameraClipper(grid.query.bind(grid), cameraObstacles),
     pointInBox,
-    update(dt, time, camera) {
+    update(dt, time, camera, travelSpeed = 0) {
       clock = time;
       glacierCave.update(time,camera);
       fairmont.update(dt,time,camera);
@@ -2573,7 +2585,7 @@ export async function buildEnvironment(scene, { onProgress = () => {}, quality }
       people.update(dt,time,camera);
       if (!camera || Math.hypot(camera.position.x-488,camera.position.z-4844)<1050) roundhouseArrival.update(time);
       if (!camera || camera.position.z>4400 && camera.position.z<6250) updateSummitSigns(time);
-      if (camera) forest.updateDetail(camera);
+      if (camera) forest.updateDetail(camera, travelSpeed, dt);
       lifts.update(time, camera);
       stationOperations.update(time, camera);
       flags.update(time);

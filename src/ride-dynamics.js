@@ -91,7 +91,7 @@ export function boardContact(rider, dt, input, normal, speed) {
   const float = boardFloat(model);
   const powderDrag = surface.powder * (.68 - .40 * smoothstep(2, 15, speed)) / float;
   const glide = GRAVITY * ny * .039 * surface.drag + powderDrag;
-  const drag = lerp(.0038, .00245, rider.tuckAmount) * surface.drag * setup.drag;
+  const drag = lerp(.0038, .00245, rider.tuckAmount) * surface.drag * setup.drag / (rider.shellSpeed ** 2);
   const alongAfter = resist(along, (glide + drag * along * along + (braking ? 3.7 * grip : 0)) * dt);
   // Edge shear dissipates the cross-board speed. When braking, less of the
   // remaining motion is redirected across the hill by the rotating board.

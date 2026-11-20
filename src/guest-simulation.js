@@ -5,6 +5,7 @@ import { clamp, smoothstep } from './util.js';
 import { createGuestNavigation, guestClear, makeGuestPath, sampleGuestPath, turnDelta } from './guest-navigation.js';
 
 const STEP = 1 / 20;
+const MAX_MOTION_FRAME = .12;
 const CELL = 12;
 const GUEST_RADIUS = .48;
 const mix = (a, b, t) => a + (b - a) * t;
@@ -22,7 +23,7 @@ export function createGuestSimulation({ grid, lifts, queueSlots, interiors, pers
   const nav = createGuestNavigation(grid), stations = [], routes = [], guests = [], cafes = new Map();
   const traffic = new Map(), trafficPool = [], routePoint = {}, renderPose = {};
   const cablePos = new THREE.Vector3(), tangent = new THREE.Vector3(), carrierState = {};
-  let now, alpha = 0, stats = statsTemplate(), elapsed = 0;
+  let now, lastFrame, alpha = 0, stats = statsTemplate(), elapsed = 0;
   let warm = false, snowline = -Infinity;
 
   const stationPose = (station, id, time, out) => {
@@ -439,33 +440,34 @@ export function createGuestSimulation({ grid, lifts, queueSlots, interiors, pers
       seed();
       for (const station of stations) for (const lane of station.lanes) lane.lastEvent = undefined;
       for (const p of people) if (p.kind !== 'lap') p.crashTime = p.recovery = p.immunity = 0;
-      now = undefined;
+      now = lastFrame = undefined;
       elapsed = alpha = 0;
       traffic.clear();
     },
     advance(time, density) {
       warm = climateUniforms.snowpack.value < .8;
       snowline = climateUniforms.snowline.value + 100;
-      if (now === undefined || time < now) {
+      if (lastFrame === undefined || time < lastFrame) {
         now = time;
         rebuildTraffic(density);
       }
+      const skipped = Math.max(0, time - (lastFrame ?? time) - MAX_MOTION_FRAME);
+      lastFrame = time;
+      if (skipped > 0) {
+        // Drop motion time before stepping so a stall cannot produce a second
+        // burst of movement on the first on-time frame. Lifts use wall time.
+        now += skipped;
+        for (const p of guests) if (p.ride && !groundedGuest(p)) {
+          const end = p.ride.exit + p.station.offDuration;
+          if (now >= end) updateRider(p, end);
+        } else if (p.state === 'cafe') p.restStart += skipped;
+      }
       // Use the actual carrier clock for the per-frame pose, with fixed steps
-      // for terrain movement and decisions. Brief rAF gaps still cross events.
-      const limit = Math.min(time, now + .25);
-      while (now + STEP <= limit + 1e-8) {
+      // for terrain movement and decisions.
+      while (now + STEP <= time + 1e-8) {
         now += STEP;
         elapsed += STEP;
         step(now, STEP, density);
-      }
-      if (time > now + .4) {
-        const skipped = time - now;
-        for (const p of guests) if (p.ride) {
-          // Leave at the actual terminal on a long inactive-tab gap instead
-          // of following a departing carrier back around past the unload.
-          if (now < p.ride.exit && time > p.ride.exit) updateRider(p, p.ride.exit + p.station.offDuration);
-        } else if (p.state === 'cafe') p.restStart += skipped;
-        now = time;
       }
       alpha = clamp((time - now) / STEP, 0, 1);
     },

@@ -6,9 +6,9 @@ import { canvasTexture, makeCanvas } from './util.js';
 const slots = {
   goggles: { label: 'Goggles', side: 'left', point: [0, .14, .16], angle: -.25 },
   helmet: { label: 'Helmet', side: 'right', point: [.05, .237, .085] },
-  jacket: { label: 'Jacket', side: 'left', point: [-.083, .313, .137], angle: -.27 },
-  backpack: { label: 'Backpack', side: 'right', point: [0, 0, 0], angle: 2.7 },
-  pants: { label: 'Pants', side: 'left' },
+  jacket: { label: 'Jacket', side: 'left', point: [-.154, .351, -.102], angle: -.27, behind: true },
+  backpack: { label: 'Backpack', side: 'right', point: [0, 0, 0], angle: 2.7, behind: true },
+  pants: { label: 'Pants', side: 'left', behind: true },
   skis: { label: 'Skis', side: 'left', point: [0, .016, .64], angle: -.4 },
   snowboard: { label: 'Snowboard', side: 'right', point: [0, .02, .51], angle: -.55 },
 };
@@ -17,8 +17,11 @@ const orbitAngle = -.39;
 const displayPose = { speed: 0, steer: 0, tuck: 0, brake: 0, grab: 0, grounded: true, display: true };
 const ns = 'http://www.w3.org/2000/svg';
 const turnPeriod = 2 * Math.PI;
+const leaderInk = new THREE.Color('#b5bdb0');
+const endpointInk = new THREE.Color('#eff0e7');
+const selectedInk = new THREE.Color('#e2cb83');
 
-function createStudio(canvas) {
+function createStudio(canvas, mountainRenderer) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -63,11 +66,28 @@ function createStudio(canvas) {
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, .04, 15);
   camera.position.set(.19, 2.21, 4.76);
   camera.lookAt(.19, .84, 0);
+  const rearLeaders = new Map();
+  const endpointGeometry = new THREE.CircleGeometry(1, 18);
+  for (const [slot, { behind }] of Object.entries(slots)) {
+    if (!behind) continue;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3).setUsage(THREE.DynamicDrawUsage));
+    const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({
+      color: leaderInk, transparent: true, opacity: .66, depthWrite: false, toneMapped: false,
+    }));
+    line.frustumCulled = false;
+    const dot = new THREE.Mesh(endpointGeometry, new THREE.MeshBasicMaterial({
+      color: endpointInk, depthWrite: false, toneMapped: false,
+    }));
+    line.visible = dot.visible = false;
+    scene.add(line, dot);
+    rearLeaders.set(slot, { line, dot });
+  }
   const ray = new THREE.Raycaster();
   const vector = new THREE.Vector3();
   const pantsPoint = new THREE.Vector3();
   const candidates = [rig.group, spare];
-  let spareSlot, spareKey, compact = false;
+  let spareSlot, spareKey, compact = false, screenWidth = 1, screenHeight = 1;
 
   function placeSpare() {
     const skis = spareSlot === 'skis';
@@ -81,6 +101,16 @@ function createStudio(canvas) {
     const trousers = rig.gearAnchors.pants.geometry;
     trousers.computeBoundingBox();
     trousers.boundingBox.getCenter(pantsPoint);
+    const centerX = pantsPoint.x, centerY = pantsPoint.y;
+    const vertices = trousers.attributes.position;
+    let rearScore = Infinity;
+    for (let i = 0; i < vertices.count; i++) {
+      const x = vertices.getX(i), y = vertices.getY(i), z = vertices.getZ(i);
+      const score = z + Math.abs(y - centerY) + Math.abs(x - centerX) * .7;
+      if (score >= rearScore) continue;
+      rearScore = score;
+      pantsPoint.set(x, y, z - .008);
+    }
     spareSlot = appearance.discipline === 'snowboard' ? 'skis' : 'snowboard';
     const model = appearance[spareSlot];
     const key = spareSlot + model;
@@ -104,6 +134,8 @@ function createStudio(canvas) {
   }
 
   function resize(width, height) {
+    screenWidth = width;
+    screenHeight = height;
     const aspect = width / Math.max(1, height);
     compact = width < 460;
     placeSpare();
@@ -113,13 +145,23 @@ function createStudio(canvas) {
     camera.left = -extent * aspect;
     camera.right = extent * aspect;
     camera.updateProjectionMatrix();
-    const dpr = Math.min(devicePixelRatio || 1, 1.5, Math.sqrt(1048576 / (width * height)));
-    renderer.setPixelRatio(dpr);
-    renderer.setSize(width, height, false);
+    // Preserve embroidery detail on larger displays without exceeding the
+    // resolution the player uses on the mountain. Small game viewports still
+    // get enough studio pixels to inspect the equipment.
+    const game = mountainRenderer?.domElement;
+    const pixels = Math.min(2560 * 1440, Math.max(1024 ** 2, game ? game.width * game.height : 0));
+    const dpr = Math.min(devicePixelRatio || 1, 2, Math.sqrt(pixels / (width * height)));
+    if (canvas.width !== Math.floor(width * dpr) || canvas.height !== Math.floor(height * dpr)) {
+      renderer.setDrawingBufferSize(width, height, dpr);
+    }
   }
 
-  function render(angle) {
+  function rotate(angle) {
     rig.group.rotation.y = angle;
+    camera.updateMatrixWorld();
+  }
+
+  function render() {
     renderer.render(scene, camera);
   }
 
@@ -130,7 +172,27 @@ function createStudio(canvas) {
     else if (node) node.localToWorld(vector.copy(node.userData.labelPoint ?? vector.fromArray(slots[slot].point)));
     else return null;
     vector.project(camera);
-    return [(vector.x + 1) * x / 2, (1 - vector.y) * y / 2];
+    return [(vector.x + 1) * x / 2, (1 - vector.y) * y / 2, vector.z];
+  }
+
+  function positionRearLeader(slot, startX, startY, elbowX, point, active) {
+    const { line, dot } = rearLeaders.get(slot);
+    const positions = line.geometry.attributes.position;
+    // Place the elbow line in screen space at the attachment's depth so the
+    // rotating skier naturally covers any portions behind their silhouette.
+    const [x, y, depth] = point;
+    for (const [i, px, py] of [[0, startX, startY], [1, elbowX, startY], [2, x, y]]) {
+      vector.set(px * 2 / screenWidth - 1, 1 - py * 2 / screenHeight, depth - .0005).unproject(camera);
+      positions.setXYZ(i, vector.x, vector.y, vector.z);
+    }
+    positions.needsUpdate = true;
+    dot.position.copy(vector);
+    dot.quaternion.copy(camera.quaternion);
+    dot.scale.setScalar(2.6 * (camera.top - camera.bottom) / screenHeight);
+    dot.material.color.copy(active ? selectedInk : endpointInk);
+    line.material.color.copy(active ? selectedInk : leaderInk);
+    line.material.opacity = active ? .97 : .66;
+    dot.visible = line.visible = true;
   }
 
   function pick(x, y) {
@@ -151,7 +213,7 @@ function createStudio(canvas) {
     }
   }
 
-  return { setAppearance, resize, render, anchor, pick };
+  return { setAppearance, resize, rotate, render, anchor, positionRearLeader, pick };
 }
 
 export function createCharacterCustomizer(outfitter) {
@@ -195,17 +257,20 @@ export function createCharacterCustomizer(outfitter) {
   const error = dialog.querySelector('.customizer-preview-error');
   const motion = dialog.querySelector('.customizer-motion');
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-  const hotspots = Object.entries(slots).map(([slot, { label, side }]) => {
+  const hotspots = Object.entries(slots).map(([slot, { label, side, behind }]) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.dataset.slot = slot;
     button.dataset.side = side;
     button.textContent = label;
     button.onclick = () => select(slot);
-    const line = document.createElementNS(ns, 'path');
-    const endpoint = document.createElementNS(ns, 'circle');
-    endpoint.setAttribute('r', '2.6');
-    lines.append(line, endpoint);
+    let line, endpoint;
+    if (!behind) {
+      line = document.createElementNS(ns, 'path');
+      endpoint = document.createElementNS(ns, 'circle');
+      endpoint.setAttribute('r', '2.6');
+      lines.append(line, endpoint);
+    }
     hotspotGroup.append(button);
     return { slot, side, button, line, endpoint };
   });
@@ -251,9 +316,11 @@ export function createCharacterCustomizer(outfitter) {
         const [x, y] = item.anchor;
         const elbow = endX + (x - endX) * .69;
         item.button.style.transform = `translate(${left ? margin : width - margin - w}px, ${Math.round(item.top)}px)`;
-        item.line.setAttribute('d', `M${endX},${endY} H${elbow} L${x},${y}`);
-        item.endpoint.setAttribute('cx', x);
-        item.endpoint.setAttribute('cy', y);
+        if (item.line) {
+          item.line.setAttribute('d', `M${endX},${endY} H${elbow} L${x},${y}`);
+          item.endpoint.setAttribute('cx', x);
+          item.endpoint.setAttribute('cy', y);
+        } else studio.positionRearLeader(item.slot, endX, endY, elbow, item.anchor, item.slot === selected);
       }
     }
     const bounds = lines.viewBox.baseVal;
@@ -282,8 +349,9 @@ export function createCharacterCustomizer(outfitter) {
       dirty = true;
     }
     if (dirty && width && height) {
-      studio.render(angle);
+      studio.rotate(angle);
       positionHotspots();
+      studio.render();
       dirty = false;
     }
     if (auto || targetAngle !== null) queueFrame();
@@ -433,8 +501,8 @@ export function createCharacterCustomizer(outfitter) {
     selection.textContent = slots[selected].label;
     for (const { slot, button, line, endpoint } of hotspots) {
       button.setAttribute('aria-pressed', String(slot === selected));
-      line.classList.toggle('is-selected', slot === selected);
-      endpoint.classList.toggle('is-selected', slot === selected);
+      line?.classList.toggle('is-selected', slot === selected);
+      endpoint?.classList.toggle('is-selected', slot === selected);
     }
     const fragment = document.createDocumentFragment();
     const groupTitle = selected === 'backpack' ? 'Model' : selected === 'goggles' ? 'Smith × Supreme' : '';
@@ -595,7 +663,7 @@ export function createCharacterCustomizer(outfitter) {
     lastTime = 0;
     notice.textContent = '';
     if (!studio && !openError) {
-      try { studio = createStudio(canvas); }
+      try { studio = createStudio(canvas, outfitter.renderer); }
       catch (error) {
         console.warn('3D outfitter preview could not start', error);
         openError = true;

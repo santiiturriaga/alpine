@@ -61,6 +61,23 @@ TEST = '''async () => {
     const jones=boards['jones-flagship'], burton=boards['burton-custom-camber'];
     check(jones.sink<burton.sink && jones.speed>burton.speed && jones.turn<burton.turn && jones.pop<burton.pop,
         'directional board and camber twin behaved identically');
+    // The first push and a low-speed change of leading foot must preserve
+    // camera distance and facing, including when looking around on the board.
+    p.teleport({x:0,z:0,heading:0,holdAtUnload:true});
+    p.snapCamera();
+    const horizontalArm=()=>Math.hypot(camera.position.x-p.pos.x,camera.position.z-p.pos.z);
+    const unloadArm=horizontalArm();
+    step(1,{tuck:true});
+    check(Math.abs(horizontalArm()-unloadArm)<.15,'snowboard camera jumped on push-off');
+    for(const mode of [0,2]) {
+        p.cameraMode=mode; p.speed=1.35; p.lookYaw=.27; p.setSwitchStance(false);
+        p.vel.set(0,0,1.35); p.snapCamera();
+        const oldFacing=camera.getWorldDirection(new THREE.Vector3());
+        p.setSwitchStance(true); p.vel.z=-1.35; p.updateCamera(1/60);
+        const yaw=v=>Math.atan2(v.x,v.z), change=yaw(camera.getWorldDirection(new THREE.Vector3()))-yaw(oldFacing);
+        check(Math.abs(Math.atan2(Math.sin(change),Math.cos(change)))<.04,'lead-foot swap swung the camera');
+    }
+    p.cameraMode=0; p.lookYaw=0; seed();
     const contact = createSkiSnowSurface({
         snowMaps:{}, heightAt:ground.heightAt.bind(ground), surfaceAt:ground.surfaceAt.bind(ground),
         sampleSurface(x,z,color,normal) {color.set('#ffffff'); ground.normalAt(x,z,normal); return ground.heightAt(x,z);}, setCutout() {}
@@ -97,7 +114,8 @@ TEST = '''async () => {
     check(speedAfter < speedBefore*.25,'the edge did not stop the board');
     seed(); p.vel.z=15;
     step(1,{ollie:true});
-    check(p.airborne && p.vy>4,'board ollie was not launched');
+    check(p.airborne && (p.vy + ground.slope * p.vel.z) / Math.hypot(1, ground.slope)>4,
+        'board ollie was not launched away from the slope');
     step(140);
     check(p.grounded && !p.crash && p.stats.longestAir>.4,'board did not land');
     seed(); p.vel.z=14; step(1,{ollie:true});

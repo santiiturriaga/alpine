@@ -216,6 +216,7 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
     region: config.id,
     heightAt: ground.heightAt,
     treesAt: env.queryColliders,
+    forestFloor: (x, z) => ground.forestAt(x, z) > .38,
     permits: (x, z) => x > minX + 1 && z > minZ + 1 && x < maxX - 1 && z < maxZ - 1
       && ground.forestAt(x, z) > .24 && !excluded(x, z),
   }) : null;
@@ -241,9 +242,9 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
   if (!patches.size) {
     shadows.finish();
     cacheStaticTransforms(group);
-    return { group, count, setQuality, updateShadows: shadows.update, update(camera) {
+    return { group, count, setQuality, updateShadows: shadows.update, update(camera, travelSpeed, dt) {
       hardwoods?.update(camera, qualityName);
-      updateUndergrowth?.(camera, qualityName);
+      updateUndergrowth?.(camera, qualityName, travelSpeed, dt);
     } };
   }
   await crownAtlas;
@@ -371,9 +372,9 @@ export async function buildMappedForest(scene, ground, config, env, initialQuali
     // The cache also covers a 4.24 m move and a .08 radian view rotation.
     if (coniferInView(view, treeFootprint, 0, 4.33 + .081 * reach)) setTree(mesh, mesh.count++);
   }
-  function update(camera) {
+  function update(camera, travelSpeed, dt) {
     hardwoods?.update(camera, qualityName);
-    updateUndergrowth?.(camera, qualityName);
+    updateUndergrowth?.(camera, qualityName, travelSpeed, dt);
     const eye = camera.position;
     if (last.distanceToSquared(eye) < 18 && lastFacing.angleTo(camera.quaternion) < .08
       && quality === oldQuality && lastProjection.equals(camera.projectionMatrix)) return;

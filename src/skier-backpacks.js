@@ -37,9 +37,9 @@ export function buildSkierBackpack(torso, {
 
   for (const side of [-1, 1]) {
     piping(harness, bagPanel, [[side*.075,.438,-.159],[side*.094,.481,-.113],
-      [side*.103,.535,-.074],[side*.107,.577,-.002],[side*.105,.542,.07],
-      ...jacketFront([[side*.107,.491],[side*.127,.406],[side*.133,.277],[side*.139,.175]], .0056)], .0102);
-    piping(harness, seamThread, jacketFront([[side*.102,.467],[side*.123,.395],[side*.13,.277]], .0147), .0011);
+      [side*.115,.535,-.074],[side*.119,.577,-.002],[side*.124,.542,.07],
+      ...jacketFront([[side*.121,.491],[side*.137,.406],[side*.133,.277],[side*.139,.175]], .0056)], .0102);
+    piping(harness, seamThread, jacketFront([[side*.124,.467],[side*.133,.395],[side*.13,.277]], .0147), .0011);
     rounded(harness, black, .024, .026, .010, ...jacketFront([[side*.135,.231],[side*.135,.23]], .015)[0], .0026);
   }
   piping(harness, black, jacketFront([[-.132,.326],[-.056,.325],[0,.324],[.066,.325],[.132,.326]], .012), .006);
@@ -57,7 +57,7 @@ export function buildSkierBackpack(torso, {
       put(pack, shell([[.035,.050,.028,-.157],[.065,.090,.043,-.166],[.14,.125,.071,-.174],
         [.232,.131,.076,-.177],[.317,.133,.070,-.165],[.39,.121,.061,-.157],
         [.457,.107,.052,-.147],[.493,.078,.028,-.141],[.502,.039,.011,-.137]], .023), bag);
-      const mark = embroideredMaterial(bagPanel, 'fossil', 0, .31, .138, true);
+      const mark = embroideredMaterial(bagPanel, 'micon-pack');
       const face = put(pack, shell([[.081,.053,.018,-.205],[.132,.092,.040,-.215],[.22,.106,.047,-.215],
         [.298,.106,.046,-.211],[.363,.099,.036,-.196],[.405,.065,.024,-.187],[.436,.034,.010,-.172]], .022), mark);
       for (const side of [-1, 1]) {

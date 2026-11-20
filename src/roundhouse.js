@@ -747,7 +747,12 @@ function peakTerminal(scene, grid, lift) {
     const dx=x-terminal.position.x,dz=z-terminal.position.z;
     return {u:dx*c-dz*s,v:dx*s+dz*c};
   }
-  return { operator, walkSurfaceAt(x,z,y) {
+  const interior = { id: 'peak-to-peak-whistler', kind: 'lift-terminal' };
+  return { operator, interiorAt(x,z,y) {
+    if (y < level - .28 || y > level + 3.6) return null;
+    const { u, v } = local(x,z);
+    return u >= -w && u <= w && v >= -d && v <= d ? interior : null;
+  }, walkSurfaceAt(x,z,y) {
     const {u,v}=local(x,z);
     if(v>d+threshold) return apronAt(u,v,x,z);
     if(y<level-.7)return null;
@@ -1083,5 +1088,6 @@ export function buildRoundhouseArrival(scene, grid, lifts) {
   const ridge=ridgeView(scene,grid);
   return { update:plazaFixtures(scene,grid), operators:[village.operator,peak.operator],
     raisedPadAt:peak.walkSurfaceAt,
+    peakInteriorAt: peak.interiorAt,
     walkSurfaceAt(x,z,y) { return olympic(x,z,y)??peak.walkSurfaceAt(x,z,y)??village.walkSurfaceAt(x,z,y)??ridge(x,z,y); } };
 }

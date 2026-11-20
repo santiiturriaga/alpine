@@ -5,7 +5,7 @@ const sightline = { value: new Vector4(0, 0, 0, 0) };
 
 export function updateChaseFoliage(camera, player) {
   const line = sightline.value;
-  if (!player || player.cameraMode === 2) {
+  if (!player || player.cameraMode === 2 || player.walkCameraTight) {
     line.w = 0;
     return;
   }

@@ -120,6 +120,8 @@ function ownRenderedParts(rider) {
   };
   function ownMaterial(material) {
     const local = copy(material);
+    local.onBeforeCompile = material.onBeforeCompile;
+    local.customProgramCacheKey = material.customProgramCacheKey;
     for (const [key, value] of Object.entries(material)) {
       if (value?.isTexture) local[key] = copy(value);
     }

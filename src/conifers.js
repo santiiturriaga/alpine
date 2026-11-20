@@ -22,7 +22,7 @@ let needleAtlas, closeNeedleAtlas;
 // resulting atlas is completely generated from a seed, with no bitmap input.
 // Texture alpha follows the needles and wood. At arm's length the same branch
 // structure carries a separate illustration of its young growth and bare twigs.
-function getNeedleAtlas() {
+export function getNeedleAtlas() {
   if (needleAtlas) return needleAtlas;
   const pixels = new Uint8Array(ATLAS_SIZE * ATLAS_SIZE * 4);
   const detail = new Uint8Array(pixels.length);

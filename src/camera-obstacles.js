@@ -51,7 +51,7 @@ function contact(c, x, y, z, dx, dy, dz) {
 
 // Move in over the shoulder when a chase camera would pass through the
 // lower branches. A grazing bough shortens the arm progressively.
-function canopyFraction(tree, x, y, z, dx, dy, dz, length) {
+function canopyFraction(tree, x, y, z, dx, dy, dz, length, walking) {
   const ox = tree.x - x, oz = tree.z - z;
   const horizontal = dx * dx + dz * dz;
   if (horizontal < .01 || length < 1.4) return 1;
@@ -62,13 +62,17 @@ function canopyFraction(tree, x, y, z, dx, dy, dz, length) {
   const width = tree.stretch ?? tree.spread ?? tree.width;
   if (!(height > 0 && width > 0) || !Number.isFinite(tree.y)) return 1;
   const level = (y + onArm * dy - tree.y) / height;
-  if (level < -.03 || level >= .98) return 1;
+  // Mature conifers and broadleaf trees have exposed trunks under the crown.
+  // Numeric variants 3–5 are young conifers with branches closer to the snow.
+  const crownBase = !walking ? -.03 : tree.kind === 'deciduous' ? .22 : tree.kind >= 3 ? .035 : .145;
+  if (level < crownBase || level >= .98) return 1;
   const radius = height * width * .23 * (1 - Math.max(0, level)) ** .85;
   const distance = Math.hypot(ox - onArm * dx, oz - onArm * dz);
   if (distance >= radius) return 1;
   const sideSq = (ox - t * dx) ** 2 + (oz - t * dz) ** 2;
   const entry = t - Math.sqrt(Math.max(0, radius ** 2 - sideSq) / horizontal);
-  const overlap = Math.min(1, (radius - distance) / Math.max(.4, radius * .45));
+  const entrance = walking ? Math.min(1, (level - crownBase) / .075) : 1;
+  const overlap = Math.min(1, (radius - distance) / Math.max(.4, radius * .45)) * entrance;
   const weight = overlap * overlap * (3 - 2 * overlap);
   return 1 - weight * (1 - Math.min(1, Math.max(1.4 / length, entry)));
 }
@@ -82,11 +86,15 @@ export function cameraClipper(query, types) {
     if (branches) branches.fraction = 1;
     for (const c of nearby) {
       if (branches && c.tree) {
-        branches.fraction = Math.min(branches.fraction, canopyFraction(c.tree, x, y, z, dx, dy, dz, length),
-          contact(c, x, y, z, dx, dy, dz));
+        const trunk = contact(c, x, y, z, dx, dy, dz);
+        if (branches.walking) nearest = Math.min(nearest, trunk);
+        branches.fraction = Math.min(branches.fraction, canopyFraction(c.tree, x, y, z, dx, dy, dz, length, branches.walking),
+          branches.walking ? 1 : trunk);
         continue;
       }
-      if (!types || types.has(c.type)) nearest = Math.min(nearest, contact(c, x, y, z, dx, dy, dz));
+      if (!types || types.has(c.type) || (branches?.walking && c.type === 'landmark-tree')) {
+        nearest = Math.min(nearest, contact(c, x, y, z, dx, dy, dz));
+      }
     }
     if (nearest < 1) eye.set(x + dx * nearest, y + dy * nearest, z + dz * nearest);
     return nearest * length;

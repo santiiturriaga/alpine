@@ -10,7 +10,7 @@ import { DEFAULT_GOGGLES, GOGGLES, isGoggleColor } from './ski-goggles.js';
 // the same currency. Purchases and the resulting equipped pair save together.
 const key='alpine.outfitter.v1';
 const colors={jacket:[['Clay','#ad4939'],['Alpine blue','#3b7190'],['Spruce','#3d6e54'],['Ochre','#ce933e'],['Graphite','#404348'],
-    ['The North Face · Summit shell','summit-shell']],
+    ['The North Face · Summit shell · +8% downhill speed','summit-shell']],
   pants:[['Slate','#323e48'],['Sand','#a89a81'],['Navy','#24364a']],helmet:[['Chalk','#d6d6d1'],['Charcoal','#333a40'],['Copper','#9a6852']],
   backpack:[['Black','#24282a'],['Charcoal','#363d40'],['Cedar','#694e42'],['Ochre','#bc8340']]};
 const questJackets = {
@@ -80,6 +80,7 @@ export class Outfitter {
       backpackModel:s.backpackModel, skis:s.skis, snowboard:s.snowboard, discipline:s.discipline, stance:s.stance, sticker:s.sticker };
     const patrol=s.outfit.jacket===patrolShell;
     this.player.landingTrickMultiplier=patrol?2:1;
+    this.player.shellSpeed=s.outfit.jacket==='summit-shell'?1.08:1;
     this.player.walkFootwear=s.footwear==='traverse'?SNOW_SHOES:null;
     this.player.rig.setAppearance?.(this.appearance);
     if(this.dialog.open)this.drawPreview();

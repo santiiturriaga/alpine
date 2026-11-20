@@ -6,7 +6,7 @@ import { box, beam, part, cacheStaticTransforms, mergedMesh, mergeParts } from '
 import { makeCanvas, canvasTexture, lerp, mulberry32 } from './util.js';
 import { surfaceMaterial } from './materials.js';
 import { makePeak2PeakBadge } from './lift-stations.js';
-import { LODGE_FRAME, LODGE_CAFE, LODGE_TERRACE, LODGE_ANNEX, terraceStairHeight } from './roundhouse-site.js';
+import { LODGE_FRAME, LODGE_CAFE, LODGE_TERRACE, LODGE_ANNEX, blackcombPeakTerminalSite, terraceStairHeight } from './roundhouse-site.js';
 import { furnishShop } from './shop-interiors.js';
 import { addStoneFloor, addWoolCarpet } from './interior-floors.js';
 
@@ -476,30 +476,82 @@ export function buildLodgeInteriors(scene, grid) {
 }
 
 export function buildBlackcombTerminal(scene, grid, def) {
-  const [x, z] = def.points.at(-1), [px, pz] = def.points.at(-2);
-  const yaw = Math.atan2(px - x, pz - z), y = heightAt(x, z);
+  const { x, z, yaw, width, depth, centerZ, track, deck, entryZ, entryWidth, rampLength } = blackcombPeakTerminalSite(def);
+  const y = heightAt(x, z);
+  const sideWall = width / 2, rear = centerZ - depth / 2, front = centerZ + depth / 2;
+  const leftDoor = entryZ - entryWidth / 2, rightDoor = entryZ + entryWidth / 2;
   const room = { x, z, y, yaw, h: 10, id: 'blackcomb-terminal' };
   const group = new THREE.Group(); group.name = 'PEAK 2 PEAK · Blackcomb mapped terminal';
   group.position.set(x, y, z); group.rotation.y = yaw; scene.add(group);
-  group.userData.station = { id: def.id, base: false, datum: y };
+  group.userData.station = { id: def.id, base: false, datum: y, deck: y + deck };
   const parts = [], steel = [], glass = [];
   // Both ropes terminate inside the roofed drive hall, rather than in open air
   // beside an offset generic building. The mapped cable endpoint is local 0,0.
-  const footing = Math.min(...[-11, 0, 11].flatMap(sx => [-23, -5, 13].map(sz => {
+  const footing = Math.min(...[-sideWall, 0, sideWall].flatMap(sx => [rear, centerZ, front].map(sz => {
     const p = world(room, sx, sz);
     return heightAt(p.x, p.z) - y;
   }))) - .6;
-  parts.push(box(22, -footing, 36, '#8a9090', [0, footing / 2, -5]));
+  // The cabin hangs below the rail. Its boarding level belongs to the hall's
+  // raised deck, clear of the exterior snow at the survey datum.
+  parts.push(box(width, deck - footing, depth, '#858e90', [0, (footing + deck) / 2, centerZ]));
+  const foundation = world(room, 0, centerZ);
+  grid.addBox(foundation.x, foundation.z, width / 2, depth / 2, -yaw, 'station',
+    { room: room.id, minY: y + footing, maxY: y + deck - .24 });
   parts.push(box(23.3, .45, 38, '#e7eeef', [0, 11.5, -5]));
   parts.push(box(22.2, 1.35, 36, '#596770', [0, 10.6, -5]));
   parts.push(box(22, 9.6, .36, '#646c70', [0, 4.8, -23]));
   for (const side of [-1, 1]) {
-    const sx = side * 11;
-    parts.push(box(.35, 1.15, 36, '#7a8386', [sx, .3, -5]));
-    glass.push(box(.055, 8.5, 36, '#668c9e', [sx, 5.3, -5]));
-    collider(grid, room, sx, -5, .4, 36, 'station');
-    for (let localZ = -23; localZ <= 13; localZ += 4) steel.push(box(.2, 10, .22, '#48575e', [sx, 4.8, localZ]));
+    const sx = side * sideWall;
+    const spans = side > 0 ? [[rear, leftDoor], [rightDoor, front]] : [[rear, front]];
+    for (const [from, to] of spans) {
+      const mid = (from + to) / 2, length = to - from;
+      parts.push(box(.35, 1.15, length, '#7a8386', [sx, .3, mid]));
+      glass.push(box(.055, 8.5, length, '#668c9e', [sx, 5.3, mid]));
+      collider(grid, room, sx, mid, .4, length, 'station');
+      const count = Math.ceil(length / 4);
+      for (let i = 0; i <= count; i++) steel.push(box(.2, 10, .22, '#48575e', [sx, 4.8, lerp(from, to, i / count)]));
+    }
   }
+  const header = deck + 2.7;
+  glass.push(box(.055, 9.55 - header, entryWidth, '#668c9e', [sideWall, (header + 9.55) / 2, entryZ]));
+  steel.push(box(.29, .24, entryWidth + .24, '#667881', [sideWall, header, entryZ]));
+  label(group, 'RENDEZVOUS LODGE', 'BOARDING · EXIT', sideWall + .16, header + .43, entryZ, entryWidth, Math.PI / 2);
+
+  const farEdge = sideWall + rampLength;
+  const approach = world(room, farEdge, entryZ);
+  const lastTread = heightAt(approach.x, approach.z) - y + .06;
+  const steps = Math.max(1, Math.ceil(Math.abs(deck - lastTread) / .185));
+  const treadSize = rampLength / steps;
+  const treadAt = index => lerp(deck, lastTread, (index + 1) / steps);
+  for (let step = 0; step < steps; step++) {
+    const top = treadAt(step), base = Math.min(footing, lastTread - .32);
+    const center = sideWall + (step + .5) * treadSize;
+    parts.push(box(treadSize, top - base, entryWidth, '#828c8d', [center, (base + top) / 2, entryZ]));
+    steel.push(box(.04, .017, entryWidth - .12, '#b5baa4', [center + treadSize / 2 - .04, top + .0085, entryZ]));
+  }
+  for (const localZ of [leftDoor, rightDoor]) {
+    steel.push(beam([sideWall, deck + 1, localZ], [farEdge, lastTread + 1, localZ], .068, .07, '#6d7f84'));
+    for (let step = 0; step < steps; step += Math.max(1, Math.round(1.4 / treadSize))) {
+      steel.push(box(.075, 1, .075, '#70828a', [sideWall + step * treadSize, treadAt(step) + .5, localZ]));
+    }
+    collider(grid, room, (sideWall + farEdge) / 2, localZ, rampLength, .09, 'station', Math.max(deck, lastTread) + 1);
+  }
+  group.userData.walkSurfaceAt = (px, pz, currentY) => {
+    const point = transform(room, px, pz);
+    let localHeight;
+    if (Math.abs(point.x) <= sideWall && point.z >= rear && point.z <= front) localHeight = deck;
+    else if (point.x > sideWall && point.x <= farEdge && Math.abs(point.z - entryZ) < entryWidth / 2) {
+      localHeight = treadAt(Math.min(steps - 1, Math.floor((point.x - sideWall) / treadSize)));
+    }
+    if (localHeight === undefined || currentY !== undefined && y + localHeight > currentY + .68) return null;
+    return y + localHeight;
+  };
+  const interior = { id: 'peak-to-peak-blackcomb', kind: 'lift-terminal' };
+  group.userData.interiorAt = (px, pz, currentY) => {
+    if (currentY < y + deck - .28 || currentY > y + 9.55) return null;
+    const point = transform(room, px, pz);
+    return Math.abs(point.x) <= sideWall && point.z >= rear && point.z <= front ? interior : null;
+  };
   collider(grid, room, 0, -23, 22, .4, 'station');
   // Large cable aperture at the valley face, with rollers aligned to both lines.
   for (const sx of [-9.7, 9.7]) parts.push(box(2.6, 9.5, .5, '#5b686d', [sx, 4.75, 13]));
@@ -507,9 +559,9 @@ export function buildBlackcombTerminal(scene, grid, def) {
   for (const sx of [-3.5, 3.5]) {
     for (let localZ = -8; localZ < 11; localZ += 1.6) {
       const wheel = new THREE.CylinderGeometry(.22, .22, .14, 12); wheel.rotateZ(Math.PI / 2);
-      steel.push({ geo: wheel, color: '#37454b', pos: [sx, 7.4, localZ], rot: [0, 0, 0], scale: [1, 1, 1] });
+      steel.push({ geo: wheel, color: '#37454b', pos: [sx, track - .1, localZ], rot: [0, 0, 0], scale: [1, 1, 1] });
     }
-    steel.push(box(.15, .2, 23, '#71818b', [sx, 7.45, 0]));
+    steel.push(box(.15, .2, 23, '#71818b', [sx, track - .05, 0]));
   }
   const peakBadge=makePeak2PeakBadge(8.8,1.55);peakBadge.position.set(0,9.7,13.32);group.add(peakBadge);
   label(group, 'RENDEZVOUS LODGE →', 'EXIT TO BLACKCOMB', 5.4, 2.4, -23.23, 5.2, Math.PI);

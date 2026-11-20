@@ -18,6 +18,7 @@ const pantsColors = [0x293238, 0x3d464e, 0x434459, 0x767061, 0x50605a, 0x382e30]
 const helmetColors = [0xd8d8c9, 0x282f37, 0xbb7060, 0xa5b4b6, 0xe2ba6b];
 const gearColors = [0x416071, 0xb16b46, 0x9a985f, 0x586484];
 const sides = [-1, 1];
+const lineWidths = [1, .55, .2, 0];
 const pick = (values, random) => values[Math.floor(random() * values.length)];
 const gap = (a, b) => Math.hypot(b.x - a.x, b.z - a.z);
 const heading = (a, b) => Math.atan2(b.x - a.x, b.z - a.z);
@@ -435,7 +436,7 @@ export function buildMappedResortPeople(scene, { config, world, liftSystem }) {
   function person(grade, props) {
     const p = {
       id: people.length, trafficSeed: (Math.imul(people.length + 1, 0x9e3779b1) >>> 0) / 4294967296,
-      grade, speed: 0, stride: 0, lean: 0, height: .91 + .17 * random(),
+      grade, speed: 0, stride: 0, lean: 0, bypass: 0, height: .91 + .17 * random(),
       board: random() < (grade === 'green' ? .18 : .35), boardSide: random() < .68 ? -1 : 1,
       jacket: pick(jacketColors[grade], random), pants: pick(pantsColors, random),
       helmet: pick(helmetColors, random), gear: pick(gearColors, random),
@@ -523,6 +524,7 @@ export function buildMappedResortPeople(scene, { config, world, liftSystem }) {
   function startSki(p, distance = 0) {
     p.seated = 0;
     p.foot = false;
+    p.bypass = 0;
     segment(p, 'skiing', p.circuit.path, distance);
     p.heading = groundPoint.heading;
   }
@@ -591,6 +593,11 @@ export function buildMappedResortPeople(scene, { config, world, liftSystem }) {
   }
 
   const model = buildTrafficModel(group, Math.max(1, Math.min(people.length, 72)));
+  const circuitTraffic = new Map();
+  for (const p of people) if (p.circuit) {
+    if (!circuitTraffic.has(p.circuit)) circuitTraffic.set(p.circuit, []);
+    circuitTraffic.get(p.circuit).push(p);
+  }
 
   function nextChair(p) {
     const { lift } = p.station;
@@ -701,8 +708,8 @@ export function buildMappedResortPeople(scene, { config, world, liftSystem }) {
     const target = Math.min(2.25 + Math.sqrt(Math.max(0, slope)) * 19 * skillPace * pace, 18 - Math.abs(bend) * 7,
       2.0 + remaining * .19);
     let speedLimit = target;
-    for (const other of people) {
-      if (other === p || other.state !== 'skiing' || other.circuit !== circuit || other.distance <= p.distance ||
+    for (const other of circuitTraffic.get(circuit)) {
+      if (other.state !== 'skiing' || other.distance <= p.distance ||
         other.distance - p.distance > 6 || Math.abs(other.lane - p.lane) > 2.1) continue;
       speedLimit = Math.min(speedLimit, Math.max(0, (other.distance - p.distance - 1.3) * 2));
     }
@@ -713,30 +720,34 @@ export function buildMappedResortPeople(scene, { config, world, liftSystem }) {
     const amplitude = Math.min(circuit.width * .33, circuit.grade === 'green' ? 2.4 : 3.6);
     const arc = distance * (circuit.grade === 'green' ? .150 : .109) + p.phase;
     const offset = taper * (p.lane + amplitude * Math.sin(arc) * smoothstep(3, 11, p.speed));
-    const side = nearPlayer(p, aim, player, 3.0) && player.speed < 4.5 ? (p.lane < 0 ? -1 : 1) : 0;
-    let track = aim;
-    for (const factor of [1, .55, .2]) {
-      const candidate = shifted(aim, aim.heading, (offset + 2.65 * side) * factor);
+    const yieldRoom = nearPlayer(p, aim, player, 6) ? 1 - smoothstep(3.8, 5.2, player.speed) : 0;
+    const bypass = yieldRoom ? yieldRoom * (1 - smoothstep(2.8, 6, gap(player.pos, aim))) : 0;
+    p.bypass += (bypass - p.bypass) * (1 - Math.exp(-dt * 4));
+    const line = offset + 2.65 * p.bypass * Math.sign(p.lane);
+    const maxStep = 2.05 * dt * Math.max(1.6, p.speed);
+    let track = p;
+    for (const width of lineWidths) {
+      const candidate = width ? shifted(aim, aim.heading, line * width) : aim;
       if (!nav.clear(candidate, .65)) continue;
+      const step = gap(p, candidate);
+      // Narrow the carve where necessary and bound its lateral motion in m/s.
+      if (step > maxStep) {
+        const constrained = mix(p, candidate, maxStep / step);
+        if (!nav.clear(constrained, .65)) continue;
+        track = constrained;
+        break;
+      }
       track = candidate;
       break;
     }
-    // Reduce lateral movement during a rapid change in available trail width.
-    const previous = { x: p.x, z: p.z };
-    const step = gap(previous, track);
-    if (step > 2.05 * dt * p.speed + .19) {
-      const constrained = mix(previous, track, (2.05 * dt * p.speed + .19) / step);
-      if (nav.clear(constrained, .65)) track = constrained;
-      else if (!nav.clear(track, .65)) track = aim;
-    }
-    if (side && nearPlayer(p, track, player, 1.72)) {
+    if (track === p || (yieldRoom && nearPlayer(p, track, player, 1.72) && gap(player.pos, track) <= gap(player.pos, p))) {
       p.speed *= Math.exp(-5 * dt);
       return false;
     }
-    if (!nav.clear(track, .65)) track = aim;
-    if (step > .022) p.heading += turn(p.heading, heading(previous, track)) * (1 - Math.exp(-dt * 7));
+    const step = gap(p, track);
+    if (step > 1e-5) p.heading += turn(p.heading, heading(p, track)) * (1 - Math.exp(-dt * 7));
     p.lean += (clamp(-Math.sin(arc) + bend, -1, 1) - p.lean) * (1 - Math.exp(-dt * 4));
-    p.stride += gap(previous, track);
+    p.stride += step;
     place(p, track);
     p.distance = distance;
     return remaining < .05;
@@ -751,7 +762,7 @@ export function buildMappedResortPeople(scene, { config, world, liftSystem }) {
     }
     const step = gap(p, aim);
     p.speed = step / Math.max(dt, .001);
-    if (step > .02) p.heading += turn(p.heading, aim.heading) * (1 - Math.exp(-dt * 6));
+    if (step > 1e-5) p.heading += turn(p.heading, aim.heading) * (1 - Math.exp(-dt * 6));
     p.lean *= Math.exp(-6 * dt);
     p.stride += step;
     place(p, aim);

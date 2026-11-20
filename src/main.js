@@ -16,6 +16,7 @@ import { setTerrainSamplingBudget } from './materials.js';
 import { compactDevice } from './device-budget.js';
 import * as THREE from 'three';
 import { buildTerrain, heightAt, normalAt, surfaceAt, treeCoverAt } from './terrain.js';
+import { createRiderShadow } from './rider-shadow.js';
 import { buildEnvironment } from './environment.js';
 import { buildForestLines } from './forest-lines.js';
 import { setForestQuality } from './forest-lod.js';
@@ -53,7 +54,7 @@ import {
   FITZSIMMONS, PEAK_TO_PEAK, VILLAGE_GONDOLA_UPPER, PEAK_EXPRESS, RUNS, VILLAGE_START, COME_ALONG_START, startPose, runFromSource, runPointAt, FINISHES, WORLD,
 } from './worlddata.js';
 import { clamp, formatNumber, wrapAngle } from './util.js';
-import { stationPoint, stationSite } from './station-sites.js';
+import { peakToPeakAccess, stationPoint, stationSite } from './station-sites.js';
 import { ALPINE_CLIFF_START } from './alpine-cliffs.js';
 import { GLACIER_CAVE_START } from './glacier-cave.js';
 
@@ -94,6 +95,7 @@ let outfitter,fieldNotes,shopReturn=null;
 let wildlife,expeditions,multiplayer,quests;
 let skiPatrol;
 let player, collectibles, audio, ui, climate, challenges;
+let riderShadow;
 let updateConditionsClock;
 let travelTracker, snowTraffic;
 const capturingIntro = query.get('intro') === 'capture';
@@ -244,6 +246,8 @@ async function boot() {
     mountainAt: position => mountainAt(position.x, position.z),
   });
   outfitter=new Outfitter(player,closeShop,renderer);
+  riderShadow=createRiderShadow(renderer,lighting,player);
+  outfitter.dialog.addEventListener('outfitterchange', riderShadow.equipmentChanged);
   outfitter.dialog.addEventListener('outfitterchange', () => ride?.cabin?.setGear(outfitter.appearance));
   multiplayer=createMultiplayer(scene,'whistler-blackcomb',()=>player);
   challenges.onWin=id=>{const coins=id==='avalanche'?12:id==='race'?8:5;outfitter.credit(coins);
@@ -828,12 +832,12 @@ function keepExploring() {
 
 const liftDestinations = {
   [FITZSIMMONS]: { label: 'Fitzsimmons top · Fitz to Lower Olympic', trail: 'way/1174890341' },
-  [PEAK_TO_PEAK]: { label: 'Rendezvous Lodge · Blackcomb', pose: { x: 3821, z: 1914, heading: -1.99, holdAtUnload: true } },
+  [PEAK_TO_PEAK]: { label: 'Rendezvous Lodge · Blackcomb' },
   [PEAK_EXPRESS]: { label: 'Whistler Peak · Top of the World', pose: { x: -283, z: 5976, heading: .9, holdAtUnload: true } },
   [VILLAGE_GONDOLA_UPPER]: { label: 'Roundhouse Lodge · Whistler', pose: startPose() },
   'way-29362437': { label: 'Rendezvous Lodge · Blackcomb', trail: 'way/39993424' },
 };
-const roundhouse = { label: 'Roundhouse Lodge · Whistler', pose: { x: 531, z: 4862, heading: 2.22 } };
+const roundhouse = { label: 'Roundhouse Lodge · Whistler' };
 
 function liftDestination(lift, direction) {
   return direction ? roundhouse : liftDestinations[lift.def.id] || { label: lift.def.type === 'surface' ? 'Top of the track' : 'Upper station' };
@@ -841,13 +845,14 @@ function liftDestination(lift, direction) {
 
 function nearbyLifts(atFinish = false) {
   if (!player.grounded || player.crash || (!atFinish && player.speedKmh > 22)) return [];
-  if (env.interiorAt?.(player.pos.x, player.pos.z, player.pos.y)) return [];
+  const room = env.interiorAt(player.pos.x, player.pos.z, player.pos.y);
+  if (room && room.kind !== 'lift-terminal') return [];
   const choices = [];
   for (const lift of env.lifts.lifts) {
-    if (!lift.def.rideable) continue;
+    if (!lift.def.rideable || room && lift.def.id !== PEAK_TO_PEAK) continue;
     const last = lift.def.points.length - 1;
     for (const direction of lift.def.type === 'p2p' ? [0, 1] : [0]) {
-      const site = stationSite(lift.def, direction ? last : 0);
+      const site = lift.def.id === PEAK_TO_PEAK ? peakToPeakAccess(lift.def, direction).board : stationSite(lift.def, direction ? last : 0);
       const distance = Math.hypot(player.pos.x - site.x, player.pos.z - site.z);
       const radius = lift.def.type === 'surface' ? 13 : lift.def.type === 'p2p' ? 72 : 52;
       if (distance <= radius) choices.push({ lift, direction, distance });
@@ -863,13 +868,20 @@ function selectedBoard(choices) {
 
 function clearLiftLanding(x, z) {
   const y = heightAt(x, z);
-  return !env.grid.buildingsAt(x, z).length && !env.interiorAt(x, z, y) &&
-    !env.queryColliders(x, z, 3).some(c => y >= (c.minY ?? -Infinity) && y <= (c.maxY ?? Infinity) &&
-      (c.r ? Math.hypot(c.x - x, c.z - z) < c.r + .8 : env.pointInBox(x, z, c, .7, .7)));
+  return !env.grid.buildingsAt(x, z).length && !env.interiors.interiorAt(x, z) && !env.interiorAt(x, z, y) && clearLiftBody(x, z, y);
+}
+
+function clearLiftBody(x, z, y, margin = .7) {
+  return !env.queryColliders(x, z, 3).some(c => y >= (c.minY ?? -Infinity) && y <= (c.maxY ?? Infinity) &&
+    (c.r ? Math.hypot(c.x - x, c.z - z) < c.r + margin + .1 : env.pointInBox(x, z, c, margin, margin)));
 }
 
 function liftBoardingArrival(lift, end) {
   const { def } = lift;
+  if (def.id === PEAK_TO_PEAK) {
+    const { board } = peakToPeakAccess(def, end !== 'base');
+    if (clearLiftLanding(board.x, board.z)) return { ...board, footMode: true };
+  }
   const site = stationSite(def, end === 'base' ? 0 : def.points.length - 1);
   const surface = def.type === 'surface';
   const preferred = surface ? 4 : 17;
@@ -886,6 +898,13 @@ function liftBoardingArrival(lift, end) {
 
 function liftExit({ lift, direction, destination }) {
   const open = clearLiftLanding;
+  if (lift.def.id === PEAK_TO_PEAK) {
+    const { unload, threshold } = peakToPeakAccess(lift.def, !direction);
+    for (const pose of [unload, threshold]) {
+      const y = env.walkSurfaceAt(pose.x, pose.z, Infinity);
+      if (Number.isFinite(y) && clearLiftBody(pose.x, pose.z, y, .35)) return { ...pose, y, footMode: true };
+    }
+  }
   if (destination.pose && open(destination.pose.x, destination.pose.z)) return destination.pose;
   if (destination.trail) {
     const run = runFromSource(destination.trail);
@@ -971,13 +990,14 @@ function placeRideCamera(progress, dt) {
     // Keep fleet overlap suppression, replacing only the occupied opaque shell.
     lift.passenger.visible = false;
     ride.cabin.update(_ridePos, forward, ride.t, doorOpening);
-    player.pos.set(_ridePos.x, _ridePos.y - 2, _ridePos.z);
     if (ride.inside) {
       ride.cabin.move(dt, keys);
+      ride.cabin.placeRider(player.pos);
       ride.cabin.placeCamera(camera);
       if (camera.fov !== 75) { camera.fov = 75; camera.updateProjectionMatrix(); }
       return;
     }
+    ride.cabin.placeRider(player.pos);
   }
   camera.up.set(0, 1, 0);
   // Face back down the chair line, or across the valley from the tram.
@@ -1031,7 +1051,7 @@ function placeRideCamera(progress, dt) {
     camera.fov = fov;
     camera.updateProjectionMatrix();
   }
-  player.pos.set(_ridePos.x, _ridePos.y - 2, _ridePos.z);
+  if (!ride.cabin) player.pos.set(_ridePos.x, _ridePos.y - 2, _ridePos.z);
 }
 
 function changeRideView() {
@@ -1087,9 +1107,10 @@ async function arriveFromRide() {
   audio.gondolaStop();
   await wait(360);
 
-  env.lifts.setPassenger(null);
-  player.teleport(exit, { resetStats: true });
   resetRunState(false);
+  if (exit.footMode !== undefined) player.footMode = exit.footMode;
+  if (Number.isFinite(exit.y)) player.pos.y = exit.y;
+  player.teleport(exit, { resetStats: true });
   finishCooldown = 5;
   ui.fade(false, true);
   ui.toast(lift.def.name, destination.label, 'blue', 'lift');
@@ -1641,6 +1662,7 @@ function updateIntroCamera(dt) {
 
 function updateSun(force = false) {
   if (!lighting?.sun?.castShadow || paused) return;
+  riderShadow?.update(playing && !scenicPose, SUN_DIR);
   const helicopter = expeditions.active?.id === 'helicopter';
   const airborne = playing && player && (ride || helicopter || player.airborne);
   if (airborne) groundShadowWindow(shadowGroundAnchor, player.pos, heightAt(player.pos.x, player.pos.z));
@@ -1795,7 +1817,7 @@ function frame(now, vsync) {
     fx.update(dt);
     storm.update(dt, enclosed);
   }
-  env.update(dt, displayTime, camera);
+  env.update(dt, displayTime, camera, movingOnMountain ? player.speed : 0);
   skiPatrol.update(paused ? 0 : dt, scenicPose ? null : player, camera, climate.state.season);
   if(!paused)wildlife.update(dt,displayTime,climate.state.season,player.pos);
   sky.update(dt, camera);

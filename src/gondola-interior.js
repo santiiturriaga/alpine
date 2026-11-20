@@ -150,6 +150,10 @@ export class GondolaInterior {
     camera.lookAt(this.group.localToWorld(this._look));
   }
 
+  placeRider(position) {
+    this.group.localToWorld(position.set(this.walk.x, this.floor + .03, this.walk.z));
+  }
+
   dispose() {
     this.group.removeFromParent();
     // Deck assets are shared by the player and outfitter preview.

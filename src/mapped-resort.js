@@ -7,6 +7,7 @@ import { loadingProgress } from './mountain-loading.js';
 import { createMultiplayer } from './multiplayer.js';
 import { createTravelTracker } from './skier-profile.js';
 import { createSnowTraffic } from './snow-traffic.js';
+import { createRiderShadow } from './rider-shadow.js';
 import {
   graphicsProfiles, bindRealism, createRenderer, resizeViewport, renderMountainFrame,
   applyShadowResolution, groundShadowWindow, sunShadowRefreshDue, updateSunShadow,
@@ -257,6 +258,8 @@ export async function startMappedResort(mountain) {
   const travelTracker = createTravelTracker({ resortId: mountain.id, resortName: mountain.label, mountainAt: () => mountain.label });
   const mountainPanel = $('mountain-panel');
   const outfitter = new Outfitter(player, () => outfitter.dialog.close(), renderer);
+  const riderShadow = createRiderShadow(renderer,lighting,player);
+  outfitter.dialog.addEventListener('outfitterchange', riderShadow.equipmentChanged);
   const multiplayer = createMultiplayer(scene,mountain.id,()=>player);
   let trickScore = 0;
   const crystalSpecs = crystalLocations(mountain.id, runs, ground, env);
@@ -726,6 +729,7 @@ export async function startMappedResort(mountain) {
   const shadowGroundAnchor = new THREE.Vector3();
   function updateShadow() {
     if (!lighting.sun.castShadow) return;
+    if (!paused()) riderShadow.update(playing, SUN_DIR);
     const helicopter = expeditions.active?.id === 'helicopter';
     const airborne = liftSystem.active || helicopter || player.airborne;
     if (playing && airborne) groundShadowWindow(shadowGroundAnchor, player.pos, ground.heightAt(player.pos.x, player.pos.z));
@@ -791,7 +795,7 @@ export async function startMappedResort(mountain) {
     travelTracker.update(dt, player, { active: movingOnMountain, nearest: movingOnMountain ? ui.findNearest(player, false, simTime) : null });
     if (playing && !frozen) snowTraffic.update(dt, player, people.people, conditionsNow, movingOnMountain);
     ground.streamBackcountry?.(playing ? player.pos : camera.position, camera.position);
-    world.update(dt, camera);
+    world.update(dt, camera, movingOnMountain ? player.speed : 0);
     people.update(frozen ? 0 : dt, simTime, camera, playing && !ride ? player : null);
     forestLines.update();
     sky.update(dt, camera);

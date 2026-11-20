@@ -5,6 +5,7 @@ import { createSkier } from './skier.js';
 import { DEFAULT_GOGGLES, isGoggleColor } from './ski-goggles.js';
 import { encodeRiderKit, readRiderKit } from './rider-kit-link.js';
 import { readWinchPacket } from './patrol-winch-link.js';
+import { movingInterval, peerPlaybackTime, recordSnapshot, timePrefix } from './peer-playback.js';
 
 // A shared WSS broker works from a static Pages origin. Rooms outlive the
 // first skier. Only transient game poses and session scores leave the client.
@@ -16,13 +17,6 @@ const ridges = ['Cedar','Raven','Hemlock','Boulder','Marmot','Alder','Glacier','
 const defaultCallsign = id => ridges[parseInt(id.slice(0,2),16) % ridges.length] + ' ' + id.slice(-4).toUpperCase();
 const colors = ['#ad4939','#3b7190','#3d6e54','#ce933e','#404348'];
 const decimals = (v, scale) => Math.round(v * scale) / scale;
-// Field 16 stays a strictly increasing integer for older clients. The prefix
-// distinguishes millisecond timestamps from their packet counters.
-const timePrefix = 1_000_000_000_000;
-const movingInterval = 135;
-const playbackDelay = 270;
-const predictionLimit = 92;
-const historyLimit = 12;
 const idleTimeout = 5 * 60 * 1000;
 const peerPacketLimit = 26;
 const newPeersPerSecond = 18;
@@ -40,45 +34,6 @@ function validPose(s) {
     Number.isInteger(s[10]) && bounded(s[10],31) && bounded(s[11],7) &&
     s.slice(12,15).every(v => Number.isInteger(v) && v >= 0 && v <= 100000000) &&
     typeof s[15] === 'string' && /^#[0-9a-f]{6}$/i.test(s[15]) && Number.isSafeInteger(s[16]) && s[16] >= 0;
-}
-
-function discontinuous(before, after, elapsed) {
-  const seconds = Math.max(0, elapsed) / 1000;
-  const speed = Math.max(Math.abs(before[7]), Math.abs(after[7]));
-  return ((before[10] ^ after[10]) & 8) !== 0 ||
-    Math.hypot(after[0] - before[0], after[2] - before[2]) > Math.max(3.1, speed * seconds * 1.42 + 1.6) ||
-    Math.abs(after[1] - before[1]) > Math.max(3.6, 80 * seconds);
-}
-
-function recordSnapshot(remote, pose, heard) {
-  const clocked = pose[16] >= timePrefix;
-  const at = clocked ? pose[16] - timePrefix : heard;
-  const last = remote.history?.at(-1);
-  const elapsed = last ? at - last.at : 0;
-  const silence = heard - remote.heard;
-  if (!last || clocked !== remote.clocked || elapsed > 2100 || silence > 2600 ||
-      discontinuous(last.pose, pose, elapsed)) {
-    remote.history = [];
-    remote.segment = (remote.segment ?? 0) + 1;
-    remote.cursor = -Infinity;
-  }
-  const offset = heard - at;
-  // Favor the least delayed packets, allowing for gradual clock drift. Neither
-  // clock depends on local wall time or synchronization with the other skier.
-  remote.clockOffset = !remote.history.length ? offset : Math.min(offset,
-    remote.clockOffset + Math.max(0, silence) * .003);
-  if (clocked && remote.history.length && last.pose[7] >= .3 && pose[7] >= .3 &&
-      elapsed >= movingInterval && elapsed <= movingInterval * 1.7) {
-    // Measure actual send cadence without folding a dropped update into it.
-    const interval = lerp(remote.motionInterval ?? elapsed, elapsed, .12);
-    remote.motionInterval = interval;
-    remote.playbackDelay = clamp(2 * interval + 60 - predictionLimit, 235, 320);
-  }
-  remote.clocked = clocked;
-  remote.pose = pose;
-  remote.heard = heard;
-  remote.history.push({ at, pose });
-  if (remote.history.length > historyLimit) remote.history.shift();
 }
 
 function makeNametag() {
@@ -346,6 +301,7 @@ export function createMultiplayer(scene, resort, getPlayer) {
       sentAt = time;
       const pos = p.riding ? p.pos : p.model.position, q = vehicle?.quaternion ?? p.model.quaternion;
       fastest = Math.max(fastest,Math.round(p.speedKmh || 0));
+      // The prefix distinguishes timestamps from older clients' packet counts.
       sequence = Math.max(sequence + 1, timePrefix + Math.round(time));
       recentPose = [...pos.toArray().map(v=>decimals(v,100)), ...q.toArray().map(v=>decimals(v,1000)),
         decimals(speed,10),decimals(interactive ? p.steer || 0 : 0,100),decimals(p.tuckAmount||0,100),flags,
@@ -379,10 +335,7 @@ export function createMultiplayer(scene, resort, getPlayer) {
       if (time-remote.heard > 14000) { remove(key); continue; }
       if (!interactive) { remote.dx = undefined; continue; }
       const { history } = remote;
-      const latest = history.at(-1);
-      const bufferedAt = time - remote.clockOffset - (remote.playbackDelay ?? playbackDelay);
-      const at = Math.min(latest.at + predictionLimit, Math.max(remote.cursor, bufferedAt));
-      remote.cursor = at;
+      const at = peerPlaybackTime(remote, time);
       while (history.length > 2 && history[1].at <= at) history.shift();
       const a = history[0], b = history[1] ?? a;
       const gap = b.at - a.at;

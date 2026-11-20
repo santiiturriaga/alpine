@@ -1,7 +1,7 @@
 import { LIFTS, FITZSIMMONS, PEAK_TO_PEAK, VILLAGE_GONDOLA_UPPER } from './worlddata.js';
 import { smoothstep } from './util.js';
 import { LODGE_FRAME, LODGE_CAFE, LODGE_TERRACE, LODGE_ANNEX, ROUNDHOUSE_OLYMPIC_SITE,
-  lodgePoint, whistlerPeakTerminalSite } from './roundhouse-site.js';
+  blackcombPeakTerminalSite, lodgePoint, whistlerPeakTerminalSite } from './roundhouse-site.js';
 
 // Transfer stages share a surveyed point at the centre of the building. Give
 // each drive its own bay on the inbound side of that point.
@@ -31,6 +31,27 @@ export function stationSite(lift, index) {
 export function stationPoint(site, x, z) {
   const c = Math.cos(site.yaw), s = Math.sin(site.yaw);
   return { x: site.x + x * c + z * s, z: site.z - x * s + z * c };
+}
+
+// The survey points follow the ropeway. Passengers use the entrances and
+// walk out toward the transfer plazas at each end.
+export function peakToPeakAccess(lift, blackcomb) {
+  if (blackcomb) {
+    const site = blackcombPeakTerminalSite(lift);
+    const wall = site.width / 2, heading = site.yaw + Math.PI / 2;
+    return {
+      board: { ...stationPoint(site, wall + site.rampLength + 2.3, site.entryZ), heading: heading - Math.PI },
+      unload: { ...stationPoint(site, wall - .9, site.entryZ), heading },
+      threshold: { ...stationPoint(site, wall + .30, site.entryZ), heading },
+    };
+  }
+  const site = whistlerPeakTerminalSite(lift);
+  const front = site.depth / 2;
+  return {
+    board: { ...stationPoint(site, site.entryX, front + site.canopyDepth + 2), heading: site.yaw + Math.PI },
+    unload: { ...stationPoint(site, site.entryX, front - .9), heading: site.yaw },
+    threshold: { ...stationPoint(site, site.entryX, front + .48), heading: site.yaw },
+  };
 }
 
 export function ropeOffset(lift) {

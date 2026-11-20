@@ -247,10 +247,10 @@ export async function buildMappedResortWorld(scene, config, baseURL, { quality =
       signs.setQuality(name);
       lodges.setQuality(name);
     },
-    update(dt, camera) {
+    update(dt, camera, travelSpeed = 0) {
       if (!camera) return;
       ground.updateDetail(camera);
-      forest.update(camera);
+      forest.update(camera, travelSpeed, dt);
       signs.update(camera);
       lodges.updateDetail(camera);
       updateValleyLights?.();
