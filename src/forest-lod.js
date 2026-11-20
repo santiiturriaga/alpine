@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { climateUniforms } from './climate-state.js';
 import { compactCrownBatch, forestView } from './forest-culling.js';
+import { copyForestInstances, makeForestCardClipper } from './forest-card-clipping.js';
 import { bindTreeSnow } from './tree-snow.js';
 
 const profiles = {
@@ -290,9 +291,43 @@ const budgetCard = new THREE.BufferGeometry()
   ], 2))
   .setIndex([0,1,2,1,3,2]);
 
+function copyCrownCell(target, source, offset, selection, dx, dy, dz) {
+  const matrices = target.instanceMatrix.array;
+  copyForestInstances(matrices, source.instanceMatrix.array, 16, offset, 0, selection);
+  // Source models only translate. Preserve the original Float32 roots,
+  // using the same cell translation that each profile previously applied.
+  if (dx || dy || dz) {
+    const end = (offset + selection.count) * 16;
+    for (let i = offset * 16 + 12; i < end; i += 16) {
+      matrices[i] += dx;
+      matrices[i + 1] += dy;
+      matrices[i + 2] += dz;
+    }
+  }
+  if (target.instanceColor) copyForestInstances(target.instanceColor.array, source.instanceColor.array, 3, offset, 0, selection);
+  copyForestInstances(target.geometry.attributes.crownSpecies.array, source.geometry.attributes.crownSpecies.array, 1,
+    offset, 0, selection);
+}
+
+function uploadCrownRange(mesh, first, last) {
+  if (last <= first) return;
+  for (const attribute of [mesh.instanceMatrix, mesh.instanceColor, mesh.geometry.attributes.crownSpecies]) {
+    if (!attribute) continue;
+    attribute.addUpdateRange(first * attribute.itemSize, (last - first) * attribute.itemSize);
+    attribute.needsUpdate = true;
+  }
+}
+
+function budgetCrownAttribute(count, stride) {
+  const attribute = new THREE.InstancedBufferAttribute(new Float32Array(count * stride), stride)
+    .setUsage(THREE.DynamicDrawUsage);
+  attribute.onUpload(() => attribute.clearUpdateRanges());
+  return attribute;
+}
+
 // The cards already fade per trunk in the material. Combine them into
 // larger batches on the low-cost profile and keep every surveyed placement.
-export function batchBudgetForestCrowns(group, region, patchSize) {
+export function batchBudgetForestCrowns(group, region, patchSize, terrain) {
   const patches = new Map();
   for (const cell of group.children) {
     if (!(cell instanceof ForestCell) || !cell.proxy) continue;
@@ -309,36 +344,120 @@ export function batchBudgetForestCrowns(group, region, patchSize) {
   const batches = new THREE.LOD();
   batches.name = 'Distant conifer crowns';
   group.add(batches);
-  const matrix = new THREE.Matrix4(), transform = new THREE.Matrix4(), tint = new THREE.Color();
-  batches.update = () => {
-    if (budget && !batches.children.length) {
+  const cards = [];
+  const matrix = new THREE.Matrix4(), crownSphere = new THREE.Sphere();
+  const lastEye = new THREE.Vector3(), lastFacing = new THREE.Quaternion(), projection = new THREE.Matrix4();
+  const translation = 8, rotation = .022;
+  budgetCard.computeBoundingSphere();
+  let previousView;
+
+  function reserve(patch, count) {
+    const { mesh, tinted, total } = patch;
+    const previous = mesh.instanceMatrix.count;
+    if (previous >= count) return;
+    if (previous) {
+      mesh.dispose();
+      mesh.geometry.dispose();
+    }
+    // Reserve a little room as the camera pans across the patch boundary.
+    const capacity = Math.min(total, Math.ceil(Math.max(count, previous * 1.35) / 512) * 512);
+    mesh.instanceMatrix = budgetCrownAttribute(capacity, 16);
+    mesh.geometry.setAttribute('crownSpecies', budgetCrownAttribute(capacity, 1));
+    if (tinted) mesh.instanceColor = budgetCrownAttribute(capacity, 3);
+    patch.layout++;
+  }
+
+  batches.update = camera => {
+    if (budget && !cards.length) {
       for (const { cells, count } of patches.values()) {
-        const geometry = budgetCard.clone();
-        const kinds = new THREE.InstancedBufferAttribute(new Float32Array(count), 1);
-        geometry.setAttribute('crownSpecies', kinds);
-        const mesh = new THREE.InstancedMesh(geometry, crownMaterial(region), count);
-        let index = 0;
+        const mesh = new THREE.InstancedMesh(budgetCard.clone(), crownMaterial(region), 0);
+        mesh.boundingSphere = new THREE.Sphere().makeEmpty();
+        mesh.visible = false;
+        const entries = [];
         for (const { proxy, position } of cells) {
-          transform.makeTranslation(position.x + proxy.position.x, position.y + proxy.position.y,
-            position.z + proxy.position.z);
-          const species = proxy.geometry.getAttribute('crownSpecies');
-          for (let i = 0; i < proxy.count; i++, index++) {
-            proxy.getMatrixAt(i, matrix);
-            mesh.setMatrixAt(index, matrix.premultiply(transform));
-            kinds.setX(index, species.getX(i));
-            if (proxy.instanceColor) {
-              proxy.getColorAt(i, tint);
-              mesh.setColorAt(index, tint);
-            }
+          const dx = position.x + proxy.position.x, dy = position.y + proxy.position.y, dz = position.z + proxy.position.z;
+          entries.push({ proxy, dx, dy, dz });
+          // Keep the original whole-patch sphere for clipping and depth ties
+          // without building or uploading the original whole-patch buffer.
+          const transforms = proxy.instanceMatrix.array;
+          const translated = dx || dy || dz;
+          for (let offset = 0; offset < transforms.length; offset += 16) {
+            matrix.fromArray(transforms, offset);
+            if (translated) matrix.setPosition(Math.fround(transforms[offset + 12] + dx),
+              Math.fround(transforms[offset + 13] + dy), Math.fround(transforms[offset + 14] + dz));
+            mesh.boundingSphere.union(crownSphere.copy(budgetCard.boundingSphere).applyMatrix4(matrix));
           }
         }
-        mesh.computeBoundingSphere();
         mesh.matrixAutoUpdate = false;
         batches.add(mesh);
         mesh.updateMatrixWorld(true);
+        cards.push({ mesh, entries, layout: 0, total: count, tinted: !!cells[0].proxy.instanceColor });
       }
     }
-    for (const mesh of batches.children) mesh.visible = budget;
+    if (!budget) {
+      previousView = undefined;
+      for (const { mesh } of cards) mesh.visible = false;
+      return;
+    }
+    if (!camera) return;
+    const view = forestView(camera);
+    const refresh = previousView !== view || !projection.equals(camera.projectionMatrix) ||
+      lastEye.distanceToSquared(view.eye) > translation ** 2 || lastFacing.angleTo(camera.quaternion) > rotation;
+    if (refresh) {
+      previousView = view;
+      lastEye.copy(view.eye);
+      lastFacing.copy(camera.quaternion);
+      projection.copy(camera.projectionMatrix);
+    }
+    const near = transitions[region].value.x;
+    for (const patch of cards) {
+      const { mesh, entries } = patch;
+      // Include any silhouette that can enter the view before the next
+      // upload. Native per-patch clipping still runs at the actual camera.
+      if (refresh) {
+        crownSphere.copy(mesh.boundingSphere).applyMatrix4(mesh.matrixWorld);
+        crownSphere.radius += translation + rotation * (view.eye.distanceTo(crownSphere.center) + crownSphere.radius);
+        patch.inView = view.frustum.intersectsSphere(crownSphere);
+      }
+      if (!patch.inView) { mesh.visible = false; continue; }
+      let count = 0;
+      let changed = refresh;
+      for (const entry of entries) {
+        if (refresh) {
+          const { proxy, dx, dy, dz } = entry;
+          entry.clip ??= makeForestCardClipper(proxy.instanceMatrix.array, 0, proxy.count, dx, dy, dz);
+          entry.selection = entry.clip(view, near, Infinity, translation, rotation);
+        }
+        // A ridge test is only valid from the current eye. Keep the padded
+        // frustum selection cached, and retest occlusion as the rider moves.
+        const shown = entry.selection.count > 0 && !terrain.behindRidge?.(entry.clip.bounds, camera);
+        if (shown !== entry.shown) changed = true;
+        entry.shown = shown;
+        if (shown) count += entry.selection.count;
+      }
+      if (!changed) continue;
+      if (!count) { mesh.visible = false; continue; }
+      reserve(patch, count);
+      const { layout } = patch;
+      let offset = 0, first = count, last = 0;
+      for (const entry of entries) {
+        const { proxy, dx, dy, dz, selection } = entry;
+        if (!entry.shown) continue;
+        if (entry.layout !== layout || entry.offset !== offset || entry.revision !== selection.revision) {
+          copyCrownCell(mesh, proxy, offset, selection, dx, dy, dz);
+          entry.offset = offset;
+          entry.revision = selection.revision;
+          first = Math.min(first, offset);
+          last = offset + selection.count;
+        }
+        entry.layout = layout + 1;
+        offset += selection.count;
+      }
+      patch.layout++;
+      mesh.count = offset;
+      mesh.visible = offset > 0;
+      uploadCrownRange(mesh, first, last);
+    }
   };
   batches.update();
 }

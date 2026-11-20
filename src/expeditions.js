@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RUNS, WORLD, runPointAt } from './worlddata.js';
 import { heightAt, normalAt } from './terrain.js';
 import { clamp, damp, smoothstep, wrapAngle } from './util.js';
-import { createServiceAsset } from './service-assets.js';
+import { createParkedServiceProxy, createServiceAsset } from './service-assets.js';
 import { createPatrolPad } from './patrol-flight-assets.js';
 import { WingTrails } from './effects.js';
 
@@ -13,6 +13,7 @@ const stations = [
   {id:'wingsuit',label:'Wingsuit launch',piste:'The Saddle',metres:48,radius:.55,top:38},
 ];
 const bikeSpec = {id:'bike',label:'Mountain bike',radius:.6,top:24};
+const parkedDetailRange = {helicopter:[82,98],snowcat:[60,73],snowmobile:[39,49]};
 const normal = new THREE.Vector3(), view = new THREE.Vector3(), target = new THREE.Vector3();
 const forward = new THREE.Vector3(), side = new THREE.Vector3(), basis = new THREE.Matrix4();
 const vertical = new THREE.Vector3(0,1,0), trackPoint = new THREE.Vector3();
@@ -120,7 +121,7 @@ export class Expeditions {
     model.position.set(pose.x,homeY,pose.z);
     scene.add(model);
     const v = { ...spec, model, pad, legacyPose, homeX:pose.x, homeY, homeZ:pose.z, homeYaw:pose.heading ?? 0, trailD:pose.trailD ?? spec.metres,
-      asset:null, yaw:pose.heading ?? 0, speed:0, clearance:0, cockpit:false };
+      asset:null, proxy:null, warmQueued:false, yaw:pose.heading ?? 0, speed:0, clearance:0, cockpit:false };
     this.pose(v,false);
     this.park(v);
     this.fleet.push(v);
@@ -150,14 +151,49 @@ export class Expeditions {
 
   available(v) { return v.id !== 'bike' || this.season() === 'summer'; }
 
+  prepareAsset(v) {
+    if (!v.asset) {
+      v.asset = createServiceAsset(v.id);
+      v.model.add(v.asset.group);
+    }
+    return v.asset;
+  }
+
+  warmAsset(v) {
+    if (v.asset || v.warmQueued) return;
+    v.warmQueued = true;
+    const prepare = () => {
+      v.warmQueued = false;
+      if (!v.model.visible || !v.proxy?.visible || v.asset) return;
+      this.prepareAsset(v).group.visible = false;
+    };
+    if (globalThis.requestIdleCallback) requestIdleCallback(prepare,{ timeout:900 });
+    else setTimeout(prepare, 0);
+  }
+
   drawNear(pos) {
+    const budget = this.env?.budget;
     for (const v of this.fleet) {
       if (v.pad) v.pad.group.visible=Math.hypot(v.homeX-pos.x,v.homeZ-pos.z)<360;
-      const visible = v === this.active || (this.available(v) && Math.hypot(v.model.position.x-pos.x,v.model.position.z-pos.z) < 340);
-      v.model.visible = visible;
-      if (visible && !v.asset) {
-        v.asset = createServiceAsset(v.id);
-        v.model.add(v.asset.group);
+      const distance = distanceTo(pos,v.model.position), occupied = v === this.active;
+      v.model.visible = occupied || (this.available(v) && distance < 340);
+      if (!v.model.visible) continue;
+      const range = budget && !occupied && parkedDetailRange[v.id];
+      const viewingDistance = range ? Math.hypot(distance,pos.y-v.model.position.y) : distance;
+      const passengers = range && v.model.children.some(child => child.visible && child!==v.proxy && child!==v.asset?.group);
+      // Keep patrol passengers and occupied vehicles in the same detailed cabin.
+      const useProxy = range && !passengers && viewingDistance > range[v.proxy?.visible ? 0 : 1];
+      if (useProxy) {
+        if (!v.proxy) {
+          v.proxy = createParkedServiceProxy(v.id);
+          v.model.add(v.proxy);
+        }
+        v.proxy.visible = true;
+        if (v.asset) v.asset.group.visible = false;
+        else if (viewingDistance < range[1] + 70) this.warmAsset(v);
+      } else {
+        if (v.proxy) v.proxy.visible = false;
+        this.prepareAsset(v).group.visible = true;
       }
     }
   }

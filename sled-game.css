@@ -62,11 +62,12 @@
   background: var(--sled-ink);
 }
 .sled-progress-track s {
-  left: var(--gap-at);
-  width: max(2px, var(--gap-width));
+  width: 3px;
   background: var(--sled-amber);
+  transform: translateX(-50%);
 }
 .sled-tallies { justify-content: space-between; }
+.sled-race-status b { color: var(--sled-amber); }
 
 .sled-actions { display: flex; gap: 7px; margin-inline-start: auto; pointer-events: auto; }
 .sled-secondary, .sled-primary, .sled-touch button {
@@ -123,6 +124,19 @@
 .sled-game[data-state="paused"] .sled-card h2 { margin-bottom: 10px; }
 .sled-card p { margin: 5px 0 11px; font-size: .84rem; line-height: 1.35; color: var(--sled-muted); }
 .sled-card-controls { display: flex; flex-wrap: wrap; gap: 5px 10px; margin: 0 0 12px; font-size: .75rem; }
+.sled-card-actions, .sled-mode-options { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.sled-mode-options { margin-top: 9px; }
+.sled-mode-options button, .sled-mode-back {
+  min-height: 33px;
+  padding: 0 10px;
+  border: 1px solid #f1f5eb66;
+  border-radius: 3px;
+  font: 650 .8rem/1 Barlow, sans-serif;
+}
+.sled-mode-options button[aria-pressed="true"], .sled-mode-options button:hover, .sled-mode-back:hover {
+  color: var(--sled-amber);
+  border-color: var(--sled-amber);
+}
 .sled-game kbd {
   display: inline;
   padding: 0;
@@ -132,9 +146,6 @@
   font: 700 .95em/1 Barlow, sans-serif;
   color: var(--sled-ink);
 }
-.sled-results { display: flex; flex-wrap: wrap; gap: 5px 15px; margin: 0 0 12px; }
-.sled-results span { font-size: .79rem; color: var(--sled-muted); }
-.sled-results b { font-variant-numeric: tabular-nums; font-size: .85rem; color: var(--sled-ink); }
 
 .sled-bottom, .sled-touch { display: none; }
 .sled-game[data-state="running"] .sled-bottom,
@@ -163,7 +174,10 @@
     pointer-events: none;
   }
   .sled-touch div { display: flex; gap: 5px; }
-  .sled-secondary, .sled-touch button, .sled-primary { min-width: 44px; min-height: 44px; }
+  .sled-secondary, .sled-touch button, .sled-primary, .sled-mode-options button, .sled-mode-back {
+    min-width: 44px;
+    min-height: 44px;
+  }
   .sled-touch button { padding: 0 9px; touch-action: none; pointer-events: auto; }
   .sled-touch [data-sled-input="left"], .sled-touch [data-sled-input="right"] { font-size: 1.14rem; }
 }

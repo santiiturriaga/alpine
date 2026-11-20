@@ -78,15 +78,32 @@ TEST = '''async () => {
         check(Math.abs(Math.atan2(Math.sin(change),Math.cos(change)))<.04,'lead-foot swap swung the camera');
     }
     p.cameraMode=0; p.lookYaw=0; seed();
+    let surfaceRevision = 0, visualOffset = 0;
     const contact = createSkiSnowSurface({
         snowMaps:{}, heightAt:ground.heightAt.bind(ground), surfaceAt:ground.surfaceAt.bind(ground),
-        sampleSurface(x,z,color,normal) {color.set('#ffffff'); ground.normalAt(x,z,normal); return ground.heightAt(x,z);}, setCutout() {}
+        readSurfaceRevision:()=>surfaceRevision,
+        sampleSurface(x,z,color,normal) {color.set('#ffffff'); ground.normalAt(x,z,normal); return ground.heightAt(x,z)+visualOffset;},
+        setCutout() {}
     });
     ground.skiSnowDepthAt=contact.depthAt;
-    seed(); step(30); contact.update(p);
-    const {x,z}=p.rig.boardContact.point;
-    check(contact.group.children.filter(mesh=>mesh.visible).length===1 && contact.depthAt(x,z)>.01,
-        'board did not press its own snow footprint');
+    for (const discipline of ['ski','snowboard']) {
+        p.setEquipment({discipline}); contact.update(p,false);
+        seed(); step(30); contact.update(p);
+        const {x,z}=p.boarding ? p.rig.boardContact.point : p.rig.contactPoints[0];
+        const pressed = contact.group.children.filter(mesh=>mesh.visible);
+        check(pressed.length===(p.boarding ? 1 : 2) && contact.depthAt(x,z)>.01,
+            'equipment did not press its snow footprint');
+        const edges = pressed.map(mesh=>{
+            const vertices=mesh.geometry.attributes.position;
+            return {mesh,vertices,y:vertices.getY(0)+mesh.position.y,version:vertices.version};
+        });
+        contact.update(p);
+        check(edges.every(e=>e.vertices.version===e.version), 'stationary patch uploaded on an unchanged tile');
+        visualOffset+=.10; surfaceRevision++;
+        contact.update(p);
+        check(edges.every(e=>Math.abs(e.vertices.getY(0)+e.mesh.position.y-e.y-.10)<.0001) && contact.depthAt(x,z)>.01,
+            'stationary patch did not refit to the newly streamed surface');
+    }
     delete ground.skiSnowDepthAt;
     ground.powder=.06;
     p.setEquipment({discipline:'snowboard', snowboardModel:'burton-custom-camber', stance:'regular'});

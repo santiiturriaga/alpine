@@ -51,7 +51,9 @@ def options():
     parser.add_argument('--origin', required=True, help='Game URL with optional extra query parameters')
     parser.add_argument('--output', type=Path, required=True, help='Output JSON path')
     parser.add_argument('--adapter-luid', help='Windows DXGI adapter HighPart,LowPart')
-    parser.add_argument('--expect-gpu', required=True, help='Case-insensitive regular expression matched against unmasked WebGL renderer')
+    backend = parser.add_mutually_exclusive_group(required=True)
+    backend.add_argument('--expect-gpu', help='Case-insensitive regular expression matched against unmasked WebGL renderer')
+    backend.add_argument('--software', action='store_true', help='Run on SwiftShader and verify its renderer before the descent')
     parser.add_argument('--width', type=int, default=1920)
     parser.add_argument('--height', type=int, default=1080)
     parser.add_argument('--quality', default='budget')
@@ -64,7 +66,10 @@ def options():
     parser.add_argument('--headless', action='store_true', help='Useful for controller development and smoke checks')
     parser.add_argument('--cold-only', action='store_true', help='Stop after the first browser run')
     parser.add_argument('--direct', action='store_true', help='Use the Roundhouse URL arrival instead of the title Drop in button')
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.software and args.adapter_luid:
+        parser.error('--adapter-luid selects a hardware adapter and cannot be used with --software')
+    return args
 
 
 def target_url(args):
@@ -79,8 +84,12 @@ def target_url(args):
 
 
 def measure(playwright, args, profile, phase, report):
-    flags = ['--use-angle=d3d11', '--enable-webgl', '--disable-renderer-backgrounding',
+    flags = ['--enable-webgl', '--disable-renderer-backgrounding',
              '--disable-backgrounding-occluded-windows', '--disable-background-timer-throttling']
+    if args.software:
+        flags.extend(['--disable-gpu', '--disable-gpu-compositing', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'])
+    else:
+        flags.append('--use-angle=d3d11')
     if args.adapter_luid:
         flags.append(f'--use-adapter-luid={args.adapter_luid}')
     errors, page_errors = [], []
@@ -127,8 +136,9 @@ def measure(playwright, args, profile, phase, report):
         meta.update(requestedAdapterLuid=args.adapter_luid, cpuThrottle=args.cpu_rate,
                     browser=page.evaluate('navigator.userAgent'), headless=args.headless)
         report['meta'] = meta
-        if not meta['renderer'] or not re.search(args.expect_gpu, meta['renderer'], re.IGNORECASE):
-            raise RuntimeError(f"{phase} GPU mismatch. Requested {args.expect_gpu!r}, actual {meta['renderer']!r}")
+        expected = 'SwiftShader' if args.software else args.expect_gpu
+        if not meta['renderer'] or not re.search(expected, meta['renderer'], re.IGNORECASE):
+            raise RuntimeError(f"{phase} GPU mismatch. Requested {expected!r}, actual {meta['renderer']!r}")
         if meta['contextLost'] or not meta['pageVisible']:
             raise RuntimeError(f'{phase} requires a visible page and live WebGL context. Measured: {meta}')
         if args.quality.lower() != 'auto' and str(meta['quality']).casefold() != args.quality.casefold():
@@ -158,7 +168,7 @@ def measure(playwright, args, profile, phase, report):
         report['passed'] &= not page_errors and not any(
             re.search(r'shader|WebGLProgram|SyntaxError', error, re.I) for error in errors)
         if args.resolution == 'native':
-            changed_size = any(row[4:] != [args.width, args.height] for row in report['frames'])
+            changed_size = any(row[4:6] != [args.width, args.height] for row in report['frames'])
             report['nativeCanvasChanged'] = changed_size
             report['passed'] &= not changed_size
         print(phase, report['run']['reason'], report['run']['result'], flush=True)

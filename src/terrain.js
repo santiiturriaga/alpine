@@ -236,6 +236,7 @@ function makeTerrainDetail(mesh, tileMaterials) {
   const detailWidth = verts - 1;
   const cache = new Map();
   const builders = new Map();
+  let surfaceRevision = 0;
   const cacheLimit = 14;
   const indices = new Uint16Array(detailWidth * detailWidth * 6);
   let offset = 0;
@@ -343,6 +344,7 @@ function makeTerrainDetail(mesh, tileMaterials) {
         terrain.add(tile.detail);
         tile.original.visible = false;
         detailTiles.set(key, tile);
+        surfaceRevision++;
       } else cache.set(key, tile);
     }
     for (const [key, tile] of detailTiles) {
@@ -352,6 +354,7 @@ function makeTerrainDetail(mesh, tileMaterials) {
       tile.detail.material = tileMaterials[key];
       detailTiles.delete(key);
       cache.set(key, tile);
+      surfaceRevision++;
     }
     while (cache.size > cacheLimit) {
       const victim = cache.keys().next().value;
@@ -362,6 +365,7 @@ function makeTerrainDetail(mesh, tileMaterials) {
 
   return {
     terrain,
+    get surfaceRevision() { return surfaceRevision; },
     updateDetail(...centers) { detailAround(centers, Infinity); },
     streamDetail(...centers) { detailAround(centers, performance.now() + 2.2); },
   };
@@ -624,7 +628,7 @@ function buildCoastMountains({ heights, cover }, tusk, local) {
     const radius = near.boundingSphere.radius + near.boundingSphere.center.length();
     surrounding.add(new ForestCell('regional',center,radius,near,far,proxy));
   }
-  batchBudgetForestCrowns(surrounding, 'regional', 2400);
+  batchBudgetForestCrowns(surrounding, 'regional', 2400, terrain);
   cacheStaticTransforms(surrounding);
   surrounding.add(backcountry.group, backcountry.horizon);
   return { surrounding, surveyTiles };
@@ -816,15 +820,26 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
   const horizon = terrainHorizon(gradedHeights, N, N, WORLD);
   const snowMaps = { pisteMap, tracks, roomCutout, annexCutout, roomYaw, mountainShade, groomingMap, horizon };
   const mat = surfaceMaterial('snow', { vertexColors: true }, snowMaps);
-  const openSnow = surfaceMaterial('snow', { vertexColors: true }, { ...snowMaps, interiorCutout: false });
+  const markedSnow = surfaceMaterial('snow', { vertexColors: true }, { ...snowMaps, interiorCutout: false });
+  const openSnow = surfaceMaterial('snow', { vertexColors: true }, {
+    ...snowMaps, interiorCutout: false, fixedTracks: false,
+  });
   const baseDetail = createTerrainTileDetail(quality);
   const mesh = makePatches(N, [
     ['position', positions, 3], ['normal', normals, 3], ['color', colors, 3],
   ], openSnow, terrainTile, baseDetail);
-  const tileMaterials = mesh.children.map(() => openSnow);
+  const occlusion = createTerrainOcclusion({ positions, size: N, tileSize: terrainTile });
+  const trackLayers = Object.values(tracks);
+  const baseMaterials = occlusion.tiles.map((tile, i) => {
+    const marked = trackLayers.some(({ origin, span }) => tile.minX <= origin.x + span + .1 &&
+      tile.maxX >= origin.x - .1 && tile.minZ <= origin.y + span + .1 && tile.maxZ >= origin.y - .1);
+    const material = marked ? markedSnow : openSnow;
+    mesh.children[i].material = material;
+    return material;
+  });
+  const tileMaterials = baseMaterials.slice();
   detailTiles = new Map();
   const detail = makeTerrainDetail(mesh, tileMaterials);
-  const occlusion = createTerrainOcclusion({ positions, size: N, tileSize: terrainTile });
   const tileCount = (N - 1) / terrainTile;
   const preciseWidth = terrainTile * detailStep + 1;
   const roomOpenings = [], skiOpenings = [], openings = [], hidden = [];
@@ -866,7 +881,11 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     return highest;
   }
 
+  let occlusionCamera = null;
+  terrain.behindRidge = (bounds, camera) => camera === occlusionCamera &&
+    occlusion.blocked(bounds, camera.position, openings);
   function restoreOccludedTiles() {
+    occlusionCamera = null;
     for (const tile of hidden) tile.visible = true;
     hidden.length = 0;
   }
@@ -882,6 +901,7 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     if (!(eye.y - radius > ceiling)) return 0;
     openings.length = 0;
     openings.push(...roomOpenings, ...skiOpenings);
+    occlusionCamera = camera;
     camera.updateMatrixWorld();
     view.setFromProjectionMatrix(viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse), camera.coordinateSystem);
     for (let i = 0; i < occlusion.tiles.length; i++) {
@@ -950,6 +970,7 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
   const cutoutMeshes = new Map();
   const skiSnow = createSkiSnowSurface({
     snowMaps, heightAt, surfaceAt, sampleSurface,
+    readSurfaceRevision: () => detail.surfaceRevision,
     setCutout(skis, cutoutMaterial) {
       for (const [mesh, key] of cutoutMeshes) mesh.material = tileMaterials[key];
       cutoutMeshes.clear();
@@ -1054,7 +1075,7 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
       const x = WORLD.minX + (i % columns) * width, z = WORLD.minZ + Math.floor(i / columns) * depth;
       const overlaps = room.x + reach >= x && room.x - reach <= x + width &&
         room.z + reach >= z && room.z - reach <= z + depth;
-      tileMaterials[i] = overlaps ? mat : openSnow;
+      tileMaterials[i] = overlaps ? mat : baseMaterials[i];
       const original = mesh.children[i], local = detailTiles.get(i)?.detail;
       if (!cutoutMeshes.has(original)) original.material = tileMaterials[i];
       if (local && !cutoutMeshes.has(local)) local.material = tileMaterials[i];

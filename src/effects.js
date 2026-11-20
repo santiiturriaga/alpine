@@ -198,7 +198,8 @@ export function createSky(scene) {
         float edge = max(fwidth(sd) * .85, .000006);
         float solarDisk = smoothstep(.999958-edge,.999958+edge,sd);
         float forwardScatter = pow(sd, mix(16.0, 7.0, uGolden)) * mix(.092, .33, uGolden);
-        float longPath = exp(-h * 6.5) * pow(sd, 3.0) * uGolden;
+        float sd2 = sd * sd, sd3 = sd2 * sd, sd4 = sd2 * sd2, sd8 = sd4 * sd4;
+        float longPath = uGolden > 0. ? exp(-h * 6.5) * sd3 * uGolden : 0.;
         col = mix(col, uSunColor, longPath * uSunStrength * .40);
         vec3 sunlight = uSunColor*uSunStrength*(solarDisk*6.1 + pow(sd,175.0)*.33 + forwardScatter);
         if (uMoonStrength > 0.) {
@@ -216,14 +217,14 @@ export function createSky(scene) {
           col=mix(col,uCloudLight,veil);
           vec2 nearPlane=(uEye.xz*.57+d.xz*(1470.0/(d.y+.084)))*.00165+wind;
           float cloud=cloudDensity(nearPlane);
-          // A clear gap has zero density after the ridge adjustment as well.
+          // Keep the baked texture lookups coherent across the cloud edge.
           if (uBakedClouds || cloud > 0.) {
             float shade = cloudDensity(nearPlane + uSun.xz*.155);
             float ridges=cloudNoise(nearPlane*4.18+vec2(11.4,-9.5));
             cloud=clamp(cloud+(ridges-.5)*.76*cloud*(1.-cloud),0.,1.);
-            float light = clamp(.57+.22*ridges-.24*shade+(cloud-shade)*.89+pow(sd,8.)*.24, 0.0, 1.0);
+            float light = clamp(.57+.22*ridges-.24*shade+(cloud-shade)*.89+sd8*.24, 0.0, 1.0);
             vec3 cloudColor=mix(uCloudShade,uCloudLight,light);
-            float backlit = pow(sd, 11.0) * uSunStrength * (.25 + .75 * uGolden);
+            float backlit = sd8 * sd3 * uSunStrength * (.25 + .75 * uGolden);
             cloudColor += uSunColor * backlit * (.18 + .80 * max(0.0, cloud - shade));
             col=mix(col,cloudColor,cloud*.88*smoothstep(.008,.14,d.y)*(1.0-uWhiteout));
           }

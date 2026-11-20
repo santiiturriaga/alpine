@@ -67,7 +67,8 @@ function makeGeometry() {
   return { geometry, baseNormals: new Float32Array(count * 3), drops: new Float32Array(count) };
 }
 
-export function createSkiSnowSurface({ snowMaps, heightAt, surfaceAt, sampleSurface, setCutout }) {
+export function createSkiSnowSurface({ snowMaps, heightAt, surfaceAt, sampleSurface,
+  readSurfaceRevision = () => 0, setCutout }) {
   const group = new THREE.Group();
   group.name = 'Pressed snow beneath weighted skis';
   const uniformData = {
@@ -100,6 +101,7 @@ export function createSkiSnowSurface({ snowMaps, heightAt, surfaceAt, sampleSurf
     ...snowMaps, skiSnow: { ...uniformData, mode: 0 },
   });
   const color = new THREE.Color(), normal = new THREE.Vector3(), surface = {};
+  let lastSurfaceRevision = -1;
 
   function skiDepth(ski, x, z, baseHeight) {
     if (!ski.active) return 0;
@@ -187,7 +189,11 @@ export function createSkiSnowSurface({ snowMaps, heightAt, surfaceAt, sampleSurf
     const enabled = visible && !!player?.grounded && !player.crash && !player.footMode && !player.riding;
     const board = player?.boarding ? rig?.boardContact : null;
     const runtimeProfile = (board ? board.profile : rig?.skiContact?.profile) ?? profile;
-    let dirty = false;
+    // The contact may be stationary when the detailed snow tile arrives.
+    // Refit the replacement whenever its supporting surface changes.
+    const surfaceRevision = readSurfaceRevision();
+    let dirty = surfaceRevision !== lastSurfaceRevision;
+    lastSurfaceRevision = surfaceRevision;
     for (let i = 0; i < skis.length; i++) {
       const ski = skis[i];
       const point = board ? board.point : rig?.contactPoints?.[i];

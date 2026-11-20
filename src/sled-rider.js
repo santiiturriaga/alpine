@@ -71,7 +71,7 @@ function runner(width, low, high) {
   return geometry;
 }
 
-function sledTimber(material, cube, round) {
+function sledTimber(material, cube, round, redSled) {
   const sled = batch(material);
   for (const [width, low, high, color] of [
     [.079, -.055, -.026, STEEL], [.119, -.023, .054, ASH[1]],
@@ -94,7 +94,7 @@ function sledTimber(material, cube, round) {
     }
   }
   sled.add(cube, STRAP, [0, .466, .424], [.748, .064, .57]);
-  sled.add(cube, CUSHION, [0, .497, .433], [.725, .022, .547]);
+  sled.add(cube, redSled ? 0xa13e31 : CUSHION, [0, .497, .433], [.725, .022, .547]);
   sled.add(cube, CORD, [0, .478, .717], [.70, .022, .014]);
   sled.add(rope([[-.465,.54,-1.26],[-.31,.505,-1.55],[.12,.472,-1.66],[.42,.511,-1.41],[.465,.54,-1.26]], .019), 0xe1b660);
   return sled.mesh('Laminated ash sled and tow cord');
@@ -135,7 +135,7 @@ function ownRenderedParts(rider) {
   });
 }
 
-export function sledModel(outfit) {
+export function sledModel(outfit, redSled = false) {
   const group = new THREE.Group();
   group.name = 'Ash runner sled and rider';
   const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .73 });
@@ -145,7 +145,7 @@ export function sledModel(outfit) {
   // The regular skier faces +Z. The runners point along the course's -Z.
   rider.group.rotation.y = Math.PI;
   const steering = steeringRig(material, cube);
-  group.add(sledTimber(material, cube, round), rider.group, steering);
+  group.add(sledTimber(material, cube, round, redSled), rider.group, steering);
 
   const mount = {
     hipY: .605, hipZ: -.39, hinge: .24, gaze: 0,

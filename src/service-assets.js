@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergedMesh, part as coloredPart } from './scenery.js';
 
 const TAU = Math.PI * 2;
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
@@ -123,7 +124,7 @@ function ringSkin(parent, mat, profile, start, end, angleA = 0, angleB = TAU, of
   return surface(parent, mat, Math.max(4, Math.ceil((angleB - angleA) * 9)), Math.max(2, Math.ceil((end - start) * 8)), (u, v) =>
     ringPoint(profile, start + (end - start) * v, angleA + (angleB - angleA) * u, offset));
 }
-function shape(parent, mat, points, depth, plane, center = 0, bevel = 0) {
+function outlineGeometry(points, depth, plane, center, bevel) {
   const outline = new THREE.Shape();
   points.forEach(([a, b], i) => i ? outline.lineTo(a, b) : outline.moveTo(a, b));
   outline.closePath();
@@ -141,7 +142,10 @@ function shape(parent, mat, points, depth, plane, center = 0, bevel = 0) {
   } else {
     geometry.translate(0, 0, center);
   }
-  return part(parent, geometry, mat);
+  return geometry;
+}
+function shape(parent, mat, points, depth, plane, center = 0, bevel = 0) {
+  return part(parent, outlineGeometry(points, depth, plane, center, bevel), mat);
 }
 
 const lettering = new Map();
@@ -281,6 +285,134 @@ export function createServiceAsset(id) {
   if (!Object.hasOwn(factories,id)) throw new RangeError('Unknown service asset ' + id);
   return factories[id]();
 }
+
+// Share the dimensions with the detailed models so the parked LOD can switch
+// without moving the nose, main rotor, skis or other recognizable landmarks.
+const helicopterShell = [
+  [-2.66,.35,1.39,.33,.19], [-2.22,.69,1.49,.48,.43], [-1.72,.92,1.52,.66,.63],
+  [-1.28,1.018,1.55,.71,.77], [-.58,1.072,1.56,.73,.80], [.24,1.068,1.57,.72,.78],
+  [.89,1.032,1.57,.65,.73], [1.41,.945,1.57,.55,.66], [1.78,.84,1.53,.43,.56],
+  [2.09,.69,1.43,.31,.46], [2.37,.49,1.34,.23,.34], [2.57,.25,1.25,.14,.17], [2.64,.055,1.21,.05,.05],
+];
+const helicopterSections = [-2.66,-1.67,-.53,-.44,.32,.42,1.38,1.47,2.40,2.64];
+const helicopterTail = [[-7.79,.09,1.89,.12,.09],[-7.47,.139,1.88,.15,.14],[-6.3,.185,1.85,.17,.152],
+  [-4.98,.237,1.80,.20,.174],[-3.57,.329,1.72,.27,.205],[-2.08,.535,1.66,.36,.365]];
+const snowmobileHood = [[-.37,.203,.714,.105,.159],[-.10,.284,.754,.209,.200],[.185,.342,.751,.293,.242],
+  [.45,.349,.702,.327,.251],[.74,.311,.615,.288,.216],[.93,.226,.548,.202,.14],[1.07,.056,.510,.072,.08]];
+const snowmobileScreen = (u,v) => {
+  const d=u*2-1;
+  return [d*(.276-.033*v),.972+.405*v-.025*d*d,.55-.204*v-.138*d*d];
+};
+const snowcatBlade = (u,v) => {
+  const x=(u-.5)*5.25, offset=Math.max(Math.abs(x)-1.88,0);
+  return [x,.105+v*(1.14+.035*offset),4.119-.156*(1-Math.cos(v*TAU))-.27*v+offset*.368];
+};
+
+export function createParkedServiceProxy(id) {
+  const parts = [], owned = [];
+  const add = (geo, tint, pos, rot, scale) => parts.push(coloredPart(geo, tint, pos, rot, scale));
+  const own = (geo, tint) => { owned.push(geo); add(geo, tint); };
+  const block = (tint, x,y,z, sx,sy,sz, rx=0, ry=0, rz=0) => add(cube,tint,[x,y,z],[rx,ry,rz],[sx,sy,sz]);
+  const rodRotation = new THREE.Quaternion(), axis = new THREE.Vector3(), euler = new THREE.Euler();
+  const beam = (tint, a,b, r) => {
+    axis.set(b[0]-a[0],b[1]-a[1],b[2]-a[2]);
+    const length = axis.length();
+    euler.setFromQuaternion(rodRotation.setFromUnitVectors(Y_AXIS, axis.multiplyScalar(1/length)));
+    add(barrel,tint,a.map((v,i)=>(v+b[i])*.5),[euler.x,euler.y,euler.z],[r,length,r]);
+  };
+  const section = (tint, profile,z0,z1,a,b) => own(gridGeometry(
+    Math.max(2,Math.ceil((b-a)*4)),Math.max(1,Math.ceil((z1-z0)*2)),
+    (u,v)=>ringPoint(profile,z0+(z1-z0)*v,a+(b-a)*u)),tint);
+  const panel = (tint, points, depth, plane, center=0) => own(outlineGeometry(points,depth,plane,center,0),tint);
+  const redPaint = red.color, whitePaint = white.color, dark = graphite.color, rail = metal.color;
+  const glazing = 0x4c687b;
+  if (id==='helicopter') {
+    const band = (tint, z0,z1, lo,hi) => {
+      for (const sign of [-1,1]) section(tint,helicopterShell,z0,z1,sign<0?-hi:lo,sign<0?-lo:hi);
+    };
+    for (let i=1;i<helicopterSections.length;i++) {
+      const z0=helicopterSections[i-1],z1=helicopterSections[i];
+      if (z0===1.47) {
+        band(glazing,z0,z1,0,1.15);
+        band(redPaint,z0,z1,1.15,2.30);
+      } else if (z0===-1.67 || z0===-.44 || z0===.42) {
+        const y=z0>0?.74:.92;
+        band(redPaint,z0,z1,0,y);
+        band(glazing,z0,z1,y,1.64);
+        band(redPaint,z0,z1,1.64,2.30);
+      } else band(redPaint,z0,z1,0,2.30);
+      band(whitePaint,z0,z1,2.30,Math.PI);
+    }
+    section(redPaint,helicopterTail,-7.79,-2.08,-1.98,1.98);
+    section(whitePaint,helicopterTail,-7.79,-2.08,1.98,TAU-1.98);
+    panel(redPaint,[[-7.75,1.68],[-7.87,2.94],[-7.60,2.99],[-7.0,1.94],[-7.11,1.72]],.115,'yz');
+    panel(whitePaint,[[-7.78,1.79],[-7.82,1.12],[-7.64,.91],[-7.48,.96],[-7.17,1.76]],.103,'yz');
+    panel(redPaint,[[-1.09,-4.93],[-1.09,-5.22],[0,-5.61],[1.08,-5.22],[1.08,-4.93],[0,-4.76]],.092,'xz',1.82);
+    block(redPaint,0,2.36,-.72,1.17,.39,1.95,.09);
+    beam(rail,[0,2.54,-.26],[0,3.32,-.26],.08);
+    block(dark,0,3.27,-.26,.50,.14,.50);
+    for (let i=0;i<4;i++) {
+      const a=.36+i*Math.PI*.5,s=Math.sin(a),c=Math.cos(a);
+      block(dark,s*2.85,3.19,-.26+c*2.85,.235,.052,4.96,0,a);
+      block(whitePaint,s*5.13,3.222,-.26+c*5.13,.233,.015,.17,0,a);
+    }
+    block(dark,.22,1.93,-7.65,.058,1.66,.15,.46);
+    for (const s of [-1,1]) {
+      const x=s*1.19;
+      beam(rail,[x,.057,-2.16],[x,.057,1.42],.060);
+      beam(rail,[x,.057,1.42],[x,.30,2.41],.060);
+      for (const z of [-1.50,1.02]) beam(rail,[x,.109,z],[s*.59,.81,z],.061);
+    }
+    block(dark,1.43,.32,-.08,.49,.055,2.50);
+    block(rail,1.65,.51,-.08,.036,.36,2.39);
+    block(redPaint,1.43,.50,.31,.38,.28,.68);
+  } else if (id==='snowmobile') {
+    const yellowPaint=0xf0bf2f;
+    section(yellowPaint,snowmobileHood,-.37,1.07,-1.77,1.77);
+    section(dark,snowmobileHood,-.37,1.07,1.77,TAU-1.77);
+    panel(dark,[[-1.52,.43],[-1.40,.72],[-.79,.75],[-.19,.82],[.20,.65],[.176,.43]],.529,'yz');
+    panel(dark,[[-1.11,.70],[-.98,.805],[-.50,.832],[-.23,.887],[.02,.872],[.17,.815],[.06,.717]],.399,'yz');
+    panel(0x282d30,[[-1.51,.17],[-1.36,.44],[-.02,.42],[.18,.25],[.04,.041],[-1.40,.04]],.50,'yz');
+    own(gridGeometry(6,3,(u,v)=>snowmobileScreen(1-u,v)),0x7c93a2);
+    own(gridGeometry(6,3,snowmobileScreen),0x607686);
+    for (const u of [0,1]) beam(dark,snowmobileScreen(u,0),snowmobileScreen(u,1),.012);
+    beam(dark,[0,.82,.12],[0,1.11,.207],.039);
+    beam(rail,[-.337,1.10,.138],[.337,1.10,.138],.027);
+    block(0xc82a2d,0,.59,-1.55,.24,.079,.045);
+    for (const s of [-1,1]) {
+      panel(dark,[[.34,.031],[.43,.062],[1.145,.061],[1.424,.115],[1.617,.222],[1.629,.147],[1.454,.075],[1.249,.029]],.149,'yz',s*.4445);
+      beam(rail,[s*.205,.506,.734],[s*.4445,.116,.756],.047);
+      block(whitePaint,s*.147,.758,.79,.198,.082,.064,-.34);
+    }
+  } else if (id==='snowcat') {
+    block(dark,0,.72,-.04,2.01,.66,4.96);
+    for (const s of [-1,1]) {
+      panel(0x303639,[[-2.42,.38],[-2.15,.89],[2.08,.91],[2.34,.44],[2.13,.105],[-2.12,.105]],1.6,'yz',s*1.42);
+      block(rail,s*2.224,.47,-.04,.038,.31,3.86);
+    }
+    block(redPaint,0,1.26,-1.29,1.73,.71,2.37,.16);
+    block(redPaint,0,1.29,.61,2.18,.35,2.18);
+    block(glazing,0,2.07,.58,2.06,1.23,1.65,-.12);
+    block(redPaint,0,2.73,.45,2.11,.12,1.96);
+    own(gridGeometry(12,5,(u,v)=>snowcatBlade(1-u,v)),rail);
+    own(gridGeometry(10,4,(u,v)=>{
+      const [x,y,z]=snowcatBlade(u,v);
+      return [x,y,z-.079];
+    }),dark);
+    block(rail,0,.15,4.11,5.24,.10,.09);
+    for (const s of [-1,1]) {
+      beam(rail,[s*.7,.61,1.64],[s*.93,.52,3.89],.068);
+      block(redPaint,s*.985,2.12,1.25,.082,1.18,.083,-.12);
+    }
+    block(redPaint,0,.40,-3.28,5.50,.49,1.04);
+    block(0xffa23d,.73,2.84,-.18,.17,.11,.15);
+  } else throw new RangeError('No parked service proxy for ' + id);
+  const mesh = mergedMesh(parts,{roughness:.55,metalness:.14});
+  mesh.name=`${id} · parked LOD`;
+  for (const geometry of owned) geometry.dispose();
+  return mesh;
+}
+
 function fuselageWindow(parent, profile, z0, z1, low, high, mat = glass, edge = .021) {
   const bounds = v => {
     const end = Math.max(0, .20 - Math.min(v, 1 - v)) / .20;
@@ -376,13 +508,7 @@ function flightInstruments(parent) {
 function helicopter() {
   // Bell 407's 10.66 m rotor and 10.57 m fuselage set the scale of the reference aircraft.
   const group = new THREE.Group();
-  const shell = [
-    [-2.66,.35,1.39,.33,.19], [-2.22,.69,1.49,.48,.43], [-1.72,.92,1.52,.66,.63],
-    [-1.28,1.018,1.55,.71,.77], [-.58,1.072,1.56,.73,.80], [.24,1.068,1.57,.72,.78],
-    [.89,1.032,1.57,.65,.73], [1.41,.945,1.57,.55,.66], [1.78,.84,1.53,.43,.56],
-    [2.09,.69,1.43,.31,.46], [2.37,.49,1.34,.23,.34], [2.57,.25,1.25,.14,.17], [2.64,.055,1.21,.05,.05],
-  ];
-  const sections = [-2.66,-1.67,-.53,-.44,.32,.42,1.38,1.47,2.40,2.64];
+  const shell = helicopterShell, sections = helicopterSections;
   for (let i = 1; i < sections.length; i++) {
     const z0 = sections[i-1], z1 = sections[i];
     const windshieldBand = z0 >= 1.47 && z1 <= 2.45;
@@ -452,8 +578,7 @@ function helicopter() {
     rod(group, metal, a, b, .115);
     rod(group, graphite, [s*.43,2.56,-1.83], [s*.43,2.563,-1.882], .072);
   }
-  const tail = [[-7.79,.09,1.89,.12,.09],[-7.47,.139,1.88,.15,.14],[-6.3,.185,1.85,.17,.152],
-    [-4.98,.237,1.80,.20,.174],[-3.57,.329,1.72,.27,.205],[-2.08,.535,1.66,.36,.365]];
+  const tail = helicopterTail;
   ringSkin(group, red, tail, -7.79,-2.08,-1.98,1.98);
   ringSkin(group, white, tail, -7.79,-2.08, 1.98, TAU-1.98);
   for (const s of [-1,1]) heliStripe(group,tail,pinstripe,-7.76,-2.20,() => s*1.71-.033,.065);
@@ -811,13 +936,7 @@ function snowcat() {
       [.66+Math.cos(a)*.098,2.27,-.64+Math.sin(a)*.098],.008);
   }
 
-  const blade=(u,v)=> {
-    const x=(u-.5)*5.25;
-    const offset=Math.max(Math.abs(x)-1.88,0);
-    const y=.105+v*(1.14+.035*offset);
-    const z=4.119-.156*(1-Math.cos(v*TAU))-.27*v+offset*.368;
-    return [x,y,z];
-  };
+  const blade=snowcatBlade;
   surface(group,bladeMaterial(),44,18,blade);
   surface(group,steel,36,12,(u,v)=>blade(u,v).map((p,i)=>i===2?p-.079:p));
   for(const v of [0,1]){
@@ -897,8 +1016,7 @@ function snowmobile() {
     const y=.825+.057*(i/7);
     rod(group,graphite,[-.187,y,z],[.187,y,z],.008);
   }
-  const hood=[[-.37,.203,.714,.105,.159],[-.10,.284,.754,.209,.200],[.185,.342,.751,.293,.242],
-    [.45,.349,.702,.327,.251],[.74,.311,.615,.288,.216],[.93,.226,.548,.202,.14],[1.07,.056,.510,.072,.08]];
+  const hood=snowmobileHood;
   ringSkin(group,yellow,hood,-.37,1.068,-1.77,1.77);
   ringSkin(group,graphite,hood,-.37,1.068,1.77,TAU-1.77);
   ringSkin(group,warmYellow,hood,.219,.976,-.323,.323,.009);
@@ -947,10 +1065,7 @@ function snowmobile() {
     staticBatches(ski);
   }
 
-  const wind=(u,v)=>{
-    const d=u*2-1;
-    return [d*(.276-.033*v), .972+.405*v-.025*d*d,.55-.204*v-.138*d*d];
-  };
+  const wind=snowmobileScreen;
   surface(group,windshield,16,8,wind);
   const windEdge=[
     ...Array.from({length:9},(_,i)=>wind(i/8,0)),

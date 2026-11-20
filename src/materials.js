@@ -113,25 +113,31 @@ const surfaces = {
       float traffic = ice < 1.0 ? trackPressure(p.xz) * (1.0-ice) : 0.0;
       float loose = smoothstep(.23,.77,snowMix.g)*(1.0-ice)*(1.0-.76*traffic);
       float detail = 1.0 - smoothstep(23.0, 125.0, distanceToEye);
-      vec2 plazaUv = (p.xz - plazaLimits.xy) / plazaLimits.z;
-      vec2 bowlUv = (p.xz - bowlLimits.xy) / bowlLimits.z;
-      vec2 inPlaza = smoothstep(vec2(.004), vec2(.028), min(plazaUv, 1.0-plazaUv));
-      vec2 inBowl = smoothstep(vec2(.004), vec2(.028), min(bowlUv, 1.0-bowlUv));
-      vec2 plazaSample = vec2(plazaUv.x, 1.0-plazaUv.y);
-      vec2 bowlSample = vec2(bowlUv.x, 1.0-bowlUv.y);
-      // Compute texture footprints before the per-fragment coverage tests.
-      vec2 plazaDx = dFdx(plazaSample), plazaDy = dFdy(plazaSample);
-      vec2 bowlDx = dFdx(bowlSample), bowlDy = dFdy(bowlSample);
-      float plazaTracks = 0.0, bowlTracks = 0.0;
-      if (inPlaza.x > 0.0 && inPlaza.y > 0.0)
-        plazaTracks = textureGrad(plazaSnow, plazaSample, plazaDx, plazaDy).r * inPlaza.x * inPlaza.y;
-      if (inBowl.x > 0.0 && inBowl.y > 0.0)
-        bowlTracks = textureGrad(bowlSnow, bowlSample, bowlDx, bowlDy).r * inBowl.x * inBowl.y;
-      float marks = max(plazaTracks, bowlTracks);
-      vec2 villageUv = (p.xz - villageLimits.xy) / villageLimits.z;
-      if(distanceToEye<95.0 && all(greaterThan(villageUv,vec2(0.))) && all(lessThan(villageUv,vec2(1.)))){
-        marks=max(marks,texture2D(villageSnow,vec2(villageUv.x,1.-villageUv.y)).r);
+      float marks = 0.0, useZone = 0.0;
+      #ifndef TERRAIN_NO_FIXED_TRACKS
+      {
+        vec2 plazaUv = (p.xz - plazaLimits.xy) / plazaLimits.z;
+        vec2 bowlUv = (p.xz - bowlLimits.xy) / bowlLimits.z;
+        vec2 inPlaza = smoothstep(vec2(.004), vec2(.028), min(plazaUv, 1.0-plazaUv));
+        vec2 inBowl = smoothstep(vec2(.004), vec2(.028), min(bowlUv, 1.0-bowlUv));
+        vec2 plazaSample = vec2(plazaUv.x, 1.0-plazaUv.y);
+        vec2 bowlSample = vec2(bowlUv.x, 1.0-bowlUv.y);
+        // Compute texture footprints before the per-fragment coverage tests.
+        vec2 plazaDx = dFdx(plazaSample), plazaDy = dFdy(plazaSample);
+        vec2 bowlDx = dFdx(bowlSample), bowlDy = dFdy(bowlSample);
+        float plazaTracks = 0.0, bowlTracks = 0.0;
+        if (inPlaza.x > 0.0 && inPlaza.y > 0.0)
+          plazaTracks = textureGrad(plazaSnow, plazaSample, plazaDx, plazaDy).r * inPlaza.x * inPlaza.y;
+        if (inBowl.x > 0.0 && inBowl.y > 0.0)
+          bowlTracks = textureGrad(bowlSnow, bowlSample, bowlDx, bowlDy).r * inBowl.x * inBowl.y;
+        marks = max(plazaTracks, bowlTracks);
+        useZone = max(inPlaza.x*inPlaza.y, inBowl.x*inBowl.y);
+        vec2 villageUv = (p.xz - villageLimits.xy) / villageLimits.z;
+        if(distanceToEye<95.0 && all(greaterThan(villageUv,vec2(0.))) && all(lessThan(villageUv,vec2(1.)))){
+          marks=max(marks,texture2D(villageSnow,vec2(villageUv.x,1.-villageUv.y)).r);
+        }
       }
+      #endif
       float vicinity = 1.0 - smoothstep(125.0, 920.0, distanceToEye);
       vec2 wind = mat2(.82,-.57,.57,.82) * p.xz;
       float drift = filteredSurfaceNoise(vec3(wind.x*.115,p.y*.11,wind.y*.48));
@@ -198,15 +204,20 @@ const surfaces = {
         ? surfaceNoise(ripplePosition + .22 * scoured) : .5;
       float detailNormals = .018 * crust + .0011 * grain * microCoverage;
       float polished = ice * smoothstep(.23,.67,.85*scoured+.28*drift) * (1.0-.40*marks) * (1.0-exposed);
-      float useZone = max(inPlaza.x*inPlaza.y, inBowl.x*inBowl.y);
-      vec3 clumpPoint=vec3(p.x*3.1,p.y*1.1,p.z*2.4);
-      float churn=useZone * detail * (1.0-smoothstep(.34,.95,length(fwidth(clumpPoint))))
-        * (.32 + .68*smoothstep(.06,.36,marks)) * (1.0-.7*polished);
-      float clump=detail > .001 && useZone > .01 && churn > 0.0
-        ? smoothstep(.29,.79,surfaceNoise(clumpPoint+scoured*.9)) : .5;
+      float churnRelief = 0.0;
+      #ifndef TERRAIN_NO_FIXED_TRACKS
+      {
+        vec3 clumpPoint=vec3(p.x*3.1,p.y*1.1,p.z*2.4);
+        float churn=useZone * detail * (1.0-smoothstep(.34,.95,length(fwidth(clumpPoint))))
+          * (.32 + .68*smoothstep(.06,.36,marks)) * (1.0-.7*polished);
+        float clump=detail > .001 && useZone > .01 && churn > 0.0
+          ? smoothstep(.29,.79,surfaceNoise(clumpPoint+scoured*.9)) : .5;
+        churnRelief = .049 * churn * clump;
+      }
+      #endif
       float relief = mix(dune * vicinity + detailNormals * detail, .016 * drift, polished) - .023*marks
         + .045 * ripple * detail * rippleWeight * (1.0 - groomed*.66)
-        + .049 * churn * clump;
+        + churnRelief;
       // Small settled pillows overlap the longer wind ripples. Keep this
       // relief on loose snow and filter it away as it becomes subpixel.
       if (pillowsActive) {
@@ -225,11 +236,15 @@ const surfaces = {
       diffuseColor.rgb *= mix(vec3(1.0),vec3(.68,.84,.96), polished * .55);
       // Melt follows elevation and broken patches instead of globally tinting
       // white snow green. Groomed pistes retain a ribbon into the spring thaw.
-      float seasonalLine = climateSnowline + (scoured-.5)*160.0 + (drift-.5)*74.0;
-      float alpineSnow = smoothstep(seasonalLine-145.0,seasonalLine+115.0,p.y);
-      float oldSnow = max(climateSnowpack,alpineSnow);
-      float pisteSnow = groomed * mix(.90,.95,climateSpring) * smoothstep(.02,.35,climateSnowpack);
-      float cover = max(pisteSnow, smoothstep(.25,.79,oldSnow+scoured*.28-.12));
+      float cover = 1.0;
+      // The low end of the noise cannot bring a full snowpack below .79.
+      if (climateSnowpack < .92) {
+        float seasonalLine = climateSnowline + (scoured-.5)*160.0 + (drift-.5)*74.0;
+        float alpineSnow = smoothstep(seasonalLine-145.0,seasonalLine+115.0,p.y);
+        float oldSnow = max(climateSnowpack,alpineSnow);
+        float pisteSnow = groomed * mix(.90,.95,climateSpring) * smoothstep(.02,.35,climateSnowpack);
+        cover = max(pisteSnow, smoothstep(.25,.79,oldSnow+scoured*.28-.12));
+      }
       // Nine-centimetre groomer grooves follow the mapped trail centreline.
       // Fade before the grooves approach the pixel footprint at a grazing angle.
       float groomerPass = smoothstep(.39,.77,snowMix.r) * (1.0-smoothstep(5.0,23.0,distanceToEye))
@@ -251,17 +266,20 @@ const surfaces = {
           diffuseColor.rgb += vec3(.17,.21,.27) * crystals * (.25 + .75*flash) * (1.0-.71*ice);
         }
       }
-      vec3 summerFloor = mix(vec3(.075,.112,.035),vec3(.18,.225,.075),scoured);
-      vec3 fallFloor = mix(vec3(.14,.079,.024),vec3(.29,.19,.062),scoured);
-      vec3 meadow = mix(summerFloor,fallFloor,climateAutumn);
-      meadow = mix(meadow,vec3(.075,.077,.072),smoothstep(1580.0,2000.0,p.y)*.69);
-      vec3 woodlandFloor = vec3(.064,.102,.047) * (.74+.35*canopy);
-      meadow = mix(meadow,woodlandFloor,forestExtent*(.29+.29*understory));
-      meadow *= 1.0 - climateWetness*.15;
-      diffuseColor.rgb = mix(meadow,diffuseColor.rgb,cover);
+      relief -= .0012*visibleGrooves*groove;
+      if (cover < 1.0) {
+        vec3 summerFloor = mix(vec3(.075,.112,.035),vec3(.18,.225,.075),scoured);
+        vec3 fallFloor = mix(vec3(.14,.079,.024),vec3(.29,.19,.062),scoured);
+        vec3 meadow = mix(summerFloor,fallFloor,climateAutumn);
+        meadow = mix(meadow,vec3(.075,.077,.072),smoothstep(1580.0,2000.0,p.y)*.69);
+        vec3 woodlandFloor = vec3(.064,.102,.047) * (.74+.35*canopy);
+        meadow = mix(meadow,woodlandFloor,forestExtent*(.29+.29*understory));
+        meadow *= 1.0 - climateWetness*.15;
+        diffuseColor.rgb = mix(meadow,diffuseColor.rgb,cover);
+        relief = mix(.022*crust+.009*grain*microCoverage,relief,cover);
+      }
       diffuseColor.rgb = mix(diffuseColor.rgb,shale,exposed*(1.0-.58*rimed*cover));
-      relief = mix(.022*crust+.009*grain*microCoverage,relief-.0012*visibleGrooves*groove,cover)
-        + exposed * (.11*fracture+.07*drift);
+      relief += exposed * (.11*fracture+.07*drift);
     `,
     normal: 'normal = surfaceNormal(-vViewPosition, normal, relief * smoothstep(.055,.27,abs(dot(normal, normalize(vViewPosition)))));',
     roughness: 'roughnessFactor = mix(mix(.94,.68,groomed*.80 + crust*.16*detail + traffic*.18), mix(.21,.115,climateRealism), polished*.88);',
@@ -391,13 +409,15 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
   const material = new THREE.MeshStandardMaterial({ roughness: .9, ...options });
   const terrain = kind === 'snow' || kind === 'mountain';
   const roomCutout = kind === 'snow' && snowMaps?.interiorCutout !== false;
+  const noFixedTracks = kind === 'snow' && snowMaps?.fixedTracks === false;
   if (terrain) {
     terrainSurfaces.add(material);
     material.addEventListener('dispose', () => terrainSurfaces.delete(material));
   }
-  material.customProgramCacheKey = () => `${kind}${roomCutout ? '-room' : ''}${skiSnow ? `-ski-snow-${skiSnow.mode}` : ''}${terrain && budgetSampling ? '-volume' : ''}`;
+  material.customProgramCacheKey = () => `${kind}${roomCutout ? '-room' : ''}${skiSnow ? `-ski-snow-${skiSnow.mode}` : ''}${terrain && budgetSampling ? '-volume' : ''}${noFixedTracks ? '-no-tracks' : ''}`;
   material.onBeforeCompile = (shader) => {
     if (roomCutout) shader.fragmentShader = '#define TERRAIN_ROOM_CUTOUT\n' + shader.fragmentShader;
+    if (noFixedTracks) shader.fragmentShader = '#define TERRAIN_NO_FIXED_TRACKS\n' + shader.fragmentShader;
     if (terrain && budgetSampling) {
       shader.fragmentShader = '#define TERRAIN_NOISE_VOLUME\n' + shader.fragmentShader;
       shader.uniforms.terrainNoise = { value: terrainNoiseVolume() };
@@ -438,9 +458,11 @@ export function surfaceMaterial(kind, options = {}, snowMaps) {
       shader.uniforms.roomCutout = { value: snowMaps.roomCutout };
       shader.uniforms.annexCutout = { value: snowMaps.annexCutout };
       shader.uniforms.roomYaw = { value: snowMaps.roomYaw };
-      for (const [place, layer] of Object.entries(snowMaps.tracks)) {
-        shader.uniforms[place + 'Snow'] = { value: layer.map };
-        shader.uniforms[place + 'Limits'] = { value: new THREE.Vector3(layer.origin.x, layer.origin.y, layer.span) };
+      if (!noFixedTracks) {
+        for (const [place, layer] of Object.entries(snowMaps.tracks)) {
+          shader.uniforms[place + 'Snow'] = { value: layer.map };
+          shader.uniforms[place + 'Limits'] = { value: new THREE.Vector3(layer.origin.x, layer.origin.y, layer.span) };
+        }
       }
       shader.uniforms.pisteLimits = { value: new THREE.Vector4(WORLD.minX, WORLD.minZ, WORLD.sizeX, WORLD.sizeZ) };
       if (skiSnow) {
