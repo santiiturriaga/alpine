@@ -135,6 +135,47 @@ function ownRenderedParts(rider) {
   });
 }
 
+function flightWing() {
+  const wing = new THREE.Group();
+  wing.name = 'Deployable sled wing';
+  const positions = [], colors = [], indices = [];
+  const blue = new THREE.Color('#378aaf'), cream = new THREE.Color('#f1e5ce');
+  const columns = 16, rows = 5;
+  for (let chord = 0; chord <= rows; chord++) {
+    const t = chord / rows;
+    for (let column = 0; column <= columns; column++) {
+      const span = 2 * column / columns - 1;
+      const tip = Math.abs(span);
+      const x = span * 2.15;
+      const y = 2.43 - tip ** 1.9 * .47 + Math.sin(t * Math.PI) * (.12 + .10 * (1 - tip));
+      const z = -.9 + tip ** 1.7 * .83 + t * (1.28 - .63 * tip);
+      positions.push(x, y, z);
+      (column > 3 && column < 13 && chord > 0 ? cream : blue).toArray(colors, colors.length);
+      if (chord && column) {
+        const i = chord * (columns + 1) + column;
+        indices.push(i - columns - 2, i - columns - 1, i, i - columns - 2, i, i - 1);
+      }
+    }
+  }
+  const canopy = new THREE.BufferGeometry();
+  canopy.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  canopy.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  canopy.setIndex(indices);
+  canopy.computeVertexNormals();
+  wing.add(new THREE.Mesh(canopy, new THREE.MeshStandardMaterial({
+    vertexColors: true, side: THREE.DoubleSide, roughness: .82,
+  })));
+  const cords = new THREE.BufferGeometry();
+  const lines = [];
+  for (const side of [-1, 1]) {
+    for (const z of [-.21, .51]) lines.push(side * .49, .38, .4, side * 1.80, 2.1, z);
+  }
+  cords.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+  wing.add(new THREE.LineSegments(cords, new THREE.LineBasicMaterial({ color: '#214054' })));
+  wing.visible = false;
+  return wing;
+}
+
 export function sledModel(outfit, redSled = false) {
   const group = new THREE.Group();
   group.name = 'Ash runner sled and rider';
@@ -146,13 +187,15 @@ export function sledModel(outfit, redSled = false) {
   rider.group.rotation.y = Math.PI;
   const steering = steeringRig(material, cube);
   group.add(sledTimber(material, cube, round, redSled), rider.group, steering);
+  const wing = redSled ? null : flightWing();
+  if (wing) group.add(wing);
 
   const mount = {
     hipY: .605, hipZ: -.39, hinge: .24, gaze: 0,
     feet: [-1, 1].map(side => new THREE.Vector3(side * .195, .423, .29)),
     grip: [.215, .754, .15],
   };
-  const sled = { group, rider, steering, mount, steer: 0, tuck: 0, brake: 0, landing: 0, airborne: false };
+  const sled = { group, rider, steering, mount, wing, steer: 0, tuck: 0, brake: 0, landing: 0, airborne: false };
   poseSledRider(sled, { dx: 0, dy: 0, speed: 0 }, 0, 0, 0, 0);
   ownRenderedParts(rider.group);
   return sled;
@@ -166,6 +209,14 @@ export function poseSledRider(sled, run, dt, steer, tuck, brake, impact = 0) {
   sled.brake = mix(sled.brake, brake, damping);
   sled.airborne = Boolean(run.air);
   sled.landing = Math.max(impact, sled.landing * Math.exp(-dt * 9));
+  if (sled.wing) {
+    sled.wing.visible = Boolean(run.upperRoute && run.d < run.flightUntil);
+    if (sled.wing.visible) {
+      const open = clamp((run.d - run.upperRoute.pickupD + 1.5) / 5, .28, 1);
+      sled.wing.scale.set(open, .60 + .40 * open, 1);
+      sled.wing.rotation.z = -.012 * run.dx;
+    }
+  }
   const { mount, steering } = sled;
   mount.hipY = .605 - .019 * sled.tuck - .052 * sled.landing;
   mount.hipZ = -.39 + .063 * sled.tuck - .034 * sled.brake;

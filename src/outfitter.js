@@ -45,6 +45,19 @@ function read() {
     haircut:Object.hasOwn(haircuts,data.haircut)?data.haircut:'helmet',
     hairColor:hairColors.some(([,color])=>color===data.hairColor)?data.hairColor:hairColors[0][1]};
 }
+function broadcastAppearance(s) {
+  return { ...s.outfit, jacket:jacketFinishes[s.outfit.jacket] ?? s.outfit.jacket,
+    backpackModel:s.backpackModel, skis:s.skis, snowboard:s.snowboard, discipline:s.discipline,
+    stance:s.stance, sticker:s.sticker };
+}
+function riderAppearance(s, broadcast) {
+  return { ...broadcast, apparel:s.outfit.jacket, skiModel:s.skis, snowboardModel:s.snowboard,
+    footwear:s.footwear, haircut:s.haircut, hairColor:s.hairColor };
+}
+export function readEquippedAppearance() {
+  const state = read();
+  return riderAppearance(state, broadcastAppearance(state));
+}
 const freeOptions = (entries, active) => entries.map(([id, name]) => ({
   id, name, owned: true, price: 0, active: id === active,
 }));
@@ -120,8 +133,7 @@ export class Outfitter {
   equip() {
     const s=this.state;
     this.player.setEquipment?.({ discipline:s.discipline, skiModel:SKI_MODELS[s.skis], snowboardModel:SNOWBOARD_MODELS[s.snowboard], stance:s.stance });
-    this.broadcastOutfit = { ...s.outfit, jacket: jacketFinishes[s.outfit.jacket] ?? s.outfit.jacket,
-      backpackModel:s.backpackModel, skis:s.skis, snowboard:s.snowboard, discipline:s.discipline, stance:s.stance, sticker:s.sticker };
+    this.broadcastOutfit = broadcastAppearance(s);
     const patrol=s.outfit.jacket===patrolShell;
     this.player.landingTrickMultiplier=patrol?2:1;
     this.player.shellSpeed=s.outfit.jacket==='summit-shell'?1.08:1;
@@ -131,9 +143,7 @@ export class Outfitter {
     this.dialog.dispatchEvent(new Event('outfitterchange'));
   }
   get appearance() {
-    const s = this.state;
-    return { ...this.broadcastOutfit, apparel:s.outfit.jacket, skiModel:s.skis, snowboardModel:s.snowboard,
-      footwear:s.footwear, haircut:s.haircut, hairColor:s.hairColor };
+    return riderAppearance(this.state, this.broadcastOutfit);
   }
   previewAppearance(slot, id) {
     const appearance = this.appearance;

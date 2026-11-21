@@ -23,6 +23,7 @@ const formatHeight = (metres, { lengthFactor, small }) => `${formatNumber(metres
 const NEARBY_MAP_SIZE = 160;
 const NEARBY_MAP_RADIUS = 70;
 const NEARBY_MAP_METRES = 300;
+const NEARBY_MAP_PREFERENCE = 'alpine.nearby-map';
 const MAP_INK = '#112434';
 const NEARBY_LINE_STYLES = {
   lift: { color: '#ffd489', dash: [4, 3] },
@@ -87,7 +88,9 @@ export class UI {
     $('trail-count').textContent = formatNumber(runs.length);
     $('lift-count').textContent = formatNumber(lifts.filter((lift) => lift.rideable).length);
     this.resortMap = new ResortMap(this.el.bigmap);
-    this.nearbyMapFrame = null;
+    let showNearbyMap = true;
+    try { showNearbyMap = localStorage.getItem(NEARBY_MAP_PREFERENCE) !== 'off'; } catch {}
+    this.setNearbyMap(showNearbyMap);
     this.nearest = null;
     this.lastNearestCheck = 0;
     this.toastTimers = new Set();
@@ -217,8 +220,13 @@ export class UI {
   }
 
   toggleNearbyMap() {
+    const shown = this.el.nearbyMap.hidden;
+    this.setNearbyMap(shown);
+    try { localStorage.setItem(NEARBY_MAP_PREFERENCE, shown ? 'on' : 'off'); } catch {}
+  }
+
+  setNearbyMap(shown) {
     const { nearbyMap, pauseNearbyMap } = this.el;
-    const shown = nearbyMap.hidden;
     nearbyMap.hidden = !shown;
     pauseNearbyMap.classList.toggle('on', shown);
     pauseNearbyMap.setAttribute('aria-pressed', String(shown));
@@ -408,7 +416,7 @@ export class UI {
 
   drawNearbyMap(player, time) {
     const { nearbyMap: canvas, hud } = this.el;
-    if (canvas.hidden || hud.classList.contains('riding')) return;
+    if (canvas.hidden || hud.classList.contains('hidden') || hud.classList.contains('riding')) return;
     const { x, z } = player.pos;
     const { heading } = player;
     const previous = this.nearbyMapFrame;

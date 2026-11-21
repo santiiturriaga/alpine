@@ -131,7 +131,7 @@
   <section id="hud" class="screen hud hidden" aria-label="Game heads-up display">
     <div class="toast-stack" id="toast-stack" role="status" aria-live="polite"></div>
     <div class="trail-overlay">
-      <canvas id="nearby-map" width="320" height="320" aria-label="Nearby trails and lifts. North is up and the arrow shows your heading." role="img" hidden></canvas>
+      <canvas id="nearby-map" width="320" height="320" aria-label="Nearby trails and lifts. North is up and the arrow shows your heading." role="img"></canvas>
       <div id="route-guidance" class="route-guidance" hidden>
         <strong id="route-guidance-name"></strong>
         <span id="route-guidance-text"></span>
@@ -539,7 +539,7 @@
           <div class="pause-actions"><button id="pause-customize" type="button">Customize rider</button></div>
           <div class="setting-row"><span id="pause-camera-label">Camera</span><button class="seg" id="pause-camera" type="button" aria-labelledby="pause-camera-label pause-camera">CHASE</button></div>
           <div class="setting-row"><span id="pause-markers-label">Trail markers</span><button class="toggle on" id="pause-markers" type="button" aria-labelledby="pause-markers-label" aria-pressed="true"><i aria-hidden="true"></i><span aria-hidden="true">ON</span></button></div>
-          <div class="setting-row"><span id="pause-nearby-map-label">Nearby trail map</span><button class="toggle" id="pause-nearby-map" type="button" aria-labelledby="pause-nearby-map-label" aria-controls="nearby-map" aria-pressed="false"><i aria-hidden="true"></i><span aria-hidden="true">OFF</span></button></div>
+          <div class="setting-row"><span id="pause-nearby-map-label">Nearby trail map</span><button class="toggle on" id="pause-nearby-map" type="button" aria-labelledby="pause-nearby-map-label" aria-controls="nearby-map" aria-pressed="true"><i aria-hidden="true"></i><span aria-hidden="true">ON</span></button></div>
         </section>
         <section class="pause-panel pause-settings" id="pause-panel-graphics" role="tabpanel" aria-labelledby="pause-tab-graphics" hidden>
           <div class="setting-row pause-quality-row">
@@ -654,6 +654,11 @@
     </div>
     <div class="destination-action">
       <button type="button" id="destination-travel" aria-describedby="destination-name"></button>
+      <button type="button" id="destination-sled" aria-haspopup="dialog" aria-labelledby="destination-sled-title" aria-describedby="destination-sled-modes">
+        <strong id="destination-sled-title">Sled Run</strong>
+        <small id="destination-sled-modes">Free Ride or Race</small>
+      </button>
+      <p id="destination-sled-status" role="status" hidden></p>
     </div>
     <footer class="destination-footer">
       <div class="destination-credits">

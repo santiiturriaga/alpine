@@ -774,9 +774,9 @@ function bindMountainPanel() {
   opacity.oninput=()=>{preview.style.opacity=Number(opacity.value)/100;};
   for (const button of courseButtons) button.onclick = () => startCourse(button.dataset.course);
   dialog.querySelector('[data-minigame="sled"]').onclick = async () => {
-    releaseMouseLook();
+    const context = prepareSledGame();
     const { openSledGame } = await import('./sled-game.js');
-    openSledGame({ resortRenderer: renderer, audio, outfit: outfitter.appearance });
+    openSledGame(context);
   };
   $('course-retry').onclick=()=>{if(challenges.state)startCourse(challenges.state.id);};
   $('course-explore').onclick=()=>challenges.clear();
@@ -1455,6 +1455,13 @@ function keysBackupClear() {
   for (const key of Object.keys(keys)) keys[key] = false;
   heldAtTakeoff.clear();
   ollieQueued = false;
+}
+
+export function prepareSledGame() {
+  if (!outfitter || !audio) return;
+  releaseMouseLook();
+  keysBackupClear();
+  return { resortRenderer: renderer, audio, outfit: outfitter.appearance };
 }
 
 function toggleFootMode() {

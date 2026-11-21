@@ -77,8 +77,8 @@ export function resortTravelURL(resort, { arrive = false } = {}) {
   return url;
 }
 
-export function bindResortTravel(current, { standalone = false } = {}) {
-  const selector = bindDestinationSelector(RESORTS, current, resortTravelURL, { standalone });
+export function bindResortTravel(current, { standalone = false, openSled } = {}) {
+  const selector = bindDestinationSelector(RESORTS, current, resortTravelURL, { standalone, openSled });
   if (standalone) selector.open();
   return selector;
 }

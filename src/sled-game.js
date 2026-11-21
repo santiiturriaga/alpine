@@ -4,11 +4,13 @@ import { addSledCourseProps } from './sled-course-props.js';
 import { poseSledRider, sledModel } from './sled-rider.js';
 import { batchRigidParts } from './skier-hardware.js';
 import { sledTreeAssets } from './sled-trees.js';
+import { addSledBiomeArt } from './sled-biome-art.js';
+import { fallState } from './sled-course-plan.js';
 
 import {
   EDGE, LANE, STEP, RAMP_LENGTH, RAMP_HALF, RAMP_HEIGHT, RACE_LENGTH, SLED_SEGMENT_LENGTH,
   center, altitude, slope, gapAt, snowHeight, surfaceHeight, buildSledSegment, movingBalls, freshRun, points, simulate,
-  freshRival, simulateRival,
+  freshRival, simulateRival, sectionAt, supportHeight,
 } from './sled-course.js';
 
 const IMPACT_TIME = .29;
@@ -29,7 +31,7 @@ function courseLayout(course) {
     const a = cuts[i], b = cuts[i + 1];
     strips.push({ start: a, end: b, rows: Math.ceil((b - a) / 3.65) });
   }
-  return {start, end, length, gaps, groundStart, groundEnd, strips};
+  return {start, end, length, gaps, groundStart, groundEnd, strips, sections: course.sections ?? []};
 }
 
 function timeText(time) {
@@ -151,6 +153,7 @@ function terrain(scene, random, materials, { strips, gaps }) {
   }
   const rock = new THREE.Color(0x68939a), ice = new THREE.Color(0xc0e2e7), tint = new THREE.Color();
   for (const [index, gap] of gaps.entries()) {
+    if (gap.kind === 'waterfall' || gap.kind === 'riverEntry') continue;
     const width = gap.end - gap.start;
     const floor = Math.min(altitude(gap.start), altitude(gap.end)) - (24.5 + index * 2.3);
     for (const [edge, side] of [[gap.start, 1], [gap.end, -1]]) {
@@ -223,8 +226,8 @@ function skyline(scene) {
   }));
   sky.renderOrder = -10;
   scene.add(sky);
-  // A continuous ice-carved valley beyond the finish. Each ridge has a
-  // separate crest line, a broad approach slope and a steeper lee face.
+  // A separate horizon mesh holds the same distance from the chase camera
+  // on an endless descent. Small, bounded parallax leaves the stage in motion.
   const ridgeNoise = makeNoise(61238);
   const ranges = [
     { at: 2250, rise: 550, front: 560, back: 320, peaks: [[-1730, 680, 780], [-690, 490, 570], [610, 340, 400], [1380, 760, 590]] },
@@ -232,7 +235,7 @@ function skyline(scene) {
     { at: 3560, rise: 630, front: 620, back: 340, peaks: [[-2050, 720, 640], [-980, 710, 590], [400, 810, 710], [1680, 740, 650]] },
   ];
   const positions = [], indices = [], colors = [];
-  const cols = 184, rows = 94;
+  const cols = 140, rows = 68;
   for (let j = 0; j <= rows; j++) {
     const d = 1640 + j / rows * 2450;
     for (let i = 0; i <= cols; i++) {
@@ -252,7 +255,7 @@ function skyline(scene) {
         const shoulder = (range.rise + summit + 52 * ridgeNoise.noise2(x / 120, k + 13)) * t ** .8;
         relief = Math.max(relief, shoulder + (ribs - .52) * 148 * Math.sqrt(t));
       }
-      positions.push(x, -580 + relief, -d);
+      positions.push(x, -620 + relief * .87, -d);
       if (i && j) {
         const v = j * (cols + 1) + i;
         indices.push(v - cols - 2, v - cols - 1, v - 1, v - 1, v - cols - 1, v);
@@ -270,11 +273,13 @@ function skyline(scene) {
     const stoneLine = .63 + .09 * ridgeNoise.noise2(x / 65, z / 88) - .08 * smooth(-150, 520, y);
     const coverage = smooth(stoneLine - .1, stoneLine + .08, ny);
     tint.copy(granite).lerp(snow, coverage).lerp(shade, .62 * (1 - sun)).multiplyScalar(.67 + sun * .42);
-    tint.lerp(haze, .22 + .36 * smooth(2010, 3850, -z)).toArray(colors, i * 3);
+    tint.lerp(haze, .34 + .37 * smooth(2010, 3850, -z)).toArray(colors, i * 3);
   }
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  scene.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ vertexColors: true, fog: false })));
-  return sky;
+  const range = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ vertexColors: true, fog: false }));
+  range.name = 'Distant alpine ridges';
+  scene.add(range);
+  return { sky, range };
 }
 
 function forestAssets() {
@@ -292,7 +297,7 @@ function forestAssets() {
   return { ...trees, boulder, boulderMaterial };
 }
 
-function forest(scene, random, { treeRows }, { groundStart, groundEnd, gaps, strips }, assets) {
+function forest(scene, random, { treeRows, sections }, { groundStart, groundEnd, gaps, strips }, assets) {
   const { trunk, trunkMaterial, needleMaterial, crowns, boulder, boulderMaterial } = assets;
   const o = new THREE.Object3D(), color = new THREE.Color();
   const shadowSpots = [], chunks = [];
@@ -306,14 +311,17 @@ function forest(scene, random, { treeRows }, { groundStart, groundEnd, gaps, str
         const d = mix(chunk, finish, random());
         if (gapAt(d, gaps)) continue;
         const ridge = Math.sin(d * .108 + side * 6) ** 2;
-        const x = side * (18 + ridge * 7 + random() ** 1.89 * 88);
+        const zone = sections?.find(section => d >= section.start && d < section.end)?.kind;
+        const margin = zone === 'cave' ? 40 : zone === 'village' ? 32 : zone === 'river' ? 30 : 18;
+        const x = side * (margin + ridge * 7 + random() ** 1.89 * (106 - margin));
         group.push({ d, x, h: 10 + random() ** .85 * 31 });
       }
       for (let i = 0; i < Math.round((finish - chunk) * .12); i++) {
         const d = mix(chunk, finish, random());
         if (gapAt(d, gaps)) continue;
         const w = .75 + random() ** 2 * 3.9;
-        rocks.push({ d, x: side * (EDGE + w * 1.18 + 1.1 + random() ** 1.72 * 61), w });
+        const zone = sections?.find(section => d >= section.start && d < section.end)?.kind;
+        rocks.push({ d, x: side * (EDGE + (zone && zone !== 'forest' ? 15 : 0) + w * 1.18 + 1.1 + random() ** 1.72 * 61), w });
       }
     }
     const trunks = new THREE.InstancedMesh(trunk, trunkMaterial, group.length);
@@ -472,7 +480,21 @@ function printedSign(text, color = '#a8452e', ink = '#fff1df') {
 function venue(scene, materials, course, { start: sectionStart, end: sectionEnd, length, gaps }) {
   const { bark, red, amber, ramp, ice, metal } = materials;
   const gates = [];
-  if (sectionStart === 0) gates.push([23, 'START', '#a8452e']);
+  if (sectionStart === 0) {
+    const start = new THREE.Group();
+    const signMaterial = printedSign('START');
+    const signGeometry = new THREE.PlaneGeometry(1.45, .55);
+    for (const side of [-1, 1]) {
+      const pole = box(start, bark, .18, 2.36, .18, 0, 0, 0);
+      pole.position.copy(surfacePoint(side * 12, 23, 1.08));
+      const mark = new THREE.Mesh(signGeometry, signMaterial);
+      mark.position.copy(pole.position);
+      mark.position.y += .78;
+      mark.position.z += .1;
+      start.add(mark);
+    }
+    scene.add(start);
+  }
   if (sectionEnd === length) gates.push([length, 'FINISH', '#234954']);
   for (const [d, title, color] of gates) {
     const halfSpan = EDGE + 2.6;
@@ -510,6 +532,7 @@ function venue(scene, materials, course, { start: sectionStart, end: sectionEnd,
   reflectors.count = count;
   scene.add(reflectors);
   for (const gap of gaps) {
+    if (gap.kind === 'waterfall' || gap.kind === 'riverEntry') continue;
     const fixture = new THREE.Group();
     fixture.name = gap.name;
     const start = gap.start - RAMP_LENGTH;
@@ -624,7 +647,7 @@ function makeWorld(scene, outfit) {
   const sun = new THREE.DirectionalLight(0xffdfb4, 2.16);
   sun.position.set(-46, 61, -41);
   scene.add(sun, new THREE.HemisphereLight(0xe2f4ff, 0x627285, 2.05));
-  const sky = skyline(scene);
+  const { sky, range } = skyline(scene);
   const assets = forestAssets();
   const sled = sledModel(outfit);
   const flat = new THREE.PlaneGeometry(1, 1);
@@ -650,7 +673,7 @@ function makeWorld(scene, outfit) {
   spray.frustumCulled = false;
   scene.add(spray);
   const segments = new Map();
-  const world = { sky, sled, sledShadow, sprayPositions, random, segments, length: Infinity, rival: null };
+  const world = { sky, range, sled, sledShadow, sprayPositions, random, segments, length: Infinity, rival: null };
   let seed = 0, pace = 'free', rivalCourse;
   const indexAt = distance => Math.max(0, Math.floor(Math.min(distance, world.length - .001) / SLED_SEGMENT_LENGTH));
   function addSegment(index, description) {
@@ -663,6 +686,7 @@ function makeWorld(scene, outfit) {
     const forestData = forest(group, roll, description, layout, assets);
     treeShadows(group, shadowMaterial, forestData.shadowSpots, layout);
     const tokenMeshes = venue(group, materials, description, layout);
+    const biomeArt = addSledBiomeArt(group, description, { pointAt: surfacePoint });
     const balls = movingBalls(description);
     for (const ball of balls) {
       ball.mesh = new THREE.Mesh(ballGeometry, ballMaterial);
@@ -671,7 +695,7 @@ function makeWorld(scene, outfit) {
       group.add(ball.mesh, ball.shadow);
     }
     scene.add(group);
-    const segment = { chunks: forestData.chunks, treeRows: description.treeRows, group, course: description, balls, tokenMeshes,
+    const segment = { chunks: forestData.chunks, treeRows: description.treeRows, group, course: description, balls, tokenMeshes, biomeArt,
       length: world.length, forgiving: true, pace };
     segments.set(index, segment);
     return segment;
@@ -724,24 +748,26 @@ function placeSled(sled, shadow, run, dt, gaps, steer, tuck, brake, landingLoad)
   sled.group.position.set(x, run.y + .015, -d);
   sled.group.rotation.y = mix(sled.group.rotation.y, -heading * .84, f);
   sled.group.rotation.z = mix(sled.group.rotation.z, -.023 * run.dx + (run.recovery || 0) * .28, f);
-  const grade = run.air ? clamp(run.dy * .027, -.52, .48)
-    : Math.atan((surfaceHeight(run.x, d + .13, gaps) - surfaceHeight(run.x, d - .13, gaps)) / .26);
+  const flight = run.upperRoute && d < run.flightUntil;
+  const grade = run.air || flight ? clamp(run.dy * .027, -.52, .48)
+    : Math.atan((supportHeight(run, run.x, d + .13, gaps) - supportHeight(run, run.x, d - .13, gaps)) / .26);
   sled.group.rotation.x = mix(sled.group.rotation.x, grade, f);
   poseSledRider(sled, run, dt, steer, tuck, brake, landingLoad);
-  shadow.visible = !gapAt(d, gaps);
-  shadow.position.set(x, surfaceHeight(run.x, d, gaps) + .086, -d);
-  shadow.rotation.x = -slope(d);
+  shadow.visible = !flight && (!!run.upperRoute || !gapAt(d, gaps));
+  shadow.position.set(x, supportHeight(run, run.x, d, gaps) + .086, -d);
+  shadow.rotation.x = -grade;
   shadow.scale.set(2.1 + (run.air ? .75 : 0), 1, 3.8);
 }
 
 function updateVisuals(world, camera, run, dt, state, input, view, landingLoad = 0) {
-  const { sled, sledShadow, sky, sprayPositions, segments, rival } = world;
+  const { sled, sledShadow, sky, range, sprayPositions, segments, rival } = world;
   const active = state === 'running';
   const d = run.d, x = center(d) + run.x;
-  for (const { course, group, chunks, tokenMeshes, balls } of segments.values()) {
+  for (const { course, group, chunks, tokenMeshes, balls, biomeArt } of segments.values()) {
     group.visible = course.start < d + 435 && course.end > d - 82;
     if (!group.visible) continue;
     const { gaps } = course;
+    biomeArt?.update(run.elapsed, run);
     for (const chunk of chunks) {
       const ahead = chunk.d - d;
       chunk.stand.visible = ahead > -144 && ahead < 434;
@@ -767,7 +793,9 @@ function updateVisuals(world, camera, run, dt, state, input, view, landingLoad =
   }
   const f = 1 - Math.exp(-dt * 9);
   const steer = active ? Number(input('right')) - Number(input('left')) : 0;
-  const { gaps } = world.segmentAt(d).course;
+  const course = world.segmentAt(d).course;
+  const { gaps } = course;
+  const section = sectionAt(course, d);
   placeSled(sled, sledShadow, run, dt, gaps, steer, Number(active && input('tuck')), Number(active && input('brake')), landingLoad);
   if (rival) {
     const offset = rival.run ? rival.run.d - d : Infinity;
@@ -777,7 +805,9 @@ function updateVisuals(world, camera, run, dt, state, input, view, landingLoad =
       placeSled(rival.rig, rival.shadow, rival.run, dt, rivalGaps, 0, active ? .37 : 0, 0, 0);
     }
   }
-  if (active && !view.reduced && !run.air) {
+  const inWater = section?.kind === 'river' && d >= section.waterStart && d < section.waterEnd && !run.air;
+  const wingFlying = run.upperRoute && d < run.flightUntil;
+  if (active && !view.reduced && !run.air && !wingFlying) {
     view.sprayCarry += dt * (39 + Math.abs(run.dx) * 2.6 + (input('brake') ? 34 : 0));
     while (view.sprayCarry > 1) {
       view.sprayCarry--;
@@ -787,7 +817,7 @@ function updateVisuals(world, camera, run, dt, state, input, view, landingLoad =
       p.y = run.y + .13;
       p.z = -d + .91;
       p.dx = -run.dx * .24 + side * (world.random() * 2.35 + .11);
-      p.dy = world.random() * 2.6 + .31;
+      p.dy = world.random() * (inWater ? 4.2 : 2.6) + .31;
       p.dz = 2.2 - run.speed * (.18 + world.random() * .22);
       p.life = .25 + world.random() * .36;
     }
@@ -808,7 +838,9 @@ function updateVisuals(world, camera, run, dt, state, input, view, landingLoad =
   sprayPositions.needsUpdate = true;
 
   const lead = 29;
-  const lift = run.air ? Math.max(0, run.y - snowHeight(run.x, d)) * .64 : 0;
+  // Follow the actual runner height on roofs as well as in the air.
+  const rise = Math.max(0, run.y - snowHeight(run.x, d));
+  const lift = rise * (run.upperRoute ? .93 : run.air ? .68 : .83);
   const follow = state === 'intro' ? -7.3 : -7.95 - run.speed * .026;
   const desiredFov = view.reduced ? 62 : 59 + run.speed * .155;
   const sideView = state === 'intro' ? Math.min(2.8, .68 + 2.2 * camera.aspect) : .8;
@@ -848,6 +880,7 @@ function updateVisuals(world, camera, run, dt, state, input, view, landingLoad =
     }
   }
   sky.position.copy(camera.position);
+  range.position.set(restingCamera.x + 28 * Math.sin(d / 470), restingCamera.y + 10 * Math.sin(d / 690), restingCamera.z);
 }
 
 function disposeScene(scene, riders = [], shared) {
@@ -895,11 +928,12 @@ function gameDialog() {
         <div class="sled-progress-track" data-sled-track aria-hidden="true"><i data-sled-progress></i><s data-sled-rival-progress></s></div>
         <div class="sled-tallies">
           <span><b data-sled-distance>0</b><span data-sled-length></span> m</span>
-          <span><b data-sled-medals>0</b> markers · <b data-sled-jumps>0</b> gaps</span>
+          <span><b data-sled-jumps>0</b> <span data-sled-jump-label>gaps</span></span>
         </div>
         <div class="sled-race-status" data-sled-race-status hidden><b data-sled-place></b> <span data-sled-rival-gap></span></div>
       </div>
       <div class="sled-actions">
+        <div class="sled-coins" data-sled-coin-hud role="group" aria-label="Coins collected"><span aria-hidden="true">✦</span><b data-sled-medals>0</b></div>
         <button type="button" data-sled-pause aria-label="Pause sled run" title="Pause (P)" class="sled-secondary"><span class="sled-pause-icon" aria-hidden="true"></span></button>
         <button type="button" data-sled-exit aria-label="Exit sled run" title="Exit (Esc)" class="sled-secondary"><span class="sled-exit-icon" aria-hidden="true">×</span></button>
       </div>
@@ -912,7 +946,7 @@ function gameDialog() {
         <button type="button" data-sled-mode="free" aria-pressed="true">Free ride</button>
         <button type="button" data-sled-mode="race" aria-pressed="false">Race</button>
       </div>
-      <p data-sled-description>Follow the markers and jump the creek gaps.</p>
+      <p data-sled-description>Follow the coins and jump the creek gaps.</p>
       <div class="sled-card-controls" data-sled-controls>
         <span><kbd>A</kbd> <kbd>D</kbd> Steer</span><span><kbd>W</kbd> Tuck</span><span><kbd>S</kbd> Brake</span><span><kbd>Space</kbd> Jump</span>
       </div>
@@ -936,21 +970,33 @@ const KEY_ACTION = {
   Space: 'jump', ArrowUp: 'tuck', KeyW: 'tuck', ArrowDown: 'brake', KeyS: 'brake',
 };
 const LANE_HINTS = { '-1': 'left', 0: 'center', 1: 'right' };
+const SECTOR_HINTS = {
+  cave: ['Ice cave', 'Take the wing to ride above, or follow coins through the tunnel'],
+  river: ['Glacial river', 'Steer around the ice and stay on the current'],
+  village: ['Village', 'Look for open doors and snow ramps'],
+};
+const DEBRIS_HINTS = { fallingIce: 'Falling ice', fallingSnow: 'Falling snow', fallingRock: 'Rockfall' };
 
-export function openSledGame({ resortRenderer, audio, outfit } = {}) {
+export function openSledGame({ resortRenderer, audio, outfit, returnLabel, opener } = {}) {
   const current = document.getElementById('sled-game');
   if (current?.open) return current;
   const seed = Math.floor(Math.random() * 0x1_0000_0000);
   const dialog = gameDialog();
-  const restoreFocus = document.activeElement;
+  const restoreFocus = opener ?? document.activeElement;
   if (document.pointerLockElement) document.exitPointerLock();
   document.body.append(dialog);
   dialog.showModal();
   const get = name => dialog.querySelector(`[data-sled-${name}]`);
   const play = get('play'), pause = get('pause'), exit = get('exit');
+  if (returnLabel) {
+    exit.setAttribute('aria-label', returnLabel);
+    exit.title = returnLabel;
+  }
   const card = dialog.querySelector('.sled-card'), title = card.querySelector('h2');
   const callout = dialog.querySelector('.sled-callout'), countdown = dialog.querySelector('.sled-countdown');
   const stats = ['speed', 'time', 'score', 'distance', 'jumps', 'medals'].map(get);
+  const jumpLabel = get('jump-label');
+  const coinHud = get('coin-hud');
   const progress = get('progress'), rivalProgress = get('rival-progress');
   const modeOptions = get('mode-options'), modeButtons = modeOptions.querySelectorAll('[data-sled-mode]');
   const raceStatus = get('race-status'), track = get('track'), back = get('show-modes');
@@ -1000,6 +1046,7 @@ export function openSledGame({ resortRenderer, audio, outfit } = {}) {
     card.hidden = running;
     pause.hidden = !running;
     get('hud').hidden = next === 'intro' || next === 'unavailable';
+    coinHud.hidden = next === 'intro' || next === 'unavailable';
     modeOptions.hidden = next !== 'intro';
     back.hidden = next !== 'paused' && next !== 'finished';
     if (!running) callout.hidden = countdown.hidden = true;
@@ -1033,7 +1080,7 @@ export function openSledGame({ resortRenderer, audio, outfit } = {}) {
     text(lengthLabel, mode === 'race' ? ` / ${formatPoints(RACE_LENGTH)}` : '');
     for (const button of modeButtons) button.setAttribute('aria-pressed', String(button.dataset.sledMode === mode));
     text(title, 'Drop in');
-    text(description, mode === 'race' ? 'Beat the rival to the finish. About 3 minutes.' : 'Follow the markers into an endless descent.');
+    text(description, mode === 'race' ? 'Race a ghost rider to the finish. About 3 minutes.' : 'Follow the coins through caves, waterfalls and villages.');
     text(play, mode === 'race' ? 'Start race' : 'Start run');
     description.hidden = controls.hidden = false;
     setState('intro');
@@ -1091,11 +1138,24 @@ export function openSledGame({ resortRenderer, audio, outfit } = {}) {
     play.focus({ preventScroll: true });
   }
 
+  function finishFreeRide(reason) {
+    clearInput();
+    audio?.crash();
+    setState('finished');
+    text(title, 'Run over');
+    text(description, reason);
+    description.hidden = false;
+    controls.hidden = true;
+    text(play, 'Try again');
+    play.focus({ preventScroll: true });
+  }
+
   function updateHud() {
-    const values = [run.d > 0 ? Math.round(run.speed * 3.6) : 0, timeText(run.elapsed), formatPoints(points(run, state === 'finished')),
+    const values = [run.d > 0 ? Math.round(run.speed * 3.6) : 0, timeText(run.elapsed), formatPoints(points(run, mode === 'race' && state === 'finished')),
       formatPoints(Math.round(run.d)), run.jumps, run.tokens];
     values.forEach((value, i) => text(stats[i], value));
-    stats[2].classList.toggle('marker-scored', run.lastToken >= 0 && run.elapsed - run.lastToken < .32);
+    text(jumpLabel, run.jumps === 1 ? 'gap' : 'gaps');
+    coinHud.classList.toggle('coin-collected', run.lastToken >= 0 && run.elapsed - run.lastToken < .32);
     if (mode === 'race') {
       const rival = world.rival.run;
       const difference = run.d - rival.d;
@@ -1109,10 +1169,20 @@ export function openSledGame({ resortRenderer, audio, outfit } = {}) {
     }
     countdown.hidden = state !== 'countdown';
     if (state === 'countdown') text(countdown, Math.max(1, Math.ceil(run.countdown)));
-    const next = world.segmentAt(run.d).course.gaps.find(gap => run.d < gap.end);
+    const course = world.segmentAt(run.d).course;
+    const section = sectionAt(course, run.d);
+    const next = course.gaps.find(gap => run.d < gap.end);
     const crossed = run.elapsed - view.crossingClearedAt < 1.2;
     const recovering = run.elapsed - view.recoveryAt < 1.1;
-    callout.hidden = state !== 'running' || (!recovering && !crossed && (!next || next.start - run.d > 75));
+    const nearRamp = next && next.start - run.d <= 75;
+    const hint = section && run.d - section.start < 128 && SECTOR_HINTS[section.kind];
+    const debris = !run.upperRoute && section?.kind === 'cave' && course.features.find(feature => {
+      if (!DEBRIS_HINTS[feature.kind] || feature.d < run.d || feature.d - run.d > run.speed * 1.4) return false;
+      if (Math.abs(run.x - feature.x) > feature.halfWidth + 1.7) return false;
+      const { phase } = fallState(feature, run.elapsed);
+      return phase === 'warning' || phase === 'falling';
+    });
+    callout.hidden = state !== 'running' || (!recovering && !crossed && !nearRamp && !hint && !debris);
     if (callout.hidden) return;
     if (recovering) {
       text(calloutText, run.recoveryHint);
@@ -1120,6 +1190,16 @@ export function openSledGame({ resortRenderer, audio, outfit } = {}) {
     } else if (crossed) {
       text(calloutText, 'Crossing cleared');
       text(calloutDetail, '');
+    } else if (debris) {
+      text(calloutText, DEBRIS_HINTS[debris.kind]);
+      text(calloutDetail, 'Follow the coins');
+    } else if (hint && !nearRamp) {
+      text(calloutText, hint[0]);
+      text(calloutDetail, hint[1]);
+    } else if (next.kind === 'waterfall' || next.kind === 'riverEntry') {
+      const launch = next.kind === 'waterfall' ? 'Waterfall ahead' : 'River drop ahead';
+      text(calloutText, run.d < next.start ? launch : 'Watch the landing');
+      text(calloutDetail, run.d < next.start ? `${Math.round(next.start - run.d)} m` : '');
     } else if (run.d >= next.start) {
       text(calloutText, 'Watch the landing');
       text(calloutDetail, '');
@@ -1157,7 +1237,11 @@ export function openSledGame({ resortRenderer, audio, outfit } = {}) {
 
   dialog.addEventListener('close', cleanup, { once: true });
   dialog.addEventListener('cancel', event => { event.preventDefault(); close(); }, { signal });
-  play.addEventListener('click', () => state === 'paused' ? togglePause() : reset(), { signal });
+  play.addEventListener('click', () => {
+    audio?.resume?.().catch(() => {});
+    if (state === 'paused') togglePause();
+    else reset();
+  }, { signal });
   for (const button of modeButtons) {
     button.addEventListener('click', () => {
       if (button.dataset.sledMode !== mode) selectMode(button.dataset.sledMode);
@@ -1280,8 +1364,12 @@ export function openSledGame({ resortRenderer, audio, outfit } = {}) {
         pendingTime -= STEP;
         const wasAirborne = Boolean(run.air);
         const previousBumps = run.bumps, previousDistance = run.d;
-        simulate(run, world.segmentAt(run.d), input, STEP);
+        const crash = simulate(run, world.segmentAt(run.d), input, STEP);
         jumpQueued = false;
+        if (crash) {
+          finishFreeRide(crash);
+          break;
+        }
         if (mode === 'race') {
           const rival = world.rival.run;
           simulateRival(rival, run, world.rivalCourseAt(rival.d), STEP);

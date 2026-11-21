@@ -39,12 +39,17 @@ function populatePicker(picker, places) {
   picker.replaceChildren(resorts, summits);
 }
 
-export function bindDestinationSelector(places, current, travelURL, { standalone }) {
+export function bindDestinationSelector(places, current, travelURL, { standalone, openSled }) {
   const dialog = $('destination-selector');
   const stage = $('destination-stage');
   const models = $('destination-models');
   const picker = $('destination-choose');
   const travel = $('destination-travel');
+  const sled = $('destination-sled');
+  const sledModes = $('destination-sled-modes');
+  const sledStatus = $('destination-sled-status');
+  const sledModesLabel = sledModes.textContent;
+  sled.hidden = !openSled;
   const status = $('destination-preview-status');
   const rotatePreview = $('destination-rotate');
   const routesKey = $('destination-route-key');
@@ -54,6 +59,7 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
   let selected = Math.max(0, places.findIndex(place => place.id === current.id));
   let position = selected, target = selected;
   let records, pending, previewError = false, view, contextLost = false;
+  let sledRequest, sledDialog;
   let opener, pointer, suppressClick = false, idleUntil = 0;
   let lastWheelEvent = 0, lastWheelStep = 0, wheelTravel = 0;
   let frame = 0, lastFrame = 0, lastSpin = 0;
@@ -83,7 +89,7 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
   }
 
   function warmPreviews() {
-    if (warming || !view || !dialog.open || contextLost) return;
+    if (warming || !view || !dialog.open || sledDialog || contextLost) return;
     const limit = models.clientWidth <= 620 ? 2 : 3;
     const next = tiles.filter(tile => !tile.model && records.has(tile.place.id) &&
         Math.abs(relative(tile.index, target)) <= limit)
@@ -92,7 +98,7 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
     warming = true;
     const warm = () => {
       warming = false;
-      if (!dialog.open || contextLost) return;
+      if (!dialog.open || sledDialog || contextLost) return;
       build(next);
       if (Math.abs(relative(next.index, position)) < 2.6) invalidate();
       warmPreviews();
@@ -133,7 +139,7 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
 
   function animate(now) {
     frame = 0;
-    if (!dialog.open || !view || contextLost) return;
+    if (!dialog.open || !view || sledDialog || contextLost) return;
     const elapsed = Math.min(.05, Math.max(.001, (now - lastFrame) / 1000));
     lastFrame = now;
     const still = reduceMotion.matches;
@@ -177,21 +183,21 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
   function invalidate(layout = true) {
     if (layout) dirty = true;
     else rotating = true;
-    if (!frame && dialog.open && view && !contextLost) {
+    if (!frame && dialog.open && view && !sledDialog && !contextLost) {
       lastFrame = performance.now();
       frame = requestAnimationFrame(animate);
     }
   }
 
   async function ensurePreviews() {
-    if (records || pending) return;
+    if (view || pending || sledDialog) return;
     previewError = false;
     showStatus();
-    pending = loadDestinationReliefs();
+    pending = records ?? loadDestinationReliefs();
     try {
-      const loaded = await pending;
+      records = await pending;
+      if (!dialog.open || sledDialog) return;
       view = createDestinationStage(models);
-      records = loaded;
       view.canvas.addEventListener('webglcontextlost', () => {
         contextLost = true;
         showStatus();
@@ -217,6 +223,7 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
   function open(trigger = document.activeElement) {
     if (dialog.open) return;
     opener = trigger;
+    sledStatus.hidden = true;
     dialog.showModal();
     dialog.focus({ preventScroll: true });
     resize = true;
@@ -225,14 +232,49 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
   }
 
   function close() {
+    sledRequest?.abort();
     if (standalone) location.assign(travelURL(current));
     else dialog.close();
   }
 
   function go() {
     const place = places[selected];
+    sledRequest?.abort();
     if (!standalone && place.id === current.id) close();
     else location.assign(travelURL(place, { arrive: true }));
+  }
+
+  async function goSled() {
+    if (sledRequest || sledDialog) return;
+    const request = sledRequest = new AbortController();
+    sled.setAttribute('aria-busy', 'true');
+    sledModes.textContent = 'Opening…';
+    sledStatus.hidden = true;
+    sled.focus({ preventScroll: true });
+    try {
+      const game = await openSled({ signal: request.signal, opener: sled });
+      if (!game?.open) return;
+      sledDialog = game;
+      cancelAnimationFrame(frame);
+      frame = 0;
+      game.addEventListener('close', () => {
+        sledDialog = undefined;
+        if (!dialog.open) return;
+        sled.focus({ preventScroll: true });
+        ensurePreviews();
+        invalidate();
+        warmPreviews();
+      }, { once: true });
+    } catch (error) {
+      if (request.signal.aborted) return;
+      console.error('Could not open Sled Run.', error);
+      sledStatus.textContent = 'Sled Run could not open. Try again.';
+      sledStatus.hidden = false;
+    } finally {
+      sledRequest = undefined;
+      sled.removeAttribute('aria-busy');
+      sledModes.textContent = sledModesLabel;
+    }
   }
 
   function hitTile(event) {
@@ -343,6 +385,8 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
 
   dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
   dialog.addEventListener('close', () => {
+    sledRequest?.abort();
+    sledDialog?.close();
     cancelAnimationFrame(frame);
     frame = 0;
     pointer = undefined;
@@ -392,6 +436,7 @@ export function bindDestinationSelector(places, current, travelURL, { standalone
     rotateStep();
   });
   travel.addEventListener('click', go);
+  sled.addEventListener('click', goSled);
   document.addEventListener('click', event => {
     const trigger = event.target.closest?.('[data-destination-open]');
     if (trigger) open(trigger);

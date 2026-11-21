@@ -49,7 +49,6 @@
 }
 .sled-stats, .sled-tallies { display: flex; align-items: baseline; gap: 11px; }
 .sled-stats b { font-size: .875rem; font-weight: 700; }
-.sled-stats .marker-scored { color: var(--sled-amber); }
 .sled-progress-track {
   height: 2px;
   position: relative;
@@ -70,6 +69,31 @@
 .sled-race-status b { color: var(--sled-amber); }
 
 .sled-actions { display: flex; gap: 7px; margin-inline-start: auto; pointer-events: auto; }
+.sled-coins {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-inline-end: 9px;
+  color: #fff6d9;
+  font: 700 clamp(1.3rem, 3.7vw, 2rem)/1 Barlow, sans-serif;
+  font-variant-numeric: tabular-nums;
+  text-shadow: var(--sled-shadow);
+  pointer-events: none;
+}
+.sled-coins span {
+  display: grid;
+  place-items: center;
+  width: clamp(22px, 4vw, 32px);
+  aspect-ratio: 1;
+  border: 2px solid #fff0b5;
+  border-radius: 50%;
+  background: #e9a946;
+  color: #75471f;
+  font-size: .64em;
+  text-shadow: none;
+  box-shadow: inset 0 0 0 2px #b7742f, 0 1px 3px #20251e8c;
+}
+.sled-coins.coin-collected { color: var(--sled-amber); }
 .sled-secondary, .sled-primary, .sled-touch button {
   display: inline-grid;
   place-items: center;
@@ -180,4 +204,10 @@
   }
   .sled-touch button { padding: 0 9px; touch-action: none; pointer-events: auto; }
   .sled-touch [data-sled-input="left"], .sled-touch [data-sled-input="right"] { font-size: 1.14rem; }
+}
+
+@media (max-width: 390px) {
+  .sled-hud { min-width: 0; }
+  .sled-stats, .sled-tallies { gap: 6px; }
+  .sled-coins { gap: 4px; margin-inline-end: 2px; }
 }

@@ -27,6 +27,7 @@ function setUpBenchmark({ quality, resolution, frameLimit }) {
   Object.defineProperty(window, 'localStorage', { value: prefs });
   Object.defineProperty(window, 'sessionStorage', { value: new BenchmarkStorage() });
   prefs.setItem('alpine.multiplayer', 'off');
+  prefs.setItem('alpine.nearby-map', 'off');
   prefs.setItem('alpine.performance-options', JSON.stringify({ frameLimit, resolution, antialias: quality !== 'budget' }));
   const url = new URL(location.href);
   url.search = new URLSearchParams({ benchmark: 'ego-bowl', quality, resolution, cap: String(frameLimit),

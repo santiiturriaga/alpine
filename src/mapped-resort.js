@@ -180,7 +180,7 @@ function prepareExploration(sections, travel) {
   parent.replaceChildren(field);
 }
 
-export async function startMappedResort(mountain) {
+export async function startMappedResort(mountain, { setResortSledContext } = {}) {
   $('app').classList.add('mapped-resort');
   document.title = `Alpine Descent · ${mountain.label}`;
   document.querySelector('meta[name="description"]')?.setAttribute('content',
@@ -429,10 +429,16 @@ export async function startMappedResort(mountain) {
   const courses = $('mountain-challenges').querySelector('.course-links');
   const sledButton = courses.querySelector('[data-minigame="sled"]');
   courses.replaceChildren(sledButton);
-  sledButton.onclick = async () => {
+  function prepareSledGame() {
     releaseLook();
+    clearInput();
+    return { resortRenderer: renderer, audio, outfit: outfitter.appearance };
+  }
+  setResortSledContext?.(prepareSledGame);
+  sledButton.onclick = async () => {
+    const context = prepareSledGame();
     const { openSledGame } = await import('./sled-game.js');
-    openSledGame({ resortRenderer: renderer, audio, outfit: outfitter.appearance });
+    openSledGame(context);
   };
 
   function resize() {

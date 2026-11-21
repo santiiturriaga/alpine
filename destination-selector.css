@@ -183,19 +183,40 @@
   letter-spacing: -.012em;
   text-wrap: balance;
 }
-.destination-action { text-align: center; padding: 17px 0 22px; }
-#destination-travel {
-  min-width: min(230px, 100%);
+.destination-action {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-self: center;
+  gap: 8px;
+  width: min(100%, 472px);
+  text-align: center;
+  padding: 17px 0 22px;
+}
+#destination-travel, #destination-sled {
   min-height: 48px;
-  padding: 9px 20px;
+  padding: 6px 8px;
   border-radius: 6px;
-  border: 1px solid #ffd4a3;
-  background: var(--destination-lift);
+  border: 1px solid transparent;
   color: #172532;
   font-weight: 600;
   transition: background-color 160ms;
 }
+#destination-travel { background: var(--destination-lift); border-color: #ffd4a3; }
 #destination-travel:hover { background: #ffdbb4; }
+#destination-sled {
+  display: grid;
+  place-content: center;
+  gap: 3px;
+  background: #b8d5df;
+  border-color: #d1e8ee;
+  line-height: 1;
+}
+#destination-sled > strong { font-weight: 700; }
+#destination-sled[hidden] { display: none; }
+#destination-sled > small { font-size: .75em; font-weight: 500; }
+#destination-sled:hover { background: var(--destination-ice); }
+#destination-sled[aria-busy='true'] { cursor: progress; }
+#destination-sled-status { grid-column: 1 / -1; color: var(--destination-ice); font-size: 13px; }
 .destination-footer {
   padding-top: 12px;
   border-top: 1px solid var(--destination-rule);
@@ -230,7 +251,6 @@
   #destination-name { font-size: clamp(29px, 8.7vw, 55px); }
   .destination-details { gap: 7px; }
   .destination-action { padding: 17px 0 22px; }
-  #destination-travel { width: min(100%, 370px); }
   .destination-footer { flex-wrap: wrap; gap: 7px; }
 }
 @media (max-width: 370px) {
@@ -244,7 +264,7 @@
   .destination-stage { min-height: 126px; flex-basis: min(42dvh, 235px); }
   .destination-caption { min-height: 42px; }
   .destination-action { padding: 6px 0 9px; }
-  #destination-travel { min-height: 40px; }
+  #destination-travel, #destination-sled { min-height: 44px; }
   .destination-footer { padding-top: 6px; }
 }
 @media (max-height: 560px) and (max-width: 620px) {

@@ -23,18 +23,17 @@ REPLAY_PAGE = '''<!doctype html><meta name="viewport" content="width=device-widt
 
 REPLAY_INPUT = '''    if (dialog.__replay?.pilot) {
       if (action === 'tuck') return true;
-      if (mode === 'free') return false;
       const course = world.segmentAt(run.d).course;
-      const marker = course.tokens.find(token => token.d > run.d + 8);
+      const marker = course.tokens.find(token => !token.route && token.d > run.d + 8);
       const designated = course.logs.find(log => log.d > 35);
       const distance = (designated?.d ?? Infinity) - run.d;
-      const tryingHit = !run.bumps && distance > -2 && distance < 50;
+      const tryingHit = mode === 'race' && !run.bumps && distance > -2 && distance < 50;
       const error = (tryingHit ? designated.x : marker?.x ?? 0) - run.x - run.dx * .13;
       if (action === 'left') return error < -.24;
       if (action === 'right') return error > .24;
       if (action !== 'jump' || tryingHit) return false;
       const log = course.logs.some(item => item.d > run.d && item.d - run.d < run.speed * .26 && Math.abs(item.x - run.x) < 4.8);
-      const lip = course.gaps.some(gap => gap.start > run.d && gap.start - run.d < 1.6);
+      const lip = course.gaps.some(gap => !gap.kind && gap.start > run.d && gap.start - run.d < 1.6);
       return log || lip;
     }
 '''
@@ -49,7 +48,7 @@ REPLAY_HOOK = '''  const originalRender = renderer.render;
     replayTo(distance, maxFrames) {
       this.pilot = true;
       this.stopAnimation();
-      const segmentsSeen = new Set();
+      const segmentsSeen = new Set(), sectionsSeen = new Set();
       let maxResident = 0, recovery = null;
       renderer.render = () => {};
       try {
@@ -60,6 +59,8 @@ REPLAY_HOOK = '''  const originalRender = renderer.render;
           const mounted = scene.children.filter(group => group.name.startsWith('Sled course segment ')).length;
           maxResident = Math.max(maxResident, world.segments.size, mounted);
           for (const index of world.segments.keys()) segmentsSeen.add(index);
+          const course = world.segmentAt(run.d).course;
+          for (const section of course.sections) if (run.d >= section.start && run.d < section.end) sectionsSeen.add(section.kind);
         }
       } finally {
         this.pilot = false;
@@ -67,7 +68,7 @@ REPLAY_HOOK = '''  const originalRender = renderer.render;
       }
       originalRender.call(renderer, scene, camera);
       return {state, distance:run.d, time:run.elapsed, bumps:run.bumps, recovery, maxResident,
-        segmentsSeen:[...segmentsSeen], rival:world.rival?.run?.d ?? null, result:title.textContent};
+        segmentsSeen:[...segmentsSeen], sectionsSeen:[...sectionsSeen], rival:world.rival?.run?.d ?? null, result:title.textContent};
     },
   };
 '''
@@ -209,9 +210,10 @@ def replay_modes(browser, url, screenshots=None):
     dialog.locator('[data-sled-show-modes]').click()
     dialog.locator('[data-sled-mode="free"]').click()
     dialog.get_by_role('button', name='Start run').click()
-    free = dialog.evaluate('''dialog => dialog.__replay.replayTo(2150, 850)''')
-    assert free['distance'] >= 2150 and free['state'] == 'running' and free['bumps'] > 0, free
-    assert free['maxResident'] <= 2 and len(free['segmentsSeen']) >= 3 and free['rival'] is None, free
+    free = dialog.evaluate('''dialog => dialog.__replay.replayTo(2885, 1150)''')
+    assert free['distance'] >= 2885 and free['state'] == 'running', free
+    assert free['maxResident'] <= 2 and len(free['segmentsSeen']) >= 5 and free['rival'] is None, free
+    assert set(free['sectionsSeen']) == {'forest', 'cave', 'river', 'village'}, free
     assert not errors, errors
     page.close()
     return {'renderer': renderer, 'race': race, 'free': free}

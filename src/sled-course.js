@@ -1,10 +1,12 @@
 import { clamp, damp, mulberry32, smoothstep } from './math.js';
 
+import { buildSledSegment as planSegment, LANE, sledDifficulty, sectionAt,
+  caveRoofHeight, houseRampHeight, fallState, featureX, featureRaise } from './sled-course-plan.js';
+export { LANE, SLED_SEGMENT_LENGTH, sledDifficulty, steeringDistance, sectionAt,
+  caveRoofHeight, houseRampHeight, fallState, featureX, featureRaise } from './sled-course-plan.js';
 export const LENGTH = 1560;
 export const RACE_LENGTH = 6200;
-export const SLED_SEGMENT_LENGTH = 720;
 export const EDGE = 15;
-export const LANE = 8.6;
 export const STEP = 1 / 90;
 export const RAMP_LENGTH = 19;
 export const RAMP_HALF = 3.7;
@@ -33,8 +35,8 @@ export function snowHeight(x, d) {
 export function rampHeight(x, d, gaps = GAPS) {
   for (const gap of gaps) {
     if (d < gap.start - RAMP_LENGTH || d >= gap.start) continue;
-    if (gap.lanes.some(line => Math.abs(x - line * LANE) < RAMP_HALF)) {
-      return RAMP_HEIGHT * ((d - gap.start + RAMP_LENGTH) / RAMP_LENGTH) ** 1.8;
+    if (gap.kind === 'riverEntry' || gap.kind === 'waterfall' || gap.lanes.some(line => Math.abs(x - line * LANE) < RAMP_HALF)) {
+      return (gap.rise ?? RAMP_HEIGHT) * ((d - gap.start + RAMP_LENGTH) / RAMP_LENGTH) ** 1.8;
     }
   }
   return 0;
@@ -83,63 +85,9 @@ export function buildCourse(day = new Date().toISOString().slice(0, 10)) {
 }
 
 export function buildSledSegment(index, seed, length = Infinity) {
-  const start = index * SLED_SEGMENT_LENGTH;
-  const end = Math.min(length, start + SLED_SEGMENT_LENGTH);
-  const random = mulberry32(seed ^ Math.imul(index + 1, 0x9e3779b9));
-  const treeRows = [], logs = [], tokens = [], balls = [], line = [{ d: start, x: 0 }];
-  const lanes = [-1, 0, 1], gaps = [];
-  const pick = list => list[Math.floor(random() * list.length)];
-  const clearRamp = start + 253 + Math.floor(random() * 130);
-  const width = 19 + Math.floor(random() * 13);
-  if (clearRamp + width + 102 < end) {
-    const choices = random() < .37 ? [0, pick([-1, 1])].sort() : [pick(lanes)];
-    gaps.push({ start: clearRamp, end: clearRamp + width, lanes: choices, name: 'Creek crossing' });
-  }
-  const gap = gaps[0];
-  const obstacles = [];
-  for (let d = start + 65 + random() * 13; d < end - 70; d += 55 + random() * 25) {
-    if (!gap || d < gap.start - 82 || d > gap.end + 69) obstacles.push({ d });
-  }
-  if (gap) obstacles.push({ d: gap.start, gap });
-  obstacles.sort((a, b) => a.d - b.d);
-  let lane = 0;
-  for (const entry of obstacles) {
-    const d = entry.d;
-    if (entry.gap) {
-      lane = pick(entry.gap.lanes);
-      const x = lane * LANE;
-      line.push({ d: d - 43, x }, { d: entry.gap.end + 14, x });
-      for (const offset of [-36, -23, -11]) {
-        tokens.push({ d: d + offset, x, height: 1.05 + rampHeight(x, d + offset, gaps) });
-      }
-      continue;
-    }
-    lane = pick(lanes.filter(candidate => Math.abs(candidate - lane) === 1));
-    const x = lane * LANE;
-    const blocked = lanes.filter(candidate => candidate !== lane);
-    const kind = Math.floor(random() * 3);
-    const tree = (treeD, treeLane) => treeRows.push({
-      d: treeD, x: treeLane * LANE + (random() - .5) * .65,
-      h: 23 + random() * 13, hit: 1.02 + random() * .24,
-    });
-    if (kind === 0) {
-      tree(d, blocked[0]);
-      tree(d + 2, blocked[1]);
-    } else if (kind === 1) {
-      logs.push({ d, x, halfWidth: 2.9 + random() * .65, radius: .38 + random() * .16 });
-      tree(d - 2, pick(blocked));
-    } else {
-      const ballLane = pick(blocked);
-      balls.push([d - 10, ballLane * LANE, 4.8 + random() * 1.4, 1.5 + random() * .6]);
-      tree(d + 2, blocked.find(candidate => candidate !== ballLane));
-    }
-    line.push({ d: d - 11, x }, { d: d + 13, x });
-    for (const offset of [-14, 0, 10]) {
-      tokens.push({ d: d + offset, x, height: kind === 1 && offset === 0 ? 2 : 1.05 });
-    }
-  }
-  line.push({ d: end, x: 0 });
-  return { start, end, length, gaps, treeRows, logs, balls, tokens, line };
+  const course = planSegment(index, seed, length);
+  for (const t of course.tokens) if (!t.route) t.height += rampHeight(t.x, t.d, course.gaps);
+  return course;
 }
 
 export const movingBalls = course => course.balls.map(([start, side, rate, radius], i) => ({
@@ -149,7 +97,8 @@ export const movingBalls = course => course.balls.map(([start, side, rate, radiu
 export function freshRun() {
   return { d: 0, x: 0, dx: 0, y: snowHeight(0, 0), dy: 0, speed: 19, elapsed: 0,
     jumps: 0, passes: 0, hops: 0, tokens: 0, nextToken: 0, lastToken: -1, jumpHeld: false,
-    air: null, countdown: 2.65, crash: '', recovery: 0, recoveryHint: '', bumps: 0 };
+    air: null, upperRoute: null, flightUntil: 0, flightPickups: 0, roofRide: null, roofLaunches: 0,
+    riverEntries: 0, waterfallLaunches: 0, countdown: 2.65, crash: '', recovery: 0, recoveryHint: '', bumps: 0 };
 }
 
 const RIVAL_START_X = 1.85;
@@ -164,7 +113,7 @@ export function simulateRival(rival, run, course, dt) {
   const before = rival.d, previousX = rival.x, previousY = rival.y;
   const phase = rival.elapsed;
   const length = course.length ?? RACE_LENGTH;
-  const pace = 34.5 + 1.8 * Math.sin(phase * .3) + 1.25 * Math.sin(phase * .79 + .3)
+  const pace = 33.3 + sledDifficulty(before).speedGain * .65 + 1.8 * Math.sin(phase * .3) + 1.25 * Math.sin(phase * .79 + .3)
     + clamp((run.d - rival.d) * .026, -2.1, 2.1);
   rival.elapsed += dt;
   rival.speed = damp(rival.speed, pace, 1.7, dt);
@@ -207,6 +156,12 @@ function updateBall(ball, run, dt) {
   ball.angle += dt * ball.rate / ball.radius;
 }
 
+export function supportHeight(run, x, d, gaps) {
+  if (run.upperRoute) return snowHeight(x, d) + caveRoofHeight(run.upperRoute, x, d);
+  if (run.roofRide) return snowHeight(x, d) + houseRampHeight(run.roofRide, x, d);
+  return surfaceHeight(x, d, gaps);
+}
+
 function recover(run, gaps, hint, side = 0) {
   run.recovery = .86;
   run.recoveryHint = hint;
@@ -214,8 +169,57 @@ function recover(run, gaps, hint, side = 0) {
   run.speed = Math.max(16, run.speed * .73);
   if (side) run.dx = side * 9.4;
   run.air = null;
-  run.y = surfaceHeight(run.x, run.d, gaps);
+  run.y = supportHeight(run, run.x, run.d, gaps);
   run.dy = slope(run.d) * run.speed;
+}
+
+const impactHints = {
+  fallingIce: 'Struck by falling ice', fallingSnow: 'Caught by falling snow', fallingRock: 'Struck by falling rock',
+  iceChunk: 'Clipped river ice', bankLimb: 'Caught a hanging limb', rockIsland: 'Clipped a rocky island',
+  polarBear: 'Startled a polar bear', openHouse: 'Clipped a doorway', closedHouse: 'Hit a shuttered chalet',
+  roofRamp: 'Clipped the chalet roof',
+};
+
+function featureImpact(run, f, offset, y) {
+  if (f.kind.startsWith('falling')) {
+    const state = fallState(f, run.elapsed);
+    return (state.phase === 'falling' || state.phase === 'impact')
+      && y + 1.3 > state.height && y < state.height + f.height;
+  }
+  if (f.kind === 'openHouse' && offset < f.doorHalfWidth - .48 && y + 1.25 < f.doorHeight) return false;
+  return y < f.height + featureRaise(f, run.elapsed) - .06;
+}
+
+// The roof's one-sided exit is a solid snow bank to a rider below. Give
+// mistaken approaches a single glancing hit and guide them along its edge.
+function brushCaveBank(run, section, gaps) {
+  if (section?.kind !== 'cave' || run.upperRoute || run.d < section.tunnelEnd || run.d > section.tunnelEnd + 72) return;
+  const centerX = section.roofExitSide * LANE;
+  const offset = run.x - centerX;
+  const clearance = section.exitHalfWidth + .55;
+  if (Math.abs(offset) >= clearance) return;
+  const top = caveRoofHeight(section, run.x, run.d);
+  if (run.y > snowHeight(run.x, run.d) + top - .08) return;
+  if (top < .5 && !run.air) {
+    run.upperRoute = section;
+    run.y = supportHeight(run, run.x, run.d, gaps);
+    return;
+  }
+  const side = Math.abs(offset) < .5 ? -section.roofExitSide : Math.sign(offset);
+  run.x = centerX + side * clearance;
+  if (run.lastCaveBank !== section.start) {
+    run.lastCaveBank = section.start;
+    const flight = run.air, height = run.y, velocity = run.dy;
+    recover(run, gaps, 'Brushed the cave exit bank', side);
+    if (flight && gapAt(run.d, gaps)) {
+      run.air = flight;
+      run.y = height;
+      run.dy = velocity;
+    }
+  } else {
+    run.dx = side * Math.max(0, side * run.dx);
+    if (!run.air) run.y = supportHeight(run, run.x, run.d, gaps);
+  }
 }
 
 export function simulate(run, world, input, dt) {
@@ -233,31 +237,99 @@ export function simulate(run, world, input, dt) {
   const jump = input('jump');
   const pressed = jump && !run.jumpHeld;
   run.jumpHeld = jump;
+  const section = sectionAt(course, before);
+  const onCaveIce = section?.kind === 'cave' && before > section.tunnelStart && before < section.tunnelEnd
+    && !run.upperRoute && !run.air;
+  const inCurrent = section?.kind === 'river' && before > section.waterStart && before < section.waterEnd && !run.air;
   const bank = smoothstep(12, EDGE + .7, Math.abs(run.x));
   const brake = input('brake'), tuck = input('tuck');
   const lateralSpeed = run.air ? 6.2 : (brake ? 17 : 13.8) + run.speed * .075;
-  run.dx = damp(run.dx, steer * lateralSpeed, run.air ? 2.8 : steer ? 7.8 : 4.9, dt);
+  const drift = inCurrent ? .52 * Math.sin(before * .038) : 0;
+  const steerResponse = onCaveIce ? 6.2 : inCurrent ? 6.7 : 7.8;
+  run.dx = damp(run.dx, steer * lateralSpeed + drift, run.air ? 2.8 : steer ? steerResponse : onCaveIce ? 3.8 : 4.9, dt);
   run.x = clamp(run.x + run.dx * dt, -EDGE - .7, EDGE + .7);
-  const speedTarget = pace === 'race' ? (tuck ? 38.6 : 34.1) : tuck ? 46 : 33;
-  const target = (brake ? 19.5 : speedTarget) - bank * 6.2 - 10 * (slope(run.d) + .286);
+  const gain = course.sections?.length ? sledDifficulty(before).speedGain : 0;
+  // Leave the initial forest room to learn steering before its first crossing.
+  // The finite race keeps its independent three-minute pacing.
+  const intro = pace === 'free' && course.sections?.length ? 1 - smoothstep(0, 1800, before) : 0;
+  const speedTarget = pace === 'race' ? (tuck ? 38.6 : 33.1) + gain * .62
+    : (tuck ? 46 - 13 * intro : 33 - 7 * intro) + gain;
+  const target = (brake ? 19.5 : speedTarget + (onCaveIce ? 1.35 : inCurrent ? 1.15 : 0)) - bank * 6.2 - 10 * (slope(run.d) + .286);
   run.speed = damp(run.speed, target, brake ? 3.4 : 1.35, dt);
-  if (pressed && !run.air && !gapAt(before, gaps)) {
-    const rise = rampHeight(run.x, before, gaps);
+  if (run.air?.gap && ['riverEntry', 'waterfall'].includes(run.air.gap.kind) && before < run.air.gap.end) {
+    run.speed = Math.max(24, run.speed);
+  }
+  if (pressed && !run.air && !(run.upperRoute && before < run.flightUntil) && (run.upperRoute || !gapAt(before, gaps))) {
+    const rise = run.upperRoute ? 0 : rampHeight(run.x, before, gaps);
     const launch = 11.9 + (rise > 0 ? run.speed * .30 * (rise / RAMP_HEIGHT) ** .45 : 0);
     run.air = { gap: null };
-    run.dy = slope(before) * run.speed + launch;
+    // The marked lower jump passes under the cave exit vault.
+    const boundedLaunch = section?.kind === 'cave' && !run.upperRoute ? Math.min(18, launch) : launch;
+    run.dy = slope(before) * run.speed + boundedLaunch;
     run.hops++;
   }
   run.d = Math.min(length, before + run.speed * dt);
-  const gap = gapAt(run.d, gaps);
+  const features = course.features ?? [];
+  if (run.upperRoute && run.d >= run.upperRoute.tunnelEnd) {
+    const cave = run.upperRoute;
+    const onExitRamp = Math.abs(run.x - LANE * cave.roofExitSide) <= cave.exitHalfWidth;
+    if (run.d >= cave.tunnelEnd + 72) run.upperRoute = null;
+    else if (!onExitRamp) {
+      run.upperRoute = null;
+      if (!run.air) {
+        run.air = { gap: null };
+        const exitSlope = (caveRoofHeight(cave, run.x, before) - caveRoofHeight(cave, run.x, before - .25)) / .25;
+        run.dy = (slope(before) + exitSlope) * run.speed;
+      }
+    }
+  }
+  for (const f of features) {
+    if (f.kind === 'flightPickup' && !run.upperRoute && Math.abs(run.d - f.d) < f.halfDepth
+        && Math.abs(run.x - f.x) < f.halfWidth && Math.abs(run.y + .85 - snowHeight(f.x, f.d) - f.height) < 2.1) {
+      const section = sectionAt(course, f.d);
+      if (section?.kind === 'cave') {
+        run.upperRoute = section;
+        run.flightUntil = section.tunnelStart;
+        run.flightPickups++;
+        run.air = null;
+      }
+    }
+    if (f.kind === 'roofRamp' && !run.air && !run.roofRide && Math.abs(run.x - f.x) < f.halfWidth
+        && run.d >= f.rampStart && run.d < f.rampStart + 2) run.roofRide = f;
+  }
+  if (run.roofRide) {
+    const roof = run.roofRide;
+    const left = Math.abs(run.x - roof.x) > roof.halfWidth;
+    if (left || run.d > roof.d + roof.halfDepth) {
+      run.roofRide = null;
+      if (!run.air) {
+        run.air = { gap: null };
+        run.dy = slope(before) * run.speed + (left ? 0 : 5.5);
+        if (!left) run.roofLaunches++;
+      }
+    }
+  }
+  const gap = !run.upperRoute && gapAt(run.d, gaps);
   if (gap && before < gap.start) {
+    const waterLaunch = gap.kind === 'riverEntry' || gap.kind === 'waterfall';
     if (!run.air) {
-      const onRamp = gap.lanes.some(lane => Math.abs(run.x - lane * LANE) < RAMP_HALF);
+      const onRamp = waterLaunch || gap.lanes.some(lane => Math.abs(run.x - lane * LANE) < RAMP_HALF);
       run.air = { gap };
-      run.y = snowHeight(run.x, gap.start) + (onRamp ? RAMP_HEIGHT : 0);
+      run.y = snowHeight(run.x, gap.start) + (onRamp ? (gap.rise ?? RAMP_HEIGHT) : 0);
       run.dy = slope(before) * run.speed + (onRamp ? run.speed * .34 + 2.8 : 0);
     } else {
       run.air.gap = gap;
+    }
+    if (waterLaunch) {
+      // Water carries the sled through its launch. Bound flight time even if
+      // the rider starts braking halfway across, then solve the ballistic lip.
+      run.speed = Math.max(run.speed, 24);
+      const time = (gap.end - gap.start) / 24;
+      const dy = (snowHeight(run.x, gap.end) + 1.15 - run.y) / time + 15.5 * time;
+      const lift = gap.kind === 'waterfall' ? 19 : 9;
+      run.dy = Math.max(run.dy, dy, slope(before) * run.speed + lift);
+      if (gap.kind === 'riverEntry') run.riverEntries++;
+      else run.waterfallLaunches++;
     }
   }
   if (run.air) {
@@ -281,9 +353,10 @@ export function simulate(run, world, input, dt) {
         }
       }
     }
-    if (!gap && run.y <= surfaceHeight(run.x, run.d, gaps) + .015 && run.dy < slope(run.d) * run.speed) run.air = null;
+    if (!gap && run.y <= supportHeight(run, run.x, run.d, gaps) + .015 && run.dy < slope(run.d) * run.speed) run.air = null;
   }
-  if (!run.air) run.y = surfaceHeight(run.x, run.d, gaps);
+  if (!run.air) run.y = supportHeight(run, run.x, run.d, gaps);
+  brushCaveBank(run, section, gaps);
   for (const tree of world.treeRows) {
     const along = tree.d - run.d;
     if (Math.abs(along) > 3.6) continue;
@@ -317,12 +390,24 @@ export function simulate(run, world, input, dt) {
       run.passes++;
     }
   }
+  for (const f of features) {
+    const terminalHouse = pace === 'free' && f.kind === 'closedHouse';
+    if ((run.recovery && !terminalHouse) || f.kind === 'flightPickup' || f === run.roofRide || Math.abs(run.d - f.d) > f.halfDepth + .45) continue;
+    const offset = Math.abs(run.x - featureX(f, run.elapsed));
+    if (offset > f.halfWidth + .48 || !featureImpact(run, f, offset, run.y - snowHeight(run.x, run.d))) continue;
+    const hint = impactHints[f.kind];
+    if (terminalHouse) {
+      run.crash = 'Hit a shuttered chalet. Choose the lit passage or take a roof ramp.';
+      return run.crash;
+    }
+    if (!forgiving) return hint;
+    recover(run, gaps, hint);
+  }
   const { tokens } = course;
   while (run.nextToken < tokens.length) {
     const t = tokens[run.nextToken];
-    if (run.d < t.d - 1) break;
-    if (run.d <= t.d + 1) {
-      if (Math.abs(t.x - run.x) > 1.5 || Math.abs(run.y + .85 - snowHeight(t.x, t.d) - t.height) > 1.5) break;
+    if (t.d > run.d) break;
+    if (t.d >= before && Math.abs(t.x - run.x) <= 1.5 && Math.abs(run.y + .85 - snowHeight(t.x, t.d) - t.height) <= 1.5) {
       run.lastToken = run.elapsed;
       run.tokens++;
     }

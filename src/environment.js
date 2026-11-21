@@ -2463,58 +2463,91 @@ function buildTerminal(scene, grid, markers, def, pointIndex) {
   return buildMappedTerminal(scene, grid, def, pointIndex);
 }
 
-function buildFinishArch(scene, grid, markers, run, title, sub) {
+function buildFinishArch(grid, markers, run, title, sub) {
   const p = runPointAt(run, 0.968);
   if (!p) return null;
   const halfW = 7.4;
   const group = new THREE.Group();
-  const y = heightAt(p.x, p.z);
-  const parts = [];
-  for (const side of [-1, 1]) {
-    parts.push(box(0.36, 6.0, 0.36, '#b23a2b', [side * halfW, 3.0, 0]));
-  }
-  parts.push(box(halfW * 2 + 1.2, 0.28, 0.3, '#b23a2b', [0, 5.8, 0]));
-  parts.push(box(halfW * 2, 1.8, 0.16, '#1c272b', [0, 4.8, 0]));
-  const arch = mergedMesh(parts, { roughness: 0.66 });
-  group.add(arch);
+  group.name = `${title} finish arch`;
+  group.position.set(p.x, heightAt(p.x, p.z), p.z);
+  group.rotation.y = Math.atan2(-p.tx, -p.tz);
+  const cos = Math.cos(group.rotation.y), sin = Math.sin(group.rotation.y);
+  const worldX = (x, z) => p.x + cos * x + sin * z;
+  const worldZ = (x, z) => p.z - sin * x + cos * z;
 
-  const banner = new THREE.Mesh(
-    new THREE.PlaneGeometry(halfW * 2 - 0.3, 1.6),
-    new THREE.MeshStandardMaterial({ map: makeTextTexture(title, {
-      width: 1024, height: 180, bg: '#1c272b', fg: '#fff7e8', accent: '#ffc75b', sub,
-      font: '700 74px "Barlow Condensed", "Arial Narrow", sans-serif',
-    }), roughness: 0.7, side: THREE.DoubleSide }),
-  );
-  banner.position.set(0, 4.82, 0.1);
-  group.add(banner);
+  let highest = -Infinity;
+  for (let i = 0; i <= 32; i++) {
+    const localX = lerp(-halfW, halfW, i / 32);
+    const x = worldX(localX, 0), z = worldZ(localX, 0);
+    highest = Math.max(highest, heightAt(x, z), terrain.sampleSnowSurface(x, z, _c, _n));
+  }
+  // Keep the header level with at least 2.6 m of clearance over the crossing.
+  const lift = Math.max(0, highest - group.position.y - 1.3);
+  const postTop = 6 + lift;
+  const parts = [
+    box(halfW * 2 + 1.2, 0.28, 0.3, '#b23a2b', [0, 5.8 + lift, 0]),
+    box(halfW * 2, 1.8, 0.16, '#1c272b', [0, 4.8 + lift, 0]),
+  ];
+  for (const side of [-1, 1]) {
+    const localX = side * halfW, x = worldX(localX, 0), z = worldZ(localX, 0);
+    const footing = Math.min(heightAt(x, z), terrain.sampleSnowSurface(x, z, _c, _n)) - group.position.y - .35;
+    parts.push(box(0.36, postTop - footing, 0.36, '#b23a2b', [localX, (postTop + footing) / 2, 0]));
+    grid.addCircle(x, z, 0.55, 'arch-pole');
+  }
+  group.add(mergedMesh(parts, { roughness: 0.66 }));
+
+  const bannerGeometry = new THREE.PlaneGeometry(halfW * 2 - 0.3, 1.6);
+  const bannerMaterial = new THREE.MeshStandardMaterial({ map: makeTextTexture(title, {
+    width: 1408, height: 180, bg: '#1c272b', fg: '#fff7e8', accent: '#ffc75b', sub, centered: true,
+    font: '700 96px "Barlow Condensed", "Arial Narrow", sans-serif',
+  }), roughness: 0.7 });
+  for (const side of [-1, 1]) {
+    const banner = new THREE.Mesh(bannerGeometry, bannerMaterial);
+    banner.position.set(0, 4.8 + lift, side * .1);
+    if (side < 0) banner.rotation.y = Math.PI;
+    group.add(banner);
+  }
 
   const checkerCanvas = makeCanvas(256, 32);
   const cc = checkerCanvas.ctx;
-  for (let x = 0; x < 32; x++) {
-    for (let y = 0; y < 4; y++) {
-      cc.fillStyle = (x + y) % 2 ? '#f5f8f9' : '#1d2529';
-      cc.fillRect(x * 8, y * 8, 8, 8);
+  for (let x = 0; x < 16; x++) {
+    for (let row = 0; row < 2; row++) {
+      cc.fillStyle = (x + row) % 2 ? '#f5f8f9' : '#1d2529';
+      cc.fillRect(x * 16, row * 16, 16, 16);
     }
   }
+  const stripGeometry = new THREE.PlaneGeometry(halfW * 2, 1.8, 48, 6).rotateX(-Math.PI / 2);
   const strip = new THREE.Mesh(
-    new THREE.PlaneGeometry(halfW * 2, 1.4),
-    new THREE.MeshStandardMaterial({ map: canvasTexture(checkerCanvas.canvas, { repeat: [1, 1] }), roughness: 0.9 }),
+    stripGeometry,
+    new THREE.MeshStandardMaterial({
+      map: canvasTexture(checkerCanvas.canvas), roughness: 0.9,
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+    }),
   );
-  strip.rotation.x = -Math.PI / 2;
-  strip.rotation.z = Math.PI / 2;
-  strip.position.set(0, 0.07, 0);
+  strip.name = 'Checkered finish line';
+  strip.receiveShadow = true;
   group.add(strip);
-
-  group.position.set(p.x, y, p.z);
-  group.rotation.y = Math.atan2(-p.tx, -p.tz);
-  scene.add(group);
-  for (const side of [-1, 1]) {
-    const wx = p.x + Math.cos(group.rotation.y) * side * halfW;
-    const wz = p.z - Math.sin(group.rotation.y) * side * halfW;
-    grid.addCircle(wx, wz, 0.55, 'arch-pole');
+  let revision = -1;
+  function updateLine(camera) {
+    // The nearby terrain can swap between the full DEM and streamed snow.
+    // Farther out, Budget can use coarser triangles than the surface sampler.
+    strip.visible = !camera || camera.position.distanceToSquared(group.position) < 425 ** 2;
+    const current = terrain.readSnowSurfaceRevision();
+    if (!strip.visible || current === revision) return;
+    revision = current;
+    const pos = stripGeometry.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), z = pos.getZ(i);
+      const snow = terrain.sampleSnowSurface(worldX(x, z), worldZ(x, z), _c, _n);
+      pos.setY(i, snow - group.position.y + .035);
+    }
+    pos.needsUpdate = true;
+    stripGeometry.computeVertexNormals();
+    stripGeometry.computeBoundingSphere();
   }
+  updateLine();
   markers.add(group);
-  return { x: p.x, z: p.z, run, title };
+  return { x: p.x, z: p.z, run, title, updateLine };
 }
 
 function buildFlags(scene) {
@@ -2640,7 +2673,7 @@ export async function buildEnvironment(scene, { onProgress = () => {}, quality }
 
   const finishArches = FINISHES.map((finish) => {
     const run = runFromSource(finish.run);
-    return run ? buildFinishArch(scene, grid, markers, run, finish.title.toUpperCase(), `${finish.elevation} M`) : null;
+    return run ? buildFinishArch(grid, markers, run, finish.title.toUpperCase(), `${finish.elevation} M`) : null;
   }).filter(Boolean);
 
   const flags = buildFlags(scene);
@@ -2684,6 +2717,7 @@ export async function buildEnvironment(scene, { onProgress = () => {}, quality }
     pointInBox,
     update(dt, time, camera, travelSpeed = 0) {
       clock = time;
+      for (const arch of finishArches) arch.updateLine(camera);
       glacierCave.update(time,camera);
       fairmont.update(dt,time,camera);
       creeksideVillage.update(dt,time,camera);

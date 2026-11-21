@@ -985,9 +985,10 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     return values[a] * wa + values[b] * wb + values[c] * wc;
   };
   const cutoutMeshes = new Map();
+  const readSnowSurfaceRevision = () => detail.surfaceRevision;
   const skiSnow = createSkiSnowSurface({
     snowMaps, heightAt, surfaceAt, sampleSurface,
-    readSurfaceRevision: () => detail.surfaceRevision,
+    readSurfaceRevision: readSnowSurfaceRevision,
     setCutout(skis, cutoutMaterial) {
       for (const [mesh, key] of cutoutMeshes) mesh.material = tileMaterials[key];
       cutoutMeshes.clear();
@@ -1063,6 +1064,7 @@ export async function buildTerrain(onProgress = () => {}, yieldFrame = () => Pro
     visible && insideTerrain(WORLD, player.pos.x, player.pos.z));
   terrain.skiSnowDepthAt = skiSnow.depthAt;
   terrain.sampleSnowSurface = sampleSurface;
+  terrain.readSnowSurfaceRevision = readSnowSurfaceRevision;
   terrain.snowMaterial = mat;
   terrain.mountainShade = mountainShade;
   terrain.setInteriorCutout = (room) => {

@@ -57,7 +57,7 @@ export function makeTextTexture(text, opts = {}) {
   const {
     width = 640, height = 220, bg = '#3a2b1d', fg = '#f6efdf',
     font = '700 92px "Barlow Condensed", "Arial Narrow", sans-serif',
-    sub = '', accent = '#ffc75b', border = 'rgba(255,255,255,.18)',
+    sub = '', accent = '#ffc75b', border = 'rgba(255,255,255,.18)', centered = false,
   } = opts;
   const scale = compactDevice ? .7 : 1;
   const { canvas, ctx } = makeCanvas(Math.round(width * scale), Math.round(height * scale));
@@ -73,18 +73,18 @@ export function makeTextTexture(text, opts = {}) {
   ctx.strokeStyle = border;
   ctx.lineWidth = 3;
   ctx.strokeRect(10, 10, width - 20, height - 20);
+  ctx.textAlign = centered ? 'center' : 'left';
+  const textX = centered ? width / 2 : 32;
   if (sub) {
     ctx.fillStyle = accent;
     ctx.font = '600 26px "Barlow", "Segoe UI", sans-serif';
-    ctx.textAlign = 'left';
     ctx.letterSpacing = '4px';
-    ctx.fillText(sub.toUpperCase(), 34, 57);
+    ctx.fillText(sub.toUpperCase(), centered ? textX : 34, 57);
   }
   ctx.fillStyle = fg;
   ctx.font = font;
-  ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
-  ctx.fillText(text, 32, sub ? height - 44 : height * 0.64);
+  ctx.fillText(text, textX, sub ? height - 44 : height * 0.64);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 8;

@@ -10,7 +10,23 @@ const mountain=activeResort();
 if(mountain.terrainOnly)document.getElementById('load-tip').textContent='Start at the mountain approach. Open the map for nearby summits and viewpoints.';
 const search = new URLSearchParams(location.search);
 const standalone = search.has('selector') || compactDevice && !location.search;
-bindResortTravel(mountain, { standalone });
+let selectorAudio;
+let prepareResortSled;
+function setResortSledContext(prepare) { prepareResortSled = prepare; }
+
+async function openSled({ signal, opener }) {
+  const [{ openSledGame }, { readEquippedAppearance }, { AudioEngine }] = await Promise.all([
+    import('./sled-game.js'), import('./outfitter.js'), import('./audio.js'),
+  ]);
+  if (signal.aborted || !document.getElementById('destination-selector').open) return;
+  const context = prepareResortSled?.() ?? {
+    audio: selectorAudio ??= new AudioEngine(),
+    outfit: readEquippedAppearance(),
+  };
+  return openSledGame({ ...context, opener, returnLabel: 'Back to mountain selector' });
+}
+
+bindResortTravel(mountain, { standalone, openSled });
 if(standalone){
   document.getElementById('loading-screen').classList.add('hidden');
 }else {
@@ -19,9 +35,10 @@ if(standalone){
   try {
     if (mountain.data) {
       const {startMappedResort}=await import('./mapped-resort.js');
-      await startMappedResort(mountain);
+      await startMappedResort(mountain, { setResortSledContext });
     } else {
-      await import('./main.js');
+      const { prepareSledGame } = await import('./main.js');
+      setResortSledContext(prepareSledGame);
     }
   }catch(error){
     console.error(error);
